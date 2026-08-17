@@ -277,10 +277,12 @@ Options; they observe nil/truthiness directly.
 objects, Lua callables, and ordinary Titan boxed values. Use it at a real
 dynamic boundary and recover a precise type close to that boundary.
 
-A raw `value` may be stored, returned, passed, tested for truthiness, compared
-with raw `==`/`~=`, used as an index through a typed key projection, and called
-**contextually** when the argument/result context supplies a temporary function
-contract. The checker rejects arithmetic, relational comparison,
+A raw `value` may be stored, returned, passed, tested for truthiness, used as an
+index through a typed key projection, and called **contextually** when the
+argument/result context supplies a temporary function contract. Two `value`
+operands use raw `==`/`~=`, even when both contain tables with `__eq`; only a
+comparison whose static pair includes a Map enables the scoped table equality
+described below. The checker rejects arithmetic, relational comparison,
 concatenation, `#`, and indexing *into* `value` until a precise type is
 requested. This is unlike TypeScript's `any`, which largely suppresses static
 checking and permits operations to propagate more `any`. Titan keeps the
@@ -347,7 +349,14 @@ Titan keeps Lua precedence and Lua-faithful results. Key rules:
 - Integer overflow, floor division, modulo, and shifts reproduce Lua, not raw C.
 - Mixed integer/float comparisons compare mathematical values without first
   rounding the integer through a float.
-- `..` accepts strings and numbers and returns string; `#string` counts bytes.
+- `..` accepts strings and numbers and returns string. `#string` counts bytes;
+  `#array` uses the deterministic highest present positive index; an exact
+  integer-key Map uses `__len` when present and otherwise a Lua table border,
+  and accepts only an exact Lua integer from the metamethod.
+- Map/Map and Map/`value` equality in either orientation start with
+  identity/raw equality. Distinct run-time tables select the left `__eq`, then
+  the right when the left has none, and use Lua truthiness. A non-table dynamic
+  `value` cannot dispatch; `value`/`value` equality remains deliberately raw.
 - `and`/`or` short-circuit and return values under Titan's Option-aware rules;
   `not` returns boolean.
 - Every condition accepts every type and uses Lua truthiness. A condition does
@@ -470,7 +479,7 @@ An Array `{T}` uses positive integer positions and may have holes. A Map
 | --- | --- | --- |
 | read | `T?` | `V?` |
 | nil write | deletes position | deletes key |
-| length | highest present positive index, deterministic | only exact integer-key Maps; Lua border |
+| length | highest present positive index, deterministic | only exact integer-key Maps; `__len` or Lua border |
 | Lua form | canonical Titan userdata proxy | ordinary Lua table |
 | construction | positional entries | `[key] = value`; positional only with exact integer-key context |
 
@@ -501,8 +510,24 @@ function length_with_hole(): integer
 end
 ```
 
-Typed reads are strict. If Lua or a `{value}` view puts a float `2.0` into a
-slot later observed as `integer`, the read raises instead of narrowing it.
+Maps are their backing ordinary Lua tables and retain any metatable attached at
+the Lua boundary. Typed operations use this exact table protocol:
+
+| Titan operation | Lua-compatible rule |
+| --- | --- |
+| `map[key]` | Return a raw hit; only a miss follows ordinary `__index` chains. Apply the same strict `V?` tag guard to either result. |
+| `map[key] = item` | Update or delete a raw-present key directly. Only a raw-absent key follows `__newindex`, including an absent-key nil assignment. |
+| `#map` | Accept only an exact `integer` key type. Invoke `__len` when present and require its result to carry the exact Lua integer tag; otherwise use a valid Lua border. |
+| Map equality | Resolve identity/raw equality first. For distinct run-time tables, use the left `__eq`, then the right fallback, with Lua truthiness. Map/`value` works in either orientation only when the dynamic value is a table. |
+
+Two `value` operands intentionally remain raw equality even when both happen to
+contain those same tables. Metamethod-aware comparison is scoped by a statically
+known Map operand, not inferred from dynamic contents.
+
+Typed reads are strict, including values returned by `__index`. If Lua or a
+`{value}` view puts a float `2.0` into a slot later observed as `integer`, the
+read raises instead of narrowing it. A Map metamethod likewise does not create
+a dynamic conversion boundary. A final nil remains the ordinary absent `V?`.
 Array passage through Lua/value preserves its one proxy and construction-time
 Lua-writer policy. A plain Lua table can satisfy a Map boundary but never an
 Array boundary.
@@ -1089,6 +1114,14 @@ notifications are hints, one raw notification maps to one public event, and
 Tasks mutating one Watcher must coordinate externally. Load **Titan async**
 before changing watcher behavior or callback ownership.
 
+Classification may suspend while callbacks append to the fresh notification
+Array. If the current drain retires a registration and that fresh Array
+contains a notification for it, the same `poll` takes the complete fresh batch
+in callback order and repeats. This preserves one-to-one event mapping and
+cross-registration order while preventing an already-copied notification for a
+retired registration from leaking into the next `poll`. A fresh batch containing
+only live registrations remains buffered for the next call.
+
 ### `os`: clocks, calendar, environment, paths, signals, processes
 
 Import the short Titan module:
@@ -1253,6 +1286,11 @@ to the language rules:
   such as “stop accepting events” and “close the native handle”; do not add
   alias indexes, generations, snapshot rollback, operation queues, or fencing
   without a real documented contract.
+- **Complete an ownership-retirement boundary.** When classification can yield,
+  detach the current callback batch before mapping it. If mapping retires an
+  owner and the fresh batch contains that retired owner, take the complete fresh
+  batch in order and continue. Do not filter, discard, merge, or reorder raw
+  events; leave a live-owner-only fresh batch for the next consumer call.
 - **Map dense data densely.** Allocate one result, write `out[index] =
   transform(in[index])`, and return it. Do not make a mapper mutate a caller's
   output Array when one-to-one construction is the semantics.
@@ -1274,8 +1312,23 @@ local function Watcher:drain_notifications(): {WatcherEvent}
   local notifications = self.notifications
   self.notifications = {}
   local events: {WatcherEvent} = {}
-  for index = 1, #notifications do
-    events[index] = self:map_notification(notifications[index])
+  while #notifications > 0 do
+    for index = 1, #notifications do
+      events[#events + 1] = self:map_notification(notifications[index])
+    end
+
+    local crosses_retirement = false
+    for index = 1, #self.notifications do
+      if self.notifications[index].registration.index == 0 then
+        crosses_retirement = true
+        break
+      end
+    end
+    if not crosses_retirement then return events end
+
+    -- Take the whole follow-on batch to preserve callback order across owners.
+    notifications = self.notifications
+    self.notifications = {}
   end
   return events
 end
@@ -1335,7 +1388,9 @@ skill tree should rerun the lightweight cartridge and routing matrix in
   false-capable bases.
 - Recheck fixed/variadic/flexible call shape and the “last call expands” rule.
 - Recheck Array versus Map constructor shape, holes, deterministic Array
-  length, and typed read guards.
+  length, and typed read guards. For Maps, verify raw-hit-first `__index`,
+  absent-key-only `__newindex`, exact-integer `__len`, scoped Map table `__eq`,
+  and intentionally raw `value`/`value` equality.
 - Put private nominal behavior on local methods and keep state transitions
   direct.
 - Register cleanup immediately after acquisition; do not invent a block merely

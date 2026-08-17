@@ -938,11 +938,18 @@ The current filesystem watcher is the model:
 4. When the Task drains notifications, it asynchronously calls `lstat`, maps
    each raw notification to exactly one public event, and closes a retired
    registration as needed.
+5. Because classification can yield, callbacks append to a fresh Array. If a
+   mapped event retires a registration and the fresh Array contains that
+   retired owner, the drain takes the complete fresh batch in callback order
+   and repeats. A live-owner-only fresh batch remains buffered for the next
+   `poll`.
 
 There is no alias index, Runtime generation, raw-batch rollback, or duplicate
 close state. Stop removes registration ownership; close then retires the native
-handle. An `OperationError` in one mapping becomes one error event rather than
-rolling back the batch.
+handle. Taking a complete follow-on batch preserves cross-registration order;
+it does not filter, merge, discard, or duplicate notifications. An
+`OperationError` in one mapping becomes one error event rather than rolling
+back the batch.
 
 Evidence: `titan/fs.titan:38-88,351-678` and
 `doc/implementation/filesystem-library.md:46-143`.
@@ -1212,12 +1219,17 @@ cancellation, rely on a finalizer, or add an event-kind dispatcher.
 
 **Prompt:** A filesystem watcher callback must decide created/deleted/modified.
 Should it call synchronous `stat` in the callback and keep a generation to
-reject stale results?
+reject stale results? During asynchronous classification, a deletion retires
+its registration after more callbacks have appended to the fresh batch. Which
+notifications belong to this `poll`?
 
 **Pass:** Copy one raw notification and return; classify with asynchronous
 `lstat` when the Task drains it; map each notification one-to-one; root the
 complete registration; separate stop from close; use `uv_is_closing`; no
-Runtime generation, alias index, or batch rollback.
+Runtime generation, alias index, or batch rollback. If classification retires
+a registration and the fresh callback batch contains that owner, drain the
+complete fresh batch in order so no already-copied retired-owner event leaks
+into the next poll; leave a live-owner-only batch buffered.
 
 **Fail:** Block in the callback or add defensive state not promised by the
 public watcher contract.

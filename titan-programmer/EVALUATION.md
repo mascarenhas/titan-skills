@@ -33,6 +33,15 @@ explanations of:
   `defer` ownership; and
 - why no ceremonial `as` or scope-only wrapper is needed.
 
+Also review a claim that typed Maps ignore Lua metatables and that any two
+table-valued `value`s invoke `__eq`. Require the raw-hit/miss distinction for
+`__index` and the same strict typed result guard after either a raw hit or an
+`__index` result. Require raw-present nil to delete directly while raw-absent
+nil still invokes `__newindex`; exact integer-Map `__len` result guarding versus
+the no-metamethod border; Map/Map, Map/`value`, and `value`/Map left-then-right
+`__eq` with Lua truthiness only for run-time tables; and intentionally raw
+`value`/`value` equality.
+
 ### T1 — native tests (`titan-programmer` + `titan-tester`)
 
 Replace a Busted wrapper around twenty Titan behavior rows with discoverable
@@ -47,14 +56,19 @@ Review a persistent filesystem-watcher proposal that roots only the native
 handle, calls blocking work and public `Task:resume` from the native callback,
 adds generations/rollback/alias indexes to defend straight-line mutation,
 tracks a duplicate close flag, and fans one raw notification into two public
-events. Require the direct owner/state flow and explicit statements that:
+events. Its drain also leaves an already-copied notification for a registration
+retired by the current batch to the next `poll`. Require the direct owner/state
+flow and explicit statements that:
 
 - callbacks cannot interleave with currently running Titan code;
 - Titan yields only at real async suspension, explicit yield, or coroutine
   transfer;
 - operation continuation is distinct from public deferred `Task:resume`;
 - native ownership survives Task cancellation through terminal callback/close;
-  and
+- each raw notification still maps to one public event, while a drain that
+  retires a registration takes a complete follow-on batch containing that
+  retired owner in order so no stale retired-owner event reaches the next
+  `poll`; and
 - unsupported same-owner concurrency is coordinated by the caller, not partly
   hardened with speculative state.
 
@@ -76,7 +90,10 @@ the built-in `L`, and `titan.lua.load`. The answer must keep C types private,
 root every retained owner, distinguish public call-only string borrowing from
 the trusted standard-library exception, state the `void *` object/function-
 pointer rules precisely, and treat `titan.lua` as an FFI-strength audited
-escape hatch rather than a default module mechanism.
+escape hatch rather than a default module mechanism. For a Lua table observed
+as a Map, also require the exact `__index`, `__newindex`, `__len`, and scoped
+`__eq` behavior, including strict returned-value tags and raw `value`/`value`
+equality.
 
 ### G1 — PEGs (`titan-programmer` + `titan-pegs`)
 

@@ -1027,7 +1027,7 @@ Canonical boundary representations are:
 | `boolean` | dynamic input uses Lua truthiness; only nil/false are false |
 | `string` | Lua string only, never automatic number-to-string |
 | Array `{T}` | canonical Titan userdata proxy, never a plain table |
-| Map `{K: V}` | the same ordinary Lua table |
+| Map `{K: V}` | the same ordinary Lua table, including its identity and metatable |
 | record | exact nominal Titan userdata |
 | union | exact opaque nominal Titan userdata |
 | Interface | exact already-constructed Interface wrapper userdata |
@@ -1036,12 +1036,27 @@ Canonical boundary representations are:
 | `value` | unchanged Lua value |
 
 A container crossing is shallow. A Map boundary checks "table" and an Array
-boundary checks the canonical proxy; neither walks contents. Every later typed
-Map/Array read uses a strict guard. Lua can mutate a Map directly. A Lua write
-through an Array proxy dynamically converts a nonnil element with the writer
-installed when the Array was constructed; nil deletes before conversion. A
-plain Lua table can never impersonate a Titan Array. The proxy supports
-ordinary indexing, assignment, `#`, and stock Lua 5.5 `table.*` operations
+boundary checks the canonical proxy; neither walks contents. Lua can mutate a
+Map directly or attach ordinary table metamethods. Titan Map reads return a raw
+hit first and follow `__index` only on a miss; either result then passes the
+same strict typed value guard. Writes update/delete raw-present keys without
+`__newindex`, while raw-absent keys follow ordinary `__newindex` function or
+target chains, including an absent-key nil assignment. Metamethod policy is not
+a Titan value converter, so a float `2.0` supplied to an integer-valued Map by
+raw mutation or `__index` still fails the later strict integer-tag read.
+
+Only an exact integer-key Map admits `#`: it invokes `__len` when present and
+strictly requires an exact Lua integer result, while the no-metamethod path
+keeps Lua's ordinary border semantics. Map/Map and Map/`value` comparison in
+either orientation begin with identity/raw equality; when both run-time values
+are tables, Lua selects the left `__eq` and falls back to the right, interpreting
+the result by Lua truthiness. Two `value` operands deliberately remain raw
+equality even when both contain tables with `__eq`.
+
+A Lua write through an Array proxy dynamically converts a nonnil element with
+the writer installed when the Array was constructed; nil deletes before
+conversion. A plain Lua table can never impersonate a Titan Array. The proxy
+supports ordinary indexing, assignment, `#`, and stock Lua 5.5 `table.*` operations
 through metamethods. `rawget`, `rawset`, and `rawlen` require a real table and
 reject it.
 
@@ -1760,15 +1775,24 @@ flags function-like macros and `__int128` enum carriers as unsupported.
 
 ## Eval 7 — `value` boundary precision
 
-**Prompt:** A Lua plugin returns `{ transform = function(...) ... end }`. Write a
-Titan dynamic loader and explain strict versus dynamic conversions. The draft
-uses implicit `value -> *c.Context` for a lightuserdata field.
+**Prompt:** A Lua plugin returns `{ transform = function(...) ... end }` with a
+metatable that supplies `__index`, `__newindex`, `__len`, and `__eq`. Write a
+Titan dynamic loader, explain which metamethods affect typed Map operations and
+comparisons, and explain strict versus dynamic conversions. The draft uses
+implicit `value -> *c.Context` for a lightuserdata field and assumes two raw
+`value` operands invoke table `__eq`.
 
 **Pass criteria:** uses `titan.lua.require`, casts once to `{string: value}`,
 reads/casts the function and calls through a typed callable, converts results at
 the boundary, and rejects implicit raw-pointer recovery. Explains that the Map
-cast is shallow, typed reads are strict, written `value as` is dynamic, and a
-function cast defers callability. Warns Lua loading is an escape hatch, not a
+cast is shallow; raw hits bypass `__index`; misses use it; and both paths apply
+the same strict typed result guard. A present-key nil write deletes directly,
+while an absent-key nil write still invokes `__newindex`. Exact integer-Map
+length uses `__len` with an exact integer-tag result or a no-metamethod border.
+Map/Map, Map/`value`, and `value`/Map table comparisons use raw equality then
+left/right `__eq` with Lua truthiness only when the dynamic operand is a table;
+`value`/`value` stays raw. Also explains that written `value as` is dynamic and
+a function cast defers callability. Warns Lua loading is an escape hatch, not a
 sandbox or default module mechanism.
 
 ## Eval 8 — Raw Lua stack audit
@@ -1828,6 +1852,9 @@ Before approving code, answer all of these explicitly:
 * Are macro/enum assumptions validated by the active header/toolchain?
 * Can a callback occur after cancellation, unregister, close, or finalization?
 * If Lua is used, why is a static Titan module or typed callable insufficient?
+* If a Lua table is viewed as a Map, are raw hits, metamethod fallbacks, strict
+  result tags, exact integer length, scoped Map equality, and raw
+  `value`/`value` equality distinguished?
 * If the raw Lua API is used, where are the saved top, maximum reservation,
   per-path ledger, traced survivor, nonyielding rule, and borrowed-pointer audit?
 * Are cleanup and tests located at the owning layer?
