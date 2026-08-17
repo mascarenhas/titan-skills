@@ -17,7 +17,7 @@ A case fails if it invents an API, uses invalid Titan syntax, contradicts the
 single-loop/ownership model, recommends a speculative workaround, or requires a
 manual merely to answer the cartridge's advertised domain.
 
-## Six cartridge cases
+## Cartridge cases
 
 ### P1 — language basics (`titan-programmer` only)
 
@@ -41,6 +41,28 @@ nil still invokes `__newindex`; exact integer-Map `__len` result guarding versus
 the no-metamethod border; Map/Map, Map/`value`, and `value`/Map left-then-right
 `__eq` with Lua truthiness only for run-time tables; and intentionally raw
 `value`/`value` equality.
+
+### P2 — compiler-witnessed Interface discovery (`titan-programmer` only)
+
+Review a module that defines record `R` and Interface `I`, contains a valid
+`R -> I` conversion in a branch that never executes, erases a bare `R` to
+`value`, and claims `value is I`, `value as I`, an `I?` sink, a typed
+Interface-container observation, and a Lua call to an `I` formal must all
+reject the bare record. Require the correction and exact explanations of:
+
+- pair inventory at a real compiled wrapper site rather than structural
+  method search or execution of that source branch;
+- per-Lua-state registration on the concrete metatable, with first non-nil
+  writer winning and cross-module/DSO use through canonical metatables;
+- exact-wrapper fast paths followed by witnessed lookup, with each successful
+  conversion producing a fresh wrapper;
+- nil-first Option recursion and the same Interface leaf at strict container,
+  gradual `value`, callable-result, and genuine Lua boundaries;
+- static `r is I` proving satisfaction without advertising a pair, versus
+  dynamic `value is I` testing only witness presence without invoking it; and
+- the trusted debug/native boundary: no record-kind or callability validation,
+  so a forged non-function entry makes `is` true and conversion raise Lua's
+  ordinary non-callable error.
 
 ### T1 — native tests (`titan-programmer` + `titan-tester`)
 
@@ -140,11 +162,13 @@ two therefore demonstrated routing but not a self-contained cartridge.
 Cartridge-only N1, F1, and G1 could establish little beyond the short imports
 and explicitly returned UNKNOWN instead of usable APIs.
 
-Fresh cartridge-only post-change evaluators passed all six cases:
+Fresh cartridge-only post-change evaluators passed all six original cases;
+the later focused P2 evaluator passed as well:
 
 | Case | Baseline | New cartridges |
 | --- | --- | --- |
 | P1 | Correct after linked-authority research | Exact from primary cartridge alone |
+| P2 | Not present in the original baseline | Exact compiler-witness, per-state, container/generic, freshness, and forged-entry behavior from the primary cartridge alone |
 | T1 | Correct after linked test research | Exact native tests, subtests, cleanup, filters, and Runtime modes |
 | A1 | Correct after linked async/source research | Exact cooperative scheduling and direct watcher ownership |
 | N1 | APIs UNKNOWN | Exact current client/server APIs and protocol constraints |
@@ -159,6 +183,14 @@ all six cartridges against manuals, implementation, source, and tests. Review
 findings are not waived by a successful model answer: every blocker must be
 fixed and the mechanical checks below rerun.
 
+After compiler-witnessed Interface discovery was added, a fresh
+cartridge-only P2 evaluator also passed: it recovered initialization-time
+inventory without path execution, exact/witnessed leaf behavior across every
+listed boundary, per-state and cross-module rules, wrapper freshness, static
+`is` non-registration, and the trusted forged-entry boundary. It marked exact
+diagnostic text and duplicate-physical-provider behavior UNKNOWN rather than
+guessing.
+
 ### Recorded run metadata
 
 The initial baseline/post run was performed on 2026-08-16 by independent fresh
@@ -170,6 +202,10 @@ reports are not a runtime dependency or repository fixture. The prompts,
 pass/fail gates, aggregate outcomes, and mechanical checks are preserved here so
 the evaluation can be rerun with another model; the pull-request description
 records the final run summary.
+
+The focused P2 addition was run on 2026-08-17 in a separate fresh context with
+only `titan-programmer`; it did not inspect manuals, source, tests, plans, or
+the worktree diff.
 
 ## Mechanical gates
 

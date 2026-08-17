@@ -1030,7 +1030,7 @@ Canonical boundary representations are:
 | Map `{K: V}` | the same ordinary Lua table, including its identity and metatable |
 | record | exact nominal Titan userdata |
 | union | exact opaque nominal Titan userdata |
-| Interface | exact already-constructed Interface wrapper userdata |
+| Interface | exact wrapper userdata, or bare full userdata whose metatable advertises a compiler-witnessed wrapper entry for that Interface |
 | function type | any boxed value; callability is deferred to call time |
 | `T?` | nil or dynamic conversion of `T` |
 | `value` | unchanged Lua value |
@@ -1065,6 +1065,16 @@ raise rather than returning nil. Records/unions/Interfaces and modules are
 userdata, not tables; their protected metatables and nominal identities matter.
 Debug-library or native mutation of private metatables, user values, or closure
 upvalues opts out of Titan's safety contract.
+
+That escape hatch includes Interface discovery entries. Generated code
+raw-stores a wrapper witness at
+`concrete_metatable[target_Interface_metatable]` only for pairs seen at real
+static wrapper sites, preserving any existing non-nil entry. Dynamic `is`
+checks only presence. Conversion calls a present value with the candidate
+userdata and trusts its one result, without validating record identity,
+callability, or the returned wrapper. Never forge or replace these entries in
+ordinary FFI code; debug/native code that does so owns the resulting Lua call
+errors, side effects, and representation safety.
 
 A Lua callable can be accepted directly through a typed Titan function:
 

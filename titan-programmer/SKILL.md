@@ -194,7 +194,7 @@ Important direct conversions include:
 | `T? → T` | checked nil force |
 | compatible numeric Options | preserve nil; convert a present payload |
 | ordinary Titan value → `value` | total gradual injection (boxable C scalars have their own checks) |
-| `value → T` in an implicit typed sink | **strict** runtime projection; the value must already have `T`'s required tag/identity (a Function target deliberately defers callability until invocation) |
+| `value → T` in an implicit typed sink | **strict** runtime projection; the value must already have `T`'s required tag/identity, except that an Interface target may use a compiler-witnessed metatable entry (a Function target deliberately defers callability until invocation) |
 | satisfying record/union `R → I` | construct a fresh nominal Interface wrapper |
 | many statically known Titan values → `boolean` | Lua truthiness |
 
@@ -301,8 +301,10 @@ operations. Do not take the analogy further:
   recursive Option conversion.
 - Titan permits Lua truthiness/raw equality and contextual calls on `value`.
 - Titan's `interface` declaration is a different feature: a nominal behavioral
-  wrapper constructed from a statically known satisfying record or union. It
-  is not Titan's spelling of `value` and is not Go's runtime interface model.
+  wrapper constructed from a statically known satisfying record or union, or
+  dynamically through a pair already witnessed by compiled conversion code.
+  It is not Titan's spelling of `value` and is not Go's structural runtime
+  interface model.
 
 ### Strict implicit projection versus written dynamic conversion
 
@@ -329,14 +331,21 @@ explicit Interface/concrete downcast, or an FFI-only operation. Do not use it
 as ceremony after an Option presence check or where a normal typed sink already
 requests the intended direct conversion.
 
-`exp is T` asks whether the corresponding written `exp as T` would complete.
-It evaluates once, returns boolean, and **does not narrow** the expression's
-static type. It shares `as`'s broad dynamic rules: `value is integer` is true
-for an integral float, so a subsequent **strict** implicit integer projection
-could still reject that float. In that numeric case, perform the matching
+`exp is T` applies the non-raising predicate for the corresponding written
+`exp as T` operation. It evaluates once, returns boolean, and **does not
+narrow** the expression's static type. It shares `as`'s broad dynamic rules:
+`value is integer` is true for an integral float, so a subsequent **strict**
+implicit integer projection could still reject that float. In that numeric case, perform the matching
 `as integer` conversion. For exact nominal targets such as `os.Date`, both
 strict and written dynamic checks require the same exact identity, so an
 annotated local can recover it without an explicit cast.
+
+Interface targets are the nominal exception. Both strict projection and
+written/Lua dynamic conversion accept an existing exact wrapper or bare full
+userdata whose metatable advertises a compiler-witnessed wrapper for that
+Interface. They never search methods at run time. `value is I` tests only
+exact identity or non-nil witness presence; `value as I` calls a present
+witness and constructs a fresh wrapper.
 
 ## Operators and control flow
 
@@ -746,11 +755,27 @@ lift through Arrays, Maps, functions, or generic applications. If `R` satisfies
 conversion is fresh, so retain one wrapper if stable identity (for example, as
 a Map key) matters.
 
-At a dynamic `value` or Lua boundary, Titan accepts only an already existing
-wrapper of the exact Interface type. It never discovers at runtime that a bare
-record happens to satisfy the method set. An Interface can be explicitly
-checked/downcast to a visible concrete nominal type; the wrapper retains the
-original object.
+At a dynamic `value` or Lua boundary, Titan first accepts an already existing
+wrapper of the exact Interface type. It can also wrap bare full userdata when
+an initialized generated module has registered a witness for that exact
+concrete/Interface pair. A real compiled wrapper site advertises its pair even
+when that source path never runs; a matching method set or static `r is I`
+alone does not. Witness registration is per Lua state and first-writer wins.
+Each successful witnessed conversion returns a fresh wrapper; the exact-wrapper
+fast path preserves the existing wrapper.
+
+The same leaf governs a present `I?`, strict Interface-typed Array/Map reads,
+Interface Array writers, constrained generic carriers, callable results, and
+genuine Lua sinks. Options accept nil before discovery; containers are not
+traversed or converted wholesale.
+
+This is compiler-witnessed nominal discovery, not structural reflection.
+Dynamic `is I` observes non-nil witness presence without invoking or validating
+the entry. Conversion calls a present entry without checking that the candidate
+is a Titan record/union or that the entry is a function; debug/native code that
+forges metatables has opted out of Titan's safety contract. An Interface can be
+explicitly checked/downcast to a visible concrete nominal type; the wrapper
+retains the original object.
 
 ## Modules, visibility, and initialization
 
