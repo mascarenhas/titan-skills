@@ -110,13 +110,25 @@ foreign declarations. A top-level `name = expression` is a **module-variable
 declaration**, not assignment. Top-level declarations are exported unless the
 form admits and uses `local`.
 
-Every ordinary local declaration needs an initializer:
+Const locals always need an initializer expression list. An ordinary mutable
+local may omit its RHS only when every name has an explicit type that actually
+admits missing nil (`nil`, `value`, an Option, or an existing nullable pointer
+domain); the compiler supplies a typed nil for each slot:
 
 ```titan
-local count: integer = 0
-local label = "ready"             -- inferred string
-local missing: string? = nil
+local function declarations()
+  local count: integer = 0
+  local label = "ready"             -- inferred string
+  local missing: string?             -- initialized to nil
+  const ready = label
+  local const limit: integer = 10
+end
 ```
+
+`local count: integer` is rejected, as is every const declaration without an
+RHS. `const name = value` and `local const name = value` have the same
+block-local semantics; neither binding can be assigned later, including from a
+capturing closure.
 
 Assignment to an undeclared name is an error; Titan has no ambient Lua globals.
 A local enters scope only after its whole declaration, so `local x = x + 1`
@@ -131,7 +143,7 @@ Only a call may be used as an expression statement.
 | scalar values | `boolean`, `integer`, `float`, `string` |
 | dynamic Lua-shaped slot | `value` |
 | optional value | `T?` |
-| Array | `{T}` |
+| mutable / const / maybe-const Array | `{T}` / `const { T }` / `const? { T }` |
 | Map | `{K: V}` |
 | function | `(A, B) -> R`, `() -> ()`, `(A) -> (R1, R2)` |
 | variadic input | `(...: T) -> R` or fixed prefix plus `...: T` |
@@ -208,6 +220,15 @@ integer -> integer?               accepted
 () -> integer -> () -> float     rejected
 () -> integer -> () -> integer?  rejected
 ```
+
+`{T}` and `const { T }` are distinct invariant types. `const? { T }` is a
+maybe-const view type: `{T}`, `const { T }`, and `const? { T }` can all be
+implicitly assigned to `const? { T }` (and `({T})?` / `(const {T})?` to
+`(const? {T})?`). `const? { T }` cannot be implicitly assigned back to `{T}`
+or `const { T }`, but can be explicitly downcast with `as {T}` or `as const {T}`
+(which perform runtime metatable checks). A direct `as const { T }` from a
+mutable `{T}` performs an explicit shallow snapshot (or in-place freeze when
+linear).
 
 Put the scalar expression in the scalar target instead:
 
@@ -492,6 +513,76 @@ An Array `{T}` uses positive integer positions and may have holes. A Map
 | Lua form | canonical Titan userdata proxy | ordinary Lua table |
 | construction | positional entries | `[key] = value`; positional only with exact integer-key context |
 
+`const { T }` is a read-only Array container. It supports indexing, `#`,
+iteration, and the same strict element reads, but Titan rejects indexed writes.
+A positional constructor in a const target constructs the const tag directly:
+
+```titan
+function primes(): const { integer }
+  return {2, 3, 5, 7}
+end
+```
+
+Mutable and const Arrays have distinct canonical Lua proxy tags. Lua may read
+and take `#` of either; the const proxy has no writer, so assignment and
+mutating `table.*` operations fail.
+
+`const? { T }` is a maybe-const Array view type. It allows a function or data
+structure to accept both mutable `{T}` and const `const { T }` Arrays with
+zero overhead and zero conversions:
+
+```titan
+function sum(items: const? { integer }): integer
+  local total = 0
+  for i = 1, #items do
+    total = total + (items[i] or 0)
+  end
+  return total
+end
+```
+
+- `const? { T }` supports `#` and indexed reads, but rejects indexed writes
+  (`items[i] = v` is a compile error).
+- `{T}`, `const { T }`, and `const? { T }` can all be assigned to
+  `const? { T }` (provided element types are consistent).
+- Option versions propagate consistently: `({T})?` and `(const {T})?` can both
+  be assigned to `(const? {T})?`.
+- `const? { T }` cannot be implicitly assigned to `{T}` or `const { T }`.
+- `items as { T }` and `items as const { T }` explicitly downcast a `const?`
+  Array at runtime, verifying the proxy metatable and raising if the qualifier
+  mismatches.
+- `items is { T }` and `items is const { T }` perform non-allocating qualifier
+  tests.
+- Dynamic `value -> const? { T }` unboxing checks both mutable and const
+  metatables in $O(1)$.
+
+Cross-qualifier conversion from mutable `{T}` to `const { T }` uses an explicit
+shallow snapshot:
+
+```titan
+function finish(items: {string}): const { string }
+  return items as const { string }
+end
+```
+
+Semantically this copies the Array container, preserving length, holes, and
+element identities. The compiler optimizes this by freezing the original proxy
+in place (`titan_array_freeze`) without copying or allocating when conservative
+linear-use analysis proves the mutable allocation is unique and unaliased:
+
+1. **Local builder pattern:** A fresh mutable builder local `{}` whose
+   references are non-escaping reads/writes (loops, `#`, indexing), with no
+   closure captures, frozen in place at its terminal same-block cast or return.
+2. **Linear function returns:** When all return paths of a function return a
+   freshly constructed array or an unaliased local builder array, the function's
+   return type is marked linear. Callers directly assigning or casting the call
+   result to a `const` target (e.g. `local res: const { B } = map(xs, f)`)
+   freeze the returned array in place without memory allocation.
+
+Passing, storing in an outer aggregate/container, aliasing, rebinding, or
+capturing the Array, or using the source afterward retains the copy. Code cannot
+observe which path was selected.
+
 Container value types are de-optionized: `{integer?}` means `{integer}`, and
 `{string: integer?}` means `{string: integer}`. Nil means absence, not a stored
 optional payload. Map keys cannot be nil or Option types.
@@ -655,6 +746,21 @@ local b = Point.new { y = 2.0, x = 1.0 }
 local c: Point = { x = 1.0, y = 2.0 }
 ```
 
+A field may be declared `const` after an optional `local`:
+
+```titan
+record Request
+  const method: string
+  local const token?: string
+  metadata: {string: value}
+end
+```
+
+Construction initializes const fields, but later Titan and Lua writes reject
+replacement. Constness is shallow: a const Map/record/ordinary mutable Array
+field still refers to the same mutable object. Field visibility remains
+independent; `local const` is still source-private.
+
 Records compare by identity and cross Lua as userdata. A record assignment
 copies the reference. `local` records, fields, methods, and nominal functions
 are visible only through the defining module's permitted source collaboration
@@ -716,15 +822,19 @@ variant/payload structural equality.
 
 ## Interfaces are explicit nominal views
 
-An Interface is a public, nonempty, type-only list of bodyless method
-signatures:
+An Interface is a public, nonempty, type-only list of read-only fields and
+bodyless method signatures. Interface fields use `name: T` and are implicitly
+const; write `name: T?`, not the record-only `name?: T`, for an optional field.
+Field and method names share one namespace:
 
 ```titan
 interface Reader
+  name: string
   function read(): string?
 end
 
 record Buffer
+  const name: string
   contents: string?
 end
 
@@ -744,10 +854,19 @@ end
 ```
 
 There is no `implements` clause. At a statically known conversion site Titan
-checks visible record/union methods structurally, then constructs a **fresh
-wrapper of that exact nominal Interface**. Parameter spellings do not determine
-satisfaction; named calls through the wrapper use the Interface declaration's
-names. Direct concrete method calls remain static.
+checks visible members structurally, then constructs a **fresh wrapper of that
+exact nominal Interface**. A required field needs a visible same-name const
+record field whose type has the ordinary assignment adjustment; a mutable
+field is insufficient. A union may satisfy a method-only Interface but never a
+field-bearing one. Parameter spellings do not determine method satisfaction;
+named calls through the wrapper use the Interface declaration's names. Direct
+concrete method calls remain static.
+
+Each conversion captures Interface fields in declaration order after their
+checked adjustment. Reads use the snapshot, not a later record lookup, and all
+Interface writes reject in Titan and Lua. Snapshotting is shallow: referenced
+mutable objects remain shared. A generic parameter constrained by an Interface
+exposes these field reads as well as its methods.
 
 This is a direct outer conversion, not inheritance or subtyping. It does not
 lift through Arrays, Maps, functions, or generic applications. If `R` satisfies
@@ -815,6 +934,15 @@ initializer see only earlier imports and earlier module variables, although
 nominal types, aliases, and callable declarations are known module-wide. Its
 initializer must be a compile-time constant. Put computed one-time work in the
 single final root `do ... end` initializer.
+
+An initialized `const` module variable is read-only immediately. An
+initializer-less const module variable must have an explicit type accepted by
+the same narrow missing-nil rule as an omitted mutable local. Only its owning
+module's directly executing root initializer may assign it; nested blocks keep
+that authority, but nested functions/lambdas and importing modules do not. The
+owner initializer may assign conditionally or more than once—this is an
+initialization region, not definite single assignment. Public const module
+variables remain readable from Titan and Lua, while writes reject.
 
 A direct import resolved from source can select the producer's `local`
 declarations through the written alias. That capability is **direct only** and
@@ -1375,6 +1503,7 @@ disagree, resolve it at the narrow owner:
 - declarations and data modeling:
   [`functions.md`](../../../doc/language/functions.md),
   [`closures.md`](../../../doc/language/closures.md),
+  [`const-values.md`](../../../doc/language/const-values.md),
   [`generics.md`](../../../doc/language/generics.md),
   [`arrays-maps.md`](../../../doc/language/arrays-maps.md),
   [`records.md`](../../../doc/language/records.md),
@@ -1407,6 +1536,10 @@ skill tree should rerun the lightweight cartridge and routing matrix in
 
 - Recheck exports versus `local`, module-variable constant/order rules, and
   source-versus-binary visibility.
+- Recheck const-local RHS requirements, nil-bearing mutable omissions, owner
+  initializer authority, shallow const fields/Interface snapshots, and exact
+  mutable versus const Array tags. Treat mutable-to-const copy elision as valid
+  only under the checker-proven no-escape/final-use builder shape.
 - Remove ceremonial `as` casts; then verify that every remaining one really
   requests broader dynamic conversion, a downcast, or FFI behavior.
 - Recheck Option preservation (`name?`) versus fail-fast force, especially for

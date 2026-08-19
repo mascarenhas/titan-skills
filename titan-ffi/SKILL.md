@@ -256,8 +256,25 @@ end
 If an ordinary value collides with the type name—classic `struct stat` and
 `stat()`—the value wins in expression lookup and the type pseudo-members are
 unavailable. Use an actual differently named typedef or a narrow author-owned
-header alias; do not invent an initializer-less local (every Titan local needs
-an initializer).
+header alias; do not invent an initializer-less aggregate local. Ordinary
+mutable locals may omit an RHS only for an explicit nil-bearing type such as a
+C pointer, while every const local requires an expression list.
+
+Titan binding constness is distinct from C pointee constness and from a const
+Array qualifier:
+
+```text
+const pointer: *c.Item = acquire()  -- binding is const; pointee may be mutable
+local view: const *c.Item           -- mutable binding, pointer to const C Item
+const { *c.Item }                   -- const Titan Array of mutable C pointers
+```
+
+A const local whose value is inline C struct/union or fixed-array storage
+cannot mutate a field/element, take a mutable address, or use mutable automatic
+array decay through that binding. This rule is shallow: a pointer or `owned`
+value ends the inline-storage walk, so const prevents replacing the binding but
+does not freeze an independently mutable pointee. C `const *T` continues to
+control pointee qualification.
 
 ## C calls, function pointers, and arity
 
@@ -574,8 +591,12 @@ C indexing is 0-based. The base may be:
 flexible-array-member projection. It does not work on a raw pointer or an
 uncounted `T[]` borrowed view.
 
-Every local needs an initializer. `.new()` and `.new_array(...)` request zeroed
-storage; the direct local declaration's target chooses its representation.
+Direct C aggregates and fixed arrays need an initializer; `.new()` and
+`.new_array(...)` request zeroed storage, and the direct local declaration's
+target chooses its representation. A mutable pointer local in an ordinary
+Titan function may omit its RHS and starts as NULL, but every const local and
+every local in a restricted source-written foreign function requires an
+initializer expression list.
 For a complete non-GC-bearing struct or union:
 
 | Direct declaration | Representation |
@@ -1026,7 +1047,8 @@ Canonical boundary representations are:
 | `float` | Lua float; Lua integer converts |
 | `boolean` | dynamic input uses Lua truthiness; only nil/false are false |
 | `string` | Lua string only, never automatic number-to-string |
-| Array `{T}` | canonical Titan userdata proxy, never a plain table |
+| mutable Array `{T}` | canonical mutable Titan userdata proxy, never a plain table |
+| const Array `const { T }` | distinct canonical read-only Titan userdata proxy |
 | Map `{K: V}` | the same ordinary Lua table, including its identity and metatable |
 | record | exact nominal Titan userdata |
 | union | exact opaque nominal Titan userdata |
@@ -1036,7 +1058,8 @@ Canonical boundary representations are:
 | `value` | unchanged Lua value |
 
 A container crossing is shallow. A Map boundary checks "table" and an Array
-boundary checks the canonical proxy; neither walks contents. Lua can mutate a
+boundary checks the exact qualified canonical proxy; neither walks contents.
+Lua can mutate a
 Map directly or attach ordinary table metamethods. Titan Map reads return a raw
 hit first and follow `__index` only on a miss; either result then passes the
 same strict typed value guard. Writes update/delete raw-present keys without
@@ -1053,15 +1076,19 @@ are tables, Lua selects the left `__eq` and falls back to the right, interpretin
 the result by Lua truthiness. Two `value` operands deliberately remain raw
 equality even when both contain tables with `__eq`.
 
-A Lua write through an Array proxy dynamically converts a nonnil element with
-the writer installed when the Array was constructed; nil deletes before
-conversion. A plain Lua table can never impersonate a Titan Array. The proxy
-supports ordinary indexing, assignment, `#`, and stock Lua 5.5 `table.*` operations
-through metamethods. `rawget`, `rawset`, and `rawlen` require a real table and
-reject it.
+A Lua write through a mutable Array proxy dynamically converts a nonnil element
+with the writer installed when the Array was constructed; nil deletes before
+conversion. A const Array proxy has no writer: ordinary assignment and
+mutating stock Lua 5.5 `table.*` operations fail, while indexing and `#`
+remain available. A plain Lua table can never impersonate either Array tag,
+and dynamic conversion never changes the qualifier. `rawget`, `rawset`, and
+`rawlen` require a real table and reject either proxy.
 
 A module and record use metatables for checked member writes. Unknown members
-raise rather than returning nil. Records/unions/Interfaces and modules are
+raise rather than returning nil; public const module variables and const record
+fields remain readable but their write cases explicitly raise. Interface
+fields are read-only shallow snapshots captured when the wrapper is built, and
+every Interface write rejects. Records/unions/Interfaces and modules are
 userdata, not tables; their protected metatables and nominal identities matter.
 Debug-library or native mutation of private metatables, user values, or closure
 upvalues opts out of Titan's safety contract.
@@ -1569,8 +1596,10 @@ support:
 * automatic format-string validation for C variadic calls;
 * wide `__int128` enum carriers;
 * source aliases for enum tags, anonymous aggregates, or prototype-local tags;
-* reliable C subobject writeability inference from `const` in v1—Titan may
-  type a field assignment that the real C compiler then rejects.
+* reliable writeability inference from every header-derived C `const`
+  subobject in v1—Titan binding constness still blocks mutation through its own
+  inline aggregate/array storage, but the C compiler may reject additional
+  field assignments from imported qualifier details.
 
 When a requested design needs one of these, stop. Either reshape the typed
 boundary, use an existing higher-level module, add one reviewed narrow shim, or
@@ -1625,6 +1654,8 @@ searching by analogy.
   strings, arrays, owners, linking, platform limitations.
 * `doc/language/c-ffi-expressions.md` — tag names, target-directed allocation,
   pointer probes, operators, macros, field projections.
+* `doc/language/const-values.md` — binding constness, inline C storage,
+  qualified Arrays, and Lua write boundaries.
 * `doc/language/foreign-functions.md` — restricted source C functions,
   visibility, generated headers, body subset.
 * `doc/language/types.md` — normative boundary matrix, strict versus dynamic
@@ -1645,6 +1676,8 @@ searching by analogy.
 * `doc/implementation/ffi-internals.md` — complete import/type/lowering pipeline.
 * `doc/implementation/c-ffi-expressions.md` — C declarators, target profile,
   compile probes, operators/macros/allocation.
+* `doc/implementation/const-values.md` — const lvalue checks, Array tags/casts,
+  and generated Lua const-write paths.
 * `doc/implementation/foreign-functions.md` — restricted checker, source
   headers, callback migrations.
 * `doc/implementation/type-relations-and-boundaries.md` — checker-owned plans

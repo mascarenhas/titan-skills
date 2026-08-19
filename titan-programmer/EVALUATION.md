@@ -64,6 +64,36 @@ reject the bare record. Require the correction and exact explanations of:
   so a forged non-function entry makes `is` true and conversion raise Lua's
   ordinary non-callable error.
 
+### P3 — const values and linear Array freezing (`titan-programmer` only)
+
+Review a module that spells a const Array as `{const integer}`, declares a
+const local without an RHS, leaves an ordinary integer local initializer-less,
+mutates a const record field through Lua, implements an Interface field with a
+mutable record field, and assumes mutable `{T}` implicitly converts to
+`const { T }`. Require corrected code and exact explanations of:
+
+- `const { T }` syntax, invariant/distinct run-time Array tags, exact dynamic
+  qualifier checks, and the lack of a const Map form;
+- mandatory expression lists for const locals versus omitted mutable locals
+  only with explicit nil-bearing types and compiler-supplied nil values;
+- initializer-less const module variables, including the owning root
+  initializer's nested-block authority and the lack of authority in nested
+  callables or importers;
+- shallow const record fields and explicit Lua write rejection;
+- implicitly const Interface fields, visible same-name const record-field
+  satisfaction, conversion-time shallow snapshots, and rejection of all
+  Interface writes;
+- the sole explicit mutable-to-const Array `as`, its semantic shallow copy,
+  and rejection of implicit or const-to-mutable conversion; and
+- sound last-use elision for a fresh mutable builder used across loops for
+  length/indexed reads and writes, including unrelated element-producing calls
+  and closure creation that does not reference the binding. Passing, storing,
+  aliasing, rebinding, actual reference capture, a cast hidden in control flow,
+  or source/alias use after the cast must retain the copy.
+
+This case is intentionally unscored until it is run in a fresh cartridge-only
+context under the evaluation rules above.
+
 ### T1 — native tests (`titan-programmer` + `titan-tester`)
 
 Replace a Busted wrapper around twenty Titan behavior rows with discoverable
