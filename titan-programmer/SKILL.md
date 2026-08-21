@@ -944,13 +944,32 @@ owner initializer may assign conditionally or more than once—this is an
 initialization region, not definite single assignment. Public const module
 variables remain readable from Titan and Lua, while writes reject.
 
-A direct import resolved from source can select the producer's `local`
-declarations through the written alias. That capability is **direct only** and
-exists for source collaboration. Binary `.so`/`.a` imports and Lua see only the
-public interface; static co-residence or another module's import does not grant
-private access. When collaborating standard modules must use private members,
-compile the intended roots from source rather than accidentally testing against
-a stale installed binary.
+An ordinary import sees only the producer's public interface, even when module
+resolution happens to select source. Append the terminal `.titan` marker to the
+written import name to request source collaboration explicitly:
+
+```titan
+local model = import "app.model.titan"
+```
+
+The marker is not part of the logical module name: this still imports
+`app.model`, looks for `app/model/model.titan` and then `app/model.titan`, and
+uses `app.model` in manifests and native protocols. It is stripped before
+standard-library shorthand expansion, so `import "uv.titan"` requests source
+for logical module `titan.uv`. A marked import never falls back to `.so` or
+`.a`; compilation fails if no matching source module exists.
+
+Only that explicit, loader-proven source import exposes the producer's `local`
+declarations. The capability is **direct only**: another module's import does
+not grant private access, and binary providers and Lua remain public-only. A
+dotted logical module name whose final component is `titan`, such as
+`app.titan`, is forbidden because that spelling always means a marked import of
+`app`. Bare logical module `titan` and an interior component such as
+`app.titan.child` remain valid. A repeated marker such as
+`import "app.titan.titan"` therefore strips once and rejects the forbidden
+logical name `app.titan`. The reservation is only for logical module keys:
+valid roots such as `app.titan.left` and `app.titan.right` may still derive the
+physical provider prefix `app.titan` (`app/titan.so` and `app/titan.a`).
 
 A folder module is still one logical module. For `pkg.name`, the main is
 `pkg/name/name.titan`; every immediate sibling `.titan` file is a contributor.
@@ -1413,11 +1432,14 @@ include:
 
 The compiler typechecks all requested roots and transitive dependencies before
 emitting C. Explicit command-line roots are selected from source; ordinary
-dependencies prefer compiled providers, then source. When a change relies on
-direct source-private collaboration, force the intended roots through source
-rather than letting an installed binary hide it. If compiler Lua sources also
-changed, reinstall/rebuild the compiler snapshot before trusting Busted or
-`titanc` runs.
+dependencies prefer compiled providers, then source, but expose only their
+public interfaces either way. `--test` deliberately changes ordinary dependency
+lookup to source-first with compiled fallback on a clean miss; it does not
+change that public-only visibility. Spell a collaborating dependency as
+`import "name.titan"`; that import requires source and exposes locals without
+changing the logical name. Command-line roots themselves remain unsuffixed
+logical names. If compiler Lua sources also changed, reinstall/rebuild the
+compiler snapshot before trusting Busted or `titanc` runs.
 
 ## Standard-library implementation taste: keep the architecture direct
 
@@ -1428,7 +1450,8 @@ to the language rules:
   `local function Owner:operation(...)` to a free helper whose first argument
   is `Owner`.
 - **Use the real owner and existing helper.** A collaborating source module may
-  directly call the source-private `uv` owner/helper granted by its import.
+  explicitly `import "uv.titan"` and directly call the source-private `uv`
+  owner/helper granted by that import.
   Do not add a public-looking alias, forwarding wrapper, duplicate check, or
   second state field merely to avoid that direct flow.
 - **Honor the supported trust/concurrency model.** Do not harden one imagined
@@ -1535,7 +1558,9 @@ skill tree should rerun the lightweight cartridge and routing matrix in
 ## Before finishing
 
 - Recheck exports versus `local`, module-variable constant/order rules, and
-  source-versus-binary visibility.
+  source-versus-binary visibility. Ordinary imports stay public-only even when
+  source wins; private collaboration requires a terminal `.titan` marker and a
+  real source module.
 - Recheck const-local RHS requirements, nil-bearing mutable omissions, owner
   initializer authority, shallow const fields/Interface snapshots, and exact
   mutable versus const Array tags. Treat mutable-to-const copy elision as valid

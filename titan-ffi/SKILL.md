@@ -924,11 +924,12 @@ local callback: Compare = compare_items
 Therefore `*foreign (...) -> ...` means a pointer to a function pointer, not
 another spelling for one callback.
 
-A foreign definition is source-private. Its own module and a **direct source
-importer** may name it. It is absent from `.so`/`.a` type metadata, Lua module
-members, transitive source imports, and binary imports. Physical co-residence in
-one provider does not make it public. Do not design an installed API around a
-consumer reaching another module's foreign function.
+A foreign definition is source-private. Its own module and a **direct importer
+whose import spelling ends in `.titan`** may name it. It is absent from
+`.so`/`.a` type metadata, Lua module members, ordinary imports, transitive
+source imports, and binary imports. Physical co-residence in one provider does
+not make it public. Do not design an installed API around a consumer reaching
+another module's foreign function.
 
 A module with foreign functions also owns one compiler-generated source-adjacent
 header ending in `.titan.h`; a folder module uses the canonical main's path.
@@ -950,7 +951,8 @@ The body is a deliberately closed raw-C subset. It may use:
 * parameters and initialized direct-C locals;
 * imported C namespaces and their functions, values, fields, types, size and
   alignment;
-* other foreign functions in the module or through a direct source import;
+* other foreign functions in the module or through an explicit `.titan`
+  source import;
 * C calls, casts, C-mode operators, field/index access, assignment;
 * `do`, `if`/`elseif`/`else`, `while`, `repeat`, numeric `for`, `break`, and
   one C return value.

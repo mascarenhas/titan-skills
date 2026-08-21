@@ -117,11 +117,13 @@ is deterministic; each case should establish its own preconditions.
 
 `titanc --test M...` examines each requested source root and its source-backed
 import closure. In test mode dependency resolution tries the configured source
-tree before compiled providers; explicit roots are always source. This permits
-a test placed beside application source to directly import and exercise the
-producer's module-local declarations. That permission is a direct source edge
-only: it does not pass through a helper module and does not exist for a binary
-provider. Do not make a production helper public merely for testing.
+tree before compiled providers; explicit roots are always source. Source-first
+selection does not itself expose locals: a test placed beside application
+source must write `import "producer.titan"` to require that source and exercise
+its module-local declarations. The marker is stripped from the logical name,
+and that permission is direct only: it does not pass through a helper module
+and cannot fall back to a binary provider. Do not make a production helper
+public merely for testing.
 
 The repository's standard-library aggregate has a different deliberate shape:
 its test/support modules are source roots under `spec/stdlib/titan`, while the
@@ -269,7 +271,7 @@ end
 ```titan
 -- calc_test.titan
 local test = import "test"
-local calc = import "calc"
+local calc = import "calc.titan"
 
 local function add_twice_case(context: test.Context, name: string,
                               input: integer, expected: integer)
@@ -289,8 +291,8 @@ function test_twice(context: test.Context)
 end
 
 function test_private_clamp_is_source_testable(_context: test.Context)
-  -- This direct source import may select calc's local declaration in --test
-  -- mode. A binary import would expose only calc.twice.
+  -- The terminal marker requires calc's source and exposes its locals.
+  -- An ordinary import would expose only calc.twice, even in --test mode.
   test.assert(calc.clamp_nonnegative(-1) == 0)
 end
 ```
@@ -962,8 +964,8 @@ Common wrong turns to reject explicitly:
 - hiding a stdlib behavior test in `spec/coder` because the fixture compiles;
 - wrapping a native test in Busted only to spawn it;
 - using `test.testing()` in module initialization;
-- adding a public production hook solely for a test that already has a direct
-  source edge;
+- adding a public production hook solely for a test that can use an explicit
+  `.titan` source-collaboration import;
 - cleaning `spec/**/*.c`, `*.a`, or canonical provider outputs broadly.
 
 ## 13. Agent workflow for a test change
@@ -1245,7 +1247,7 @@ file family:
 fixtures native; adds a Busted wrapper for URL or OS public behavior; covers
 stdlib suite under LuaCov.
 
-## Eval 10 — Direct source-private access without a public test hook
+## Eval 10 — Explicit source-private access without a public test hook
 
 **Prompt:**
 
@@ -1255,13 +1257,13 @@ stdlib suite under LuaCov.
 
 **Must hit:**
 
-- `--test` source-first resolution and a direct source import allow the test
-  owner to select module locals;
+- `--test` source-first resolution alone remains public-only; the test owner
+  must append `.titan` to the import to require source and select module locals;
 - keep the production helper local (prefer a local method when behavior belongs
   to a private record);
-- capability is direct-only and absent through binary metadata/transitive
-  imports;
-- test mode still falls back to compiled providers when no source exists;
+- the marker is stripped from logical identity and capability is direct-only;
+- an ordinary test import may still fall back to compiled providers, while a
+  marked import fails when no source exists;
 - compiled-provider/public-boundary behavior belongs in its owning coder or
   public behavior test, not this private edge.
 

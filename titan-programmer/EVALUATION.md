@@ -94,6 +94,30 @@ mutable record field, and assumes mutable `{T}` implicitly converts to
 This case is intentionally unscored until it is run in a fresh cartridge-only
 context under the evaluation rules above.
 
+### P4 — explicit source-collaboration imports (`titan-programmer` only)
+
+Review a test module that imports `app.cache` ordinarily, expects `--test`
+source-first resolution to expose a local helper, and proposes renaming the
+logical producer to `app.cache.titan`. Require the smaller correction and exact
+explanations of:
+
+- `import "app.cache"` remaining public-only even when source wins;
+- `import "app.cache.titan"` stripping the terminal marker, retaining canonical
+  logical/manifest identity `app.cache`, requiring source, and exposing locals
+  only through that direct import;
+- flat and folder lookup remaining `app/cache.titan` and
+  `app/cache/cache.titan`, with no binary fallback on a source miss;
+- marker stripping before standard shorthand, so `uv.titan` means logical
+  `titan.uv`;
+- the capability not passing transitively and binary/Lua views remaining
+  public-only; and
+- rejection of dotted logical names ending in component `titan`, including the
+  repeated-marker escape, while bare `titan` and interior `app.titan.cache`
+  remain valid.
+
+This case is intentionally unscored until it is run in a fresh cartridge-only
+context under the evaluation rules above.
+
 ### T1 — native tests (`titan-programmer` + `titan-tester`)
 
 Replace a Busted wrapper around twenty Titan behavior rows with discoverable
