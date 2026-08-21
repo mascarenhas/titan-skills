@@ -1271,10 +1271,12 @@ end
 ```
 
 `stat` follows symlinks and `lstat` inspects the link. A missing path is nil;
-other errors raise. `Stat` fields are `size`, `kind`, `mode`,
+other errors raise. `Stat` fields are `size`, `kind`, `mode`, `device`, `inode`,
 `modified_seconds`, and `modified_nanoseconds`; kind is `"file"`,
 `"directory"`, `"symlink"`, or `"other"`. `list` omits `.`/`..` and does not
-promise order. Paths reject embedded NUL; contents do not.
+promise order. Compare the opaque `device`/`inode` pair only for physical-file
+identity; either field may be negative because it carries an unsigned host bit
+pattern. Paths reject embedded NUL; contents do not.
 
 `tmpname` creates an empty file owned by the caller; `tmpdir`, `homedir`,
 `pwd`, and `chdir` provide synchronous directory helpers. Restore a temporary
