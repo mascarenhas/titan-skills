@@ -80,7 +80,7 @@ one final root initializer:
 ```titan
 local fs = import "fs"
 local strings = import "string"
-local math = import "titan.math"
+local math = import "math"
 
 local default_marks = 3
 
@@ -645,10 +645,10 @@ first iterator result is nil—false is a real item. A present close function is
 run after exhaustion, `break`, `return`, or an error from iteration/body. If it
 accepts one argument, Titan passes the state.
 
-Use the qualified generic iteration module for collections:
+Use the generic iteration module for collections:
 
 ```titan
-local iteration = import "titan.iteration"
+local iteration = import "iteration"
 
 function total(scores: {string: integer}): integer
   local result = 0
@@ -665,7 +665,7 @@ including holes; its **index** is the nonnil first result, while its item is
 `T?`:
 
 ```titan
-local iteration = import "titan.iteration"
+local iteration = import "iteration"
 
 function count_positions(items: {string}): integer
   local positions = 0
@@ -910,17 +910,11 @@ cannot be re-exported. Circular imports are compile-time errors.
 Canonical short imports are:
 
 ```text
-coroutine uv async timer io fs net ssl url http os peg string test
+coroutine uv async timer io fs net ssl url http os peg string test lua gc math iteration
 ```
 
-They mean the corresponding `titan.*` logical modules. Use qualified imports
-for the four modules without short sugar:
+They mean the corresponding `titan.*` logical modules. 
 
-```titan
-local math = import "titan.math"
-local iteration = import "titan.iteration"
-local lua = import "titan.lua"
-local gc = import "titan.gc"
 ```
 
 Lua always loads Titan standard modules by qualified name, such as
@@ -1114,12 +1108,12 @@ yields nonnil `RegexMatch` records; `Regex:gsub` takes exactly a
 `(string) -> string` callback receiving the whole match. Load **Titan PEGs**
 when implementing a real grammar or structured parser.
 
-### `titan.math`: typed numerical operations
+### `math`: typed numerical operations
 
-Import the qualified module:
+Import the module:
 
 ```titan
-local math = import "titan.math"
+local math = import "math"
 ```
 
 The ordinary transcendental/numeric surface is float-oriented: `abs`, `acos`,
@@ -1135,7 +1129,7 @@ Constants are `pi: float`, `huge: float`, `maxinteger: integer`, and
 `mininteger: integer`. `ult(a, b)` compares integers as unsigned values.
 
 ```titan
-local math = import "titan.math"
+local math = import "math"
 
 function numeric_sample(): boolean
   local root = math.sqrt(81)       -- integer argument becomes float
@@ -1153,7 +1147,7 @@ static result is `value` because one declaration serves both shapes. A typed
 sink can strictly project the known form:
 
 ```titan
-local math = import "titan.math"
+local math = import "math"
 
 function random_sample(): boolean
   math.randomseed(17, 29)
@@ -1165,9 +1159,9 @@ end
 
 The generator matches Lua 5.5's xoshiro256** stream and is not cryptographic.
 
-### `titan.iteration`: typed collection iteration
+### `iteration`: typed collection iteration
 
-Import the qualified module. Its public generic signatures are:
+Import the module. Its public generic signatures are:
 
 ```text
 function next<K, V>(map: {K: V}, key: K?): (K?, V?)

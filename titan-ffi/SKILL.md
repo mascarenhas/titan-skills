@@ -41,8 +41,8 @@ Before writing code, classify the job:
 | Pass a C callback implemented in a small C-only body | top-level restricted `foreign function` |
 | Pass an ordinary Titan closure to C | **unsupported**; redesign around a restricted foreign function or a narrowly justified C shim |
 | Call a Lua function already supplied as a value | give it a Titan function type and call it normally |
-| Compile Lua text/binary, execute a Lua file, or load a Lua/C/Titan module | `local lua = import "titan.lua"` |
-| Configure weak maps, finalizers, or the collector | `local gc = import "titan.gc"`, not raw metatable/Lua-stack code |
+| Compile Lua text/binary, execute a Lua file, or load a Lua/C/Titan module | `local lua = import "lua"` |
+| Configure weak maps, finalizers, or the collector | `local gc = import "gc"`, not raw metatable/Lua-stack code |
 | Perform a stack-oriented `lua_*` operation | avoid in application code; it is a narrow audited standard-library exception, described below |
 | Wrap libuv or another async callback API | use this skill for the C surface and the async skill for Task/Runtime ownership; cancellation does not end native ownership |
 
@@ -1038,8 +1038,8 @@ local answer = mod.compute(21)
 Lua must use qualified standard-module names such as `require "titan.lua"`,
 `require "titan.fs"`, and `require "titan.string"`. Bare `require "titan"`
 returns native support, not the standard modules. A Titan import is different:
-`local fs = import "fs"` uses compiler sugar for `titan.fs`, while the Lua
-loading module deliberately requires `local lua = import "titan.lua"`.
+`local fs = import "fs"` uses compiler sugar for `titan.fs`, and the same
+applies to all the other stdlib modules.
 
 Canonical boundary representations are:
 
@@ -1135,7 +1135,7 @@ per-state data in mutable C globals.
 Import the module by its qualified name:
 
 ```titan
-local lua = import "titan.lua"
+local lua = import "lua"
 ```
 
 It exposes four APIs:
@@ -1169,7 +1169,7 @@ name, and a chunk with no upvalues ignores it. The value need not be a Map.
 This is not a sandbox guarantee.
 
 ```titan
-local lua = import "titan.lua"
+local lua = import "lua"
 
 function evaluate(): integer
   local env: {string: value} = { ["answer"] = 40 }
@@ -1218,7 +1218,7 @@ later retry works.
 A typed plugin boundary can be narrow even though `require` returns `value`:
 
 ```titan
-local lua = import "titan.lua"
+local lua = import "lua"
 
 function run_plugin(name: string, input: string): string
   local raw_module: value = lua.require(name)

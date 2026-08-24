@@ -1116,7 +1116,7 @@ not an invitation for application code to import private `uv`.
 - `net` is the public facade over private `titan.uv`. SSL performs transport
   and path work through public `net`/`fs`, composes the public async/string/GC
   helpers it needs, and confines OpenSSL to its narrow FFI boundary. HTTP
-  composes public `net`/`ssl`/`url`/`io`/`async`/`timer`/`string`/`titan.math`
+  composes public `net`/`ssl`/`url`/`io`/`async`/`timer`/`string`/`math`
   and confines llhttp to its synchronous callback boundary. Neither reaches
   through to private `uv`; preserve that layer. A missing high-level capability
   is a design question, not permission to reach a native handle.
