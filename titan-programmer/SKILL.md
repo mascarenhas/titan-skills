@@ -1545,7 +1545,8 @@ to the language rules:
   async** before reasoning about callback order.
 - **Cleanup remains owned until terminal native completion.** Cancellation
   does not license dropping a callback owner or double-closing a libuv handle.
-  Callback resumption and explicit `Task:resume()` have different protocols;
+  Native callback resumption stays token-free, while explicit
+  `Task:resume(token)` may wake only the matching `async.suspend(token, ...)`;
   do not paper over an early-resume bug with consumer-side generations.
 
 The current filesystem watcher demonstrates the preferred local-method and

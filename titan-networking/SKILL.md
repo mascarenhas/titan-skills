@@ -66,10 +66,11 @@ to use private names in application code.
    running.** There is no preemption between two ordinary Titan statements.
 3. `async.run` schedules a new Task and returns before its function starts. It
    does not run the function inline.
-4. Operation callbacks resume the Task waiting for that exact operation. Public
-   `Task:resume()` is only for a Task explicitly parked with `async.suspend()`;
-   it is not how application code completes reads, accepts, writes, DNS, TLS, or
-   HTTP.
+4. Operation callbacks resume the Task waiting for that exact operation through
+   a source-private tokenless continuation. Public `Task:resume(token)` is only
+   for the exact explicit `async.suspend(token, ...)` that stored the same
+   nominal token; it is never a general native-wait wake and is not how
+   application code completes reads, accepts, writes, DNS, TLS, or HTTP.
 5. An accepted native request and everything libuv borrows remain owned until
    its terminal callback. Task cancellation is logical before it is physical;
    it never makes the callback owner or write bytes disposable early.
@@ -346,15 +347,14 @@ rules do not become uniform merely because method shapes match.
 ### Networking-relevant Task/timer subset
 
 This is not the complete `async` API; it is the subset needed to understand the
-patterns in this skill:
+patterns in this skill. The source-private `uv` provider owns these public data
+shapes:
 
 ```text
-local async = import "async"
-local timer = import "timer"
+record ResumeToken
+  const source: string?
+end
 
--- Declarations are shown as they appear inside the async module; callers
--- qualify the owners/results as async.Task, async.TaskStatus, and so on.
-type SuspendCancelAction = () -> ()
 record Error
   error: value
   traceback: string
@@ -378,12 +378,31 @@ union TaskStatus<A, B>
   cancelled: CancellationReason<B>
 end
 record Task<A, B>  -- opaque
+```
+
+The application facade re-exports those owners with constructor-preserving
+aliases; its wrappers and the methods exposed through those aliases form this
+surface:
+
+```text
+local async = import "async"
+local timer = import "timer"
+
+-- Shown unqualified as inside the async facade; callers use async.*.
+type Error = uv.Error
+type OperationError = uv.OperationError
+type CancellationReason = uv.CancellationReason
+type TaskStatus = uv.TaskStatus
+type Task = uv.Task
+type ResumeToken = uv.ResumeToken
+type SuspendCancelAction = () -> ()
 
 function run<A, B>(func: () -> A): Task<A, B>
 function loop()
 function yield()
 function running(): Task<value, value>
-function suspend(cancel_action: SuspendCancelAction?)
+function suspend(token: ResumeToken,
+                 cancel_action: SuspendCancelAction?)
 function join<A, B>(task: Task<A, B>): TaskStatus<A, B>
 function join_two<A1, B1, A2, B2>(
     first: Task<A1, B1>, second: Task<A2, B2>):
@@ -399,7 +418,7 @@ function Task:cancel(reason: CancellationReason<B>?)
 function Task:status(): TaskStatus<A, B>
 function Task:add_terminal_listener(
     listener: (TaskStatus<A, B>) -> ()): () -> ()
-function Task:resume()
+function Task:resume(token: ResumeToken)
 function TaskStatus:as_string(): string
 function TaskStatus:has_finished(): boolean
 function TaskStatus:has_succeeded(): (boolean, A?)
@@ -410,6 +429,15 @@ function TaskStatus:has_cancelled(): (boolean, CancellationReason<B>?)
 function sleep(milliseconds: integer)
 function yield()
 ```
+
+`ResumeToken` compares by nominal record identity; its optional source is only
+diagnostic. A wrong token raises synchronously in the caller with this exact
+message: `Task resume token mismatch (expected source: <source>)`, using
+`unknown source` when the Task has no stored source. That includes every wrong-
+time call, because a Task outside the matching explicit suspension expects no
+token. Correct-token calls coalesce and wake on a deferred Task-owned timer.
+Cancellation first runs the optional detach action, then wakes with the token
+captured by `suspend`.
 
 The facade's aliases preserve the underlying public constructors and union
 variants, including `CancellationReason.simple/complex`, every `TaskStatus`
@@ -1121,8 +1149,9 @@ not an invitation for application code to import private `uv`.
   through to private `uv`; preserve that layer. A missing high-level capability
   is a design question, not permission to reach a native handle.
 - Native operation callbacks use the direct `resume_task_from_callback` path for
-  their exact waiter. `Task:resume()` remains for explicit `async.suspend`, not
-  a substitute callback path or an early-resume fence.
+  their exact waiter and never receive a `ResumeToken`. `Task:resume(token)`
+  remains for the exact explicit `async.suspend(token, ...)`, not a substitute
+  callback path, general native-wait wake, or early-resume fence.
 - One-shot owners retain their native request, exact callback, and borrowed
   Titan values until terminal callback. Persistent reads/listeners keep only
   natural buffered state and at most one waiter. Libuv already orders writes;
@@ -1163,8 +1192,9 @@ Reject code or advice that does any of the following:
   or callback registration instead of Titan's direct Task calls;
 - calls `async.loop()` from `main` under automatic bootstrap, from a handler, or
   from another Task;
-- calls `Task:resume()` to finish a socket/TLS/HTTP operation or adds a fence for
-  a callback supposedly firing while Titan statements are running;
+- calls `Task:resume(token)` to finish a socket/TLS/HTTP operation, invents a
+  native-completion token, or adds a fence for a callback supposedly firing
+  while Titan statements are running;
 - imports `uv` from application code, unwraps a private handle, uses LuaSocket,
   or guesses `dial`, `bind`, `settimeout`, `setoption`, `peername`, `sockname`,
   `read_all`, `readline`, `send`, or `recv` methods;
@@ -1241,7 +1271,7 @@ concurrently and closes each connection. Explain shutdown."
 Connection; immediate deferred close; `read_until("\n", true)`; no chunk/message
 assumption; recognizes `Server:close` stops accept but does not join handlers;
 no `async.loop` inside a Task. **Fail:** Go/LuaSocket calls, port getter,
-reader queue, `Task:resume`, or private `uv`.
+reader queue, `Task:resume(token)`, or private `uv`.
 
 ### Eval 2 — URL validator review
 
@@ -1293,8 +1323,8 @@ connection and drops both Task variables when the timer wins. Review it."
 **Pass:** combinator does not cancel losers; timer-win cancels and joins the
 state-owning read before release; accepted native request storage remains until
 callback; plain net waiter versus SSL terminal cancellation are distinguished;
-no manual resume/fence. **Fail:** treats cancel as join, drops owners, or calls
-close concurrently on a busy TLS operation.
+no manual `Task:resume(token)` or fence. **Fail:** treats cancel as join, drops
+owners, or calls close concurrently on a busy TLS operation.
 
 ### Eval 7 — HTTP idle-timeout scope
 

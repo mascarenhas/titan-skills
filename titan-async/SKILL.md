@@ -43,7 +43,7 @@ Task A writes Titan state
 
 Task A must first yield, return, or raise. In particular, no callback can run
 between a combinator's initial status scan, listener registrations, and its
-`async.suspend()`. Do not add locks, atomics, scheduler generations, callback
+`async.suspend(token)`. Do not add locks, atomics, scheduler generations, callback
 fences, ready queues, `uv_check_t`, `uv_idle_t`, polling passes, or snapshot
 rollback to defend against imagined preemption.
 
@@ -52,9 +52,8 @@ borrowed values must remain alive through the callback libuv promised, and a
 multi-shot source needs exactly the buffering/waiter state promised by its
 public semantics.
 
-Evidence: `doc/language/async-io.md:423-481`,
-`doc/implementation/libuv-runtime.md:29-88`,
-`titan/uv/task.titan:247-292,356-473`, and issue #82.
+Evidence: `doc/language/async-io.md`,
+`doc/implementation/libuv-runtime.md`, `titan/uv/task.titan`, and issue #82.
 
 ## Import the public layer, not `uv`
 
@@ -81,8 +80,8 @@ all raw libuv request/handle owner records. They are source-private
 collaboration machinery. Do not use them in application examples or expose
 them from a public API.
 
-Evidence: `doc/language/async-io.md:1-8` and
-`doc/implementation/libuv-runtime.md:1-27`.
+Evidence: `doc/language/async-io.md` and
+`doc/implementation/libuv-runtime.md`.
 
 ## Exact public `async` surface
 
@@ -96,6 +95,7 @@ type OperationError = uv.OperationError
 type CancellationReason = uv.CancellationReason
 type TaskStatus = uv.TaskStatus
 type Task = uv.Task
+type ResumeToken = uv.ResumeToken
 type SuspendCancelAction = () -> ()
 ```
 
@@ -112,6 +112,10 @@ record OperationError
   name: string
   message: string
   operation: string
+end
+
+record ResumeToken
+  const source: string?
 end
 
 union CancellationReason<B>
@@ -140,7 +144,7 @@ function Task:cancel(reason: CancellationReason<B>?)
 function Task:status(): TaskStatus<A, B>
 function Task:add_terminal_listener(
     listener: (TaskStatus<A, B>) -> ()): () -> ()
-function Task:resume()
+function Task:resume(token: ResumeToken)
 
 function TaskStatus:as_string(): string
 function TaskStatus:has_finished(): boolean
@@ -156,9 +160,15 @@ function run<A, B>(func: () -> A): Task<A, B>
 function loop()
 function yield()
 function running(): Task<value, value>
-function suspend(cancel_action: SuspendCancelAction?)
+function suspend(token: ResumeToken,
+                 cancel_action: SuspendCancelAction?)
 function version(): string
 ```
+
+`ResumeToken` is nominal. Only the exact record passed to the current
+`suspend` may be passed to `resume`; its optional `source` is diagnostic only.
+It authorizes this public explicit-suspension wake, never a native operation or
+persistent-source completion.
 
 Both type arguments to `run` are all-or-none. `B` appears only in the result,
 so a result context may choose it; otherwise the generic final-carrier rule
@@ -179,8 +189,8 @@ occurs only when a typed view projects that payload. Identity comparison,
 `status():as_string()`, and tag-only status inspection do not project it.
 `async.version()` returns libuv's version string.
 
-Evidence: `titan/async.titan:4-132`, `titan/uv/task.titan:3-56,173-245,568-578`,
-and `doc/language/async-io.md:15-118`.
+Evidence: `titan/async.titan`, `titan/uv/task.titan`, and
+`doc/language/async-io.md`.
 
 ### Exact fixed-arity combinator signatures
 
@@ -268,13 +278,12 @@ The exact result/error owners follow one positional pattern:
 Only `join` has a unary form. There is intentionally no unary `any`, `race`,
 or `all`, and no variadic or Array-taking form.
 
-Evidence: `titan/async.titan:23-103,309-2031` and
-`doc/language/async-io.md:287-391`.
+Evidence: `titan/async.titan` and `doc/language/async-io.md`.
 
 ### Exact channel surface
 
-Channels are public Task-to-Task coordination built entirely on
-`running`/`suspend`/`resume`, not native Runtime queues:
+Channels are public Task-to-Task coordination built entirely on `running` and
+private token-bearing `suspend`/`resume`, not native Runtime queues:
 
 ```text
 function channel<T>(size: integer?):
@@ -295,8 +304,7 @@ function ChannelWriter:close()
 `ChannelReader`/`ChannelWriter` fields are local; their generated constructors
 are **not public**. Use the factory.
 
-Evidence: `titan/async.titan:11-21,132-294` and
-`doc/language/async-io.md:182-285`.
+Evidence: `titan/async.titan` and `doc/language/async-io.md`.
 
 ## Start and drive Tasks correctly
 
@@ -375,9 +383,9 @@ it. A Ticker is a handle and final `uv_walk` will close one left behind, but
 explicit close is still the correct application policy because it releases
 promptly and reports errors at the owner.
 
-Evidence: `doc/language/async-io.md:98-151,518-553`,
-`doc/implementation/libuv-runtime.md:538-607`, and
-`spec/stdlib/titan/uv/runtime_tests.titan:13-54,102-159`.
+Evidence: `doc/language/async-io.md`,
+`doc/implementation/libuv-runtime.md`, and
+`spec/stdlib/titan/uv/runtime_tests.titan`.
 
 ## Read Task state as a structured snapshot
 
@@ -429,8 +437,8 @@ wrapper. The Runtime reports the uncaught failure and traceback immediately;
 later `join`, `race`, or `all` observation does not suppress that report.
 Other Tasks continue.
 
-Evidence: `doc/language/async-io.md:89-118,483-496` and
-`spec/stdlib/titan/async/tests/task_test.titan:19-124,163-250`.
+Evidence: `doc/language/async-io.md` and
+`spec/stdlib/titan/async/tests/task_test.titan`.
 
 ## Cancellation is a request plus an ownership protocol
 
@@ -496,9 +504,9 @@ until its promised callback, even after cancellation. Do not implement
 cancellation by clearing the last reference, using a finalizer, or calling
 `uv_cancel` simply to make status look terminal sooner.
 
-Evidence: `doc/language/async-io.md:107-118,483-516`,
-`doc/implementation/libuv-runtime.md:425-536`, and
-`spec/stdlib/titan/uv/task_tests/cancellation_test.titan:1-128`.
+Evidence: `doc/language/async-io.md`,
+`doc/implementation/libuv-runtime.md`, and
+`spec/stdlib/titan/uv/task_tests/cancellation_test.titan`.
 
 ### Timeout cleanup follows ownership, not a generic loser rule
 
@@ -538,33 +546,54 @@ Do not turn this asymmetry into a blanket “always join every loser” or “ne
 join deadlines” rule. Trace the resource ownership of the particular operation.
 The production HTTP timeout follows this exact asymmetry.
 
-Evidence: `doc/language/async-io.md:393-420` and
-`doc/implementation/libuv-runtime.md:512-518`.
+Evidence: `doc/language/async-io.md` and
+`doc/implementation/libuv-runtime.md`.
 
 ## Use `suspend`/`resume` only for explicit Task coordination
 
 `async.running()` returns the current all-value Task and raises outside a Task.
-`async.suspend(cancel_action?)` likewise raises outside a Task. It submits no
-native operation and registers no waiter by itself; the caller owns the
-condition/waiter state.
+`async.suspend(token, cancel_action?)` likewise raises outside a Task. It
+submits no native operation and registers no waiter by itself; the caller owns
+the condition/waiter state. The Task stores that exact nominal token only for
+this explicit suspension.
 
-`Task:resume()` means only: “request a callback-deferred wake if this Task is
-currently explicitly suspended.” It:
+`Task:resume(token)` means only: “request a callback-deferred wake for the
+current explicit suspension authorized by this exact token.” It first compares
+record identity. A mismatch raises synchronously in the caller with this exact
+message: `Task resume token mismatch (expected source: <source>)`. A nil
+expected token or nil source is rendered as `unknown source`. The source does
+not participate in equality.
+The check is unconditional: before suspension, after wake delivery until
+another explicit suspension, during an ordinary native wait, and after terminal
+completion the expected token is nil, so every supplied token mismatches
+instead of becoming a no-op.
+
+With the correct token, `resume`:
 
 - is synchronous and does not yield the caller;
 - never enters the target inline;
 - installs one target-owned zero timer;
-- coalesces repeated requests before delivery;
-- is a no-op for a Task waiting on an ordinary native operation, a Task that is
-  not explicitly suspended, or a terminal Task; and
+- coalesces repeated requests before delivery; and
 - guarantees deferred delivery, but not an exact number of libuv iterations.
+
+At delivery, the private completion clears `suspended`, `resume_token`, and
+`resume_pending` **before** `advance_task` re-enters user code. The resumed
+continuation must never observe or inherit the completed suspension's token or
+wake bit.
+
+Keep tokens private to the coordination abstraction. Share one record among all
+paths that own a single condition (for example one per channel), or create one
+fresh record per combinator invocation. Do not use a token as a general native-
+wait capability: operation and persistent-source callbacks keep their private,
+tokenless continuation helpers.
 
 The optional suspend cancellation action is for idempotently detaching the
 **exact** waiter. It runs synchronously only on cancellation, before the wake is
-scheduled. Ordinary `resume()` does not run it. It must not yield or raise.
-Always pair the registration with ordinary scope cleanup too.
+scheduled with the token captured by the suspension. Ordinary correct-token
+`resume` does not run it. It must not yield or raise. Always pair the
+registration with ordinary scope cleanup too.
 
-A level-triggered module-local condition uses this shape:
+A monotonic one-waiter latch uses this shape:
 
 ```titan
 local async = import "async"
@@ -572,6 +601,11 @@ local async = import "async"
 local record Gate
   local opened: boolean
   local waiter: async.Task?
+  local resume_token: async.ResumeToken
+end
+
+local function gate(): Gate
+  return Gate.new(false, nil, async.ResumeToken.new("Gate.wait"))
 end
 
 local function Gate:wait()
@@ -585,10 +619,7 @@ local function Gate:wait()
   end
   defer detach()
 
-  -- resume is a wake request, not ownership of the condition. Recheck it.
-  while not self.opened do
-    async.suspend(detach)
-  end
+  async.suspend(self.resume_token, detach)
 end
 
 local function Gate:open()
@@ -597,21 +628,22 @@ local function Gate:open()
   local waiter? = self.waiter
   if waiter then
     self.waiter = nil
-    waiter:resume()
+    waiter:resume(self.resume_token)
   end
 end
 ```
 
-Rechecking is appropriate for an explicit level condition because any holder of
-the Task can request a wake. It is **not** an invitation to fence every native
-one-shot operation against a fictitious early callback. An accepted native
-operation's callback must resume the correct waiting Task; a wrong early resume
-is a library bug, not a state every consumer should defend against.
+`open` commits the monotonic condition before the only authorized normal wake,
+so a normal return from this single suspension already establishes `opened`.
+Cancellation unwinds instead, and the defer removes the waiter. A resettable
+level condition is different: recheck it after an authorized wake when other
+token-authorized code can legitimately make it false again before delivery.
+This is **not** an invitation to fence native one-shot operations: accepted
+native operations resume through their source-private tokenless callback path.
 
-Evidence: `doc/language/async-io.md:149-180`,
-`doc/implementation/libuv-runtime.md:90-134`,
-`titan/async.titan:148-210`, and
-`spec/stdlib/titan/uv/task_tests/continuations_test.titan:147-227`.
+Evidence: `doc/language/async-io.md`,
+`doc/implementation/libuv-runtime.md`, `titan/async.titan`, and
+`spec/stdlib/titan/uv/task_tests/continuations_test.titan`.
 
 ## Terminal listeners are synchronous observation, not Tasks
 
@@ -629,7 +661,10 @@ Rules:
 - Call the remover with `defer` immediately after registration.
 - Registering on an already terminal Task does **not** call the listener; it
   returns an idempotent no-op remover. Inspect initial status first when waiting.
-- Terminal publication stores the exact final status first, detaches the
+- Before terminal publication, the Runtime clears any explicit-suspension
+  token and pending wake. A listener calling `resume` on that same Task gets the
+  `unknown source` mismatch, including after callback-boundary failure.
+- Terminal publication then stores the exact final status, detaches the
   registration Array as a stable snapshot, installs an empty live list, marks
   the snapshot registrations no longer live, and invokes the snapshot in
   registration order.
@@ -637,8 +672,9 @@ Rules:
   change status or skip later listeners.
 - Delivery is on the main thread after the terminating coroutine is no longer
   current. `async.running()` raises inside a terminal listener. The listener
-  must not yield. It may synchronously call `resume()` on a different explicitly
-  suspended Task; that only installs the target's deferred wake.
+  must not yield. It may synchronously call `resume(token)` on a different Task
+  explicitly suspended with that exact captured token; that only installs the
+  target's deferred wake.
 
 Use `async.join*`, `any_*`, `race_*`, or `all_*` rather than rebuilding their
 listener protocol. When implementing a genuinely new bounded Task composition,
@@ -646,19 +682,28 @@ follow the canonical order:
 
 1. reject the current Task as an operand;
 2. scan named operand statuses left-to-right;
-3. register a separate listener on each still-relevant named operand;
-4. `defer` every returned remover;
-5. call `async.suspend()` exactly once; and
-6. let the deciding listener store captured result state and call the suspended
-   Task's `resume()`.
+3. create one fresh private token for this composition invocation;
+4. register a separate listener on each still-relevant named operand, capturing
+   that token;
+5. `defer` every returned remover;
+6. call `async.suspend(token)` exactly once; and
+7. let the deciding listener store captured result state and call the suspended
+   Task's `resume(token)`.
 
-No callback can interleave between steps 2 through 5. Do not add a post-register
+No callback can interleave between steps 2 through 6. Do not add a post-register
 poll, native joiner list, phase bridge, or Task Array. A Task Array would erase
 the heterogeneous `(Ai, Bi)` positions.
 
-Evidence: `doc/language/async-io.md:287-310`,
-`doc/implementation/libuv-runtime.md:456-505`, and
-`spec/stdlib/titan/async/tests/task_test.titan:34-124`.
+Keep winner or rejection guards and completion counters when they arbitrate
+multiple legitimate terminal listeners before deferred delivery. Do not add a
+nullable waiting-Task guard to defend against an outside early wake; that caller
+does not hold this invocation's private token. The existing `join*`
+per-position `has_finished()` checks are redundant local idempotence: each
+positional registration is invoked once. They are unrelated to this protocol.
+
+Evidence: `doc/language/async-io.md`,
+`doc/implementation/libuv-runtime.md`, and
+`spec/stdlib/titan/async/tests/task_test.titan`.
 
 ## Choose the right combinator
 
@@ -722,7 +767,7 @@ catch
 end
 ```
 
-Evidence: `doc/language/async-io.md:311-391` and native coverage in
+Evidence: `doc/language/async-io.md` and native coverage in
 `spec/stdlib/titan/async/tests/any_race_test.titan` and
 `spec/stdlib/titan/async/tests/all_join_test.titan`.
 
@@ -780,8 +825,11 @@ is a final safety cleanup, not a reason to omit explicit close.
 
 The public API promises callback-deferred waiting but no exact libuv phase or
 number of loop iterations. Do not base application logic on timer phase order.
+Privately, `ticker_callback` publishes its fired state and uses tokenless
+`resume_task_from_callback` for an installed waiter. `ResumeToken` remains
+exclusive to explicit `suspend`/`Task:resume(token)` coordination.
 
-Evidence: `titan/timer.titan:1-25`,
+Evidence: `titan/timer.titan`,
 `doc/language/standard-library-timer.md`, and
 `spec/stdlib/titan/timer/tests.titan`.
 
@@ -809,15 +857,21 @@ local producer_status = async.join(producer)
 
 A full send or empty receive suspends. There is at most one blocked sender and
 one blocked receiver; a second same-direction operation raises rather than
-barging or creating a queue. Opposite-side progress changes the buffer first,
-then calls the waiter's `resume()`. The waiting operation rechecks full/empty
-state because explicit resume is only a wake request.
+barging or creating a queue. Each channel owns one fresh private token shared
+by its send, receive, close, and cancellation paths. Opposite-side progress
+changes the buffer first, then calls the waiter's `resume(token)`; close commits
+terminal state before doing the same. The occupied waiter slot prevents another
+same-direction operation from stealing that progress before delivery. A
+blocking operation therefore suspends once: a normal return has its buffer
+postcondition or observes close, while a caller with another token cannot wake
+it.
 
 `close()` is synchronous and idempotent. It discards buffered values, wakes
 both waiter slots, and makes every later or woken send/receive raise
 `"channel is closed"` (unless authoritative Task cancellation wins the same
-unwind). Cancellation removes the exact waiter with deferred cleanup so a new
-Task may occupy that side.
+unwind). Cancellation uses the stored channel token to inject its reason and
+unwinds; deferred cleanup removes the exact waiter so a new Task may occupy
+that side.
 
 `reader_writer_channel` wraps `channel<string>` in opaque Reader/Writer
 facades. `read_until` is binary-safe across message boundaries; an empty
@@ -825,8 +879,7 @@ delimiter raises. Reader close discards its own saved suffix and returns nil for
 new reads. Writer close preserves a suffix already transferred to the Reader,
 but the next underlying channel receive observes close.
 
-Evidence: `doc/language/async-io.md:182-285`,
-`titan/async.titan:132-294`, and
+Evidence: `doc/language/async-io.md`, `titan/async.titan`, and
 `spec/stdlib/titan/async/tests/channel_test.titan`.
 
 ## [PRIVATE IMPLEMENTATION] Native callback and ownership rules
@@ -864,7 +917,7 @@ public async/fs/net/os/timer/io method
 Use the existing direct owner/helper. Do not add a facade alias or forwarding
 C wrapper around a public `uv_*` function.
 
-Evidence: `doc/implementation/libuv-extension-guide.md:66-157`.
+Evidence: `doc/implementation/libuv-extension-guide.md`.
 
 ### One-shot ownership
 
@@ -883,13 +936,14 @@ Evidence: `doc/implementation/libuv-extension-guide.md:66-157`.
   abandoned produced resource **before** resuming user code.
 - Then ordinary operation callbacks use source-private
   `resume_task_from_callback(task, failed, payload)`. This is not
-  `Task:resume()`; the latter is only for an explicitly suspended Task.
+  `Task:resume(token)`; the latter is only for the explicit `suspend` that
+  stored that exact token. Native callback continuation remains token-free.
 - Catch callback conversion/continuation errors at the boundary so only that
   Task retires and the foreign callback returns normally to libuv.
 - Cancellation never releases accepted request storage early and does not add
   a fictitious `uv_cancel` path.
 
-Evidence: `doc/implementation/libuv-extension-guide.md:158-299` and
+Evidence: `doc/implementation/libuv-extension-guide.md` and
 `titan/uv/file.titan`/`titan/uv/tcp.titan`.
 
 ### Persistent handle ownership
@@ -904,8 +958,9 @@ Evidence: `doc/implementation/libuv-extension-guide.md:158-299` and
 - A callback copies/publishes its natural result and clears/takes its waiter
   before delivery. An ordinary completed native operation uses the private
   callback-resume path. A source-private condition callback first publishes the
-  condition and may use `resume_condition_waiter_from_callback`; if a public
-  resume timer is already pending, that timer remains the sole continuation.
+  condition and may use `resume_condition_waiter_from_callback`; if a correct-
+  token public explicit-resume timer is already pending, that timer remains the
+  sole continuation. The callback helper itself remains tokenless.
 - With no waiter, store only the public-semantics state: one fired bit/latest
   value when coalescing is promised, a dense buffer when every value is
   promised, or sticky EOF/error for a terminal stream.
@@ -918,9 +973,8 @@ Evidence: `doc/implementation/libuv-extension-guide.md:158-299` and
   call `uv_close` twice. `uv_walk`, not `handle_roots`, discovers final live
   handles. The root Array is never traversed as a resource registry.
 
-Evidence: `doc/implementation/libuv-extension-guide.md:301-526`,
-`doc/implementation/libuv-runtime.md:331-423`, and
-`titan/uv/runtime.titan:264-448`.
+Evidence: `doc/implementation/libuv-extension-guide.md`,
+`doc/implementation/libuv-runtime.md`, and `titan/uv/runtime.titan`.
 
 ### Callback production must stay small
 
@@ -934,7 +988,11 @@ The current filesystem watcher is the model:
 1. `fs_watcher_event_cb` recovers the complete `WatchRegistration` owner.
 2. Its Titan handler copies nullable filename bytes and appends exactly one raw
    `WatcherNotification`.
-3. It wakes the poller and returns.
+3. It wakes the poller through the tokenless condition-callback helper and
+   returns. Each blocking poll's fresh private `"fs.watcher"` token belongs
+   only to that one explicit suspension and its facade-owned wake path. The
+   callback-buffered notification or last-registration removal establishes the
+   postcondition before delivery, so the poll does not defensively resuspend.
 4. When the Task drains notifications, it asynchronously calls `lstat`, maps
    each raw notification to exactly one public event, and closes a retired
    registration as needed.
@@ -951,8 +1009,12 @@ it does not filter, merge, discard, or duplicate notifications. An
 `OperationError` in one mapping becomes one error event rather than rolling
 back the batch.
 
-Evidence: `titan/fs.titan:38-88,351-678` and
-`doc/implementation/filesystem-library.md:46-143`.
+The same split applies to `fs.realpath`: each call creates a fresh private
+`"fs.realpath"` token and suspends exactly once. The suspension's cancellation
+closure retains that token, while the accepted request's sole callback
+publishes completion through the tokenless callback helper.
+
+Evidence: `titan/fs.titan` and `doc/implementation/filesystem-library.md`.
 
 ### Do not invent defensive epicycles
 
@@ -1025,7 +1087,7 @@ obtain or yield Titan async's private `UV_TAG`. Tagged nesting lets the Runtime'
 private async yield cross nested Titan coroutines correctly, but application
 code should still use Task APIs for scheduling and I/O.
 
-Evidence: `doc/language/coroutines.md`, `titan/coroutine.titan:25-31,194-236,259-300`,
+Evidence: `doc/language/coroutines.md`, `titan/coroutine.titan`,
 and `doc/implementation/coroutines.md`.
 
 ## Test async behavior in native Titan
@@ -1048,9 +1110,10 @@ local timer = import "timer"
 function test_resume_is_deferred(_context: test.Context)
   runtime_test.run(function ()
     local trace = ""
+    local resume_token = async.ResumeToken.new("resume test")
     local target = async.run<nil, value>(function (): nil
       trace = trace .. "suspend>"
-      async.suspend()
+      async.suspend(resume_token)
       trace = trace .. "target"
       return nil
     end)
@@ -1058,7 +1121,7 @@ function test_resume_is_deferred(_context: test.Context)
 
     while target:status():as_string() == "ready" do timer.yield() end
     trace = trace .. "resume>"
-    target:resume()
+    target:resume(resume_token)
     trace = trace .. "caller>"
     async.join(target)
 
@@ -1100,7 +1163,7 @@ make stdlib-test
 Evidence: `doc/language/standard-library-test.md`,
 `spec/stdlib/titan/support/runtime.titan`,
 `spec/stdlib/titan/support/async.titan`, and
-`doc/implementation/libuv-extension-guide.md:527-568`.
+`doc/implementation/libuv-extension-guide.md`.
 
 ## Async review checklist
 
@@ -1117,8 +1180,17 @@ Before accepting Task/application code, verify:
 - It handles the six status variants without inventing `cancelling`.
 - It treats `cancel` as sticky first-reason request, not completion, and joins
   before releasing target-owned state when ownership requires it.
-- It uses `Task:resume` only for an explicit `async.suspend`, never as a native
-  completion substitute.
+- It creates a private nominal `ResumeToken`, passes the same record to
+  `async.suspend(token, ...)` and every authorized `Task:resume(token)`, and
+  treats `source` as diagnostic only.
+- It expects a wrong token—or any token at the wrong time—to raise in the
+  caller as `Task resume token mismatch (expected source: <source>)`, with
+  `unknown source` when no source is stored.
+- It preserves the delivery ordering: clear `suspended`, `resume_token`, and
+  `resume_pending` before `advance_task` re-enters user code.
+- It uses `Task:resume(token)` only for the exact explicit
+  `async.suspend(token, ...)` that stored the token, never as a native completion
+  substitute.
 - A suspend cancellation action only detaches exact waiter state, synchronously,
   idempotently, without yielding or raising; scope cleanup is also registered.
 - Every terminal-listener remover is called in `defer`; initial statuses are
@@ -1138,7 +1210,8 @@ Before accepting private libuv code, also verify:
 - The callback copies/releases before resuming, catches before returning to C,
   and never calls `uv_run`.
 - An ordinary completion uses the private callback continuation helper;
-  `Task:resume` remains reserved for explicit suspension.
+  it remains tokenless, while `Task:resume(token)` is reserved for the matching
+  explicit suspension.
 - Cancellation does not drop accepted work early or synchronously enter another
   Task.
 - `uv_is_closing` and `uv_walk` remain authoritative; no duplicate resource
@@ -1159,8 +1232,10 @@ because “a libuv callback could run between the check and append.” Review it
 
 **Pass:** Reject the mutex/generation and explain that no libuv callback or
 other Task can preempt running Titan code; interleaving occurs only after a
-Task yield/return/error. Retain only state required across real suspension and
-recheck an explicit level condition after a public wake.
+Task yield/return/error. Retain only state required across real suspension.
+Recheck a level condition after a public wake only when token-authorized peers
+can legitimately invalidate it again before delivery; a monotonic condition
+committed before the wake needs no defensive loop.
 
 **Fail:** Treat Tasks as threads, add locks/atomics, or propose another event
 loop/ready queue.
@@ -1179,25 +1254,33 @@ child initialized state inline.
 
 ### 3. Explicit resume ordering
 
-**Prompt:** A Task appends `target` after `async.suspend`; another running Task
-appends `before`, calls `target:resume()`, then appends `after`. What order is
-possible?
+**Prompt:** A Task appends `target` after `async.suspend(token)`; another running
+Task appends `before`, calls `target:resume(token)`, then appends `after`. What
+order is possible, and what does another token do?
 
-**Pass:** `before>after>target`. `resume()` is synchronous only in scheduling
-the coalesced target-owned zero timer; it never enters target inline. Repeated
-resume requests coalesce and exact libuv iteration count is not promised.
+**Pass:** `before>after>target`. Correct-token `resume` is synchronous only in
+scheduling the coalesced target-owned zero timer; it never enters target inline.
+Repeated correct-token requests coalesce and exact libuv iteration count is not
+promised. Another token raises in its caller as
+`Task resume token mismatch (expected source: <source>)`; after wake delivery
+and before another suspension—or after terminal completion—the expected source
+is `unknown source`. The Runtime clears `suspended`, `resume_token`, and
+`resume_pending` before `advance_task` enters `target`.
 
-**Fail:** `before>target>after`, or claim a general native operation can be
-forced complete with `Task:resume`.
+**Fail:** `before>target>after`, treat a wrong-time resume as a no-op, compare
+token sources instead of identity, or claim a general native operation can be
+forced complete with `Task:resume(token)`.
 
 ### 4. Suspend cancellation action
 
 **Prompt:** Implement a one-waiter in-memory latch with cancellation.
 
-**Pass:** Store `async.running()`, install an idempotent exact-waiter detach,
-call it both from `defer` and as `async.suspend(detach)`, make the action
-nonyielding/nonraising, and have the producer change state before calling
-`resume`. Recheck the level condition.
+**Pass:** Create one private token for the latch, store `async.running()`, and
+install an idempotent exact-waiter detach. Call it both from `defer` and as the
+second argument to `async.suspend(token, detach)`, make it nonyielding and
+nonraising, and have the producer commit the monotonic latch before calling
+`resume(token)`. Suspend once: a normal return has that postcondition, while
+cancellation detaches and then wakes with the stored token to inject its reason.
 
 **Fail:** Close shared state on waiter cancellation, run cleanup only after
 resume, or make the cancellation action perform async work.
@@ -1212,8 +1295,9 @@ negative/no-callback from accepted/callback; copy the borrowed result and clean
 native storage exactly once before private `resume_task_from_callback`; retain
 accepted ownership through cancellation; return normally to libuv.
 
-**Fail:** Call public `Task:resume`, call `uv_run`, clear the owner on logical
-cancellation, rely on a finalizer, or add an event-kind dispatcher.
+**Fail:** Call public `Task:resume(token)`, invent a token for native completion,
+call `uv_run`, clear the owner on logical cancellation, rely on a finalizer, or
+add an event-kind dispatcher.
 
 ### 6. Watcher callback classification
 
@@ -1264,9 +1348,10 @@ ownership, or add a scheduler timeout primitive.
 
 **Prompt:** Build a two-Task composition from listeners.
 
-**Pass:** Initial left-to-right status scan, distinct named listeners, immediate
-`defer` for every remover, one `suspend`, deciding listener stores result then
-calls explicit `resume`. Explain terminal registration is not invoked
+**Pass:** Initial left-to-right status scan, one fresh private token for the
+composition, distinct named listeners that capture it, immediate `defer` for
+every remover, one `suspend(token)`, then the deciding listener stores result
+and calls `resume(token)`. Explain terminal registration is not invoked
 immediately, listeners run sequentially outside a user Task, errors are
 isolated, and no callback can interleave before suspend.
 
@@ -1322,23 +1407,6 @@ Lua's coroutine library is different again, and async's tag is private.
 
 **Fail:** Call Lua's coroutine API, invent a public `UV_TAG`, or claim raw
 coroutine creation schedules a Task.
-
-## Research alert: do not turn a private discrepancy into a public promise
-
-At the authority snapshot used for this cartridge (`1fdfbe7`), the public
-Ticker contract is clear, but one private delivery detail is inconsistent:
-
-- `doc/language/async-io.md:444-449` and
-  `doc/implementation/libuv-runtime.md:331-349` say a waited repeating-Ticker
-  callback uses a Task-owned close-before-resume one-shot wake.
-- Current `titan/uv/task.titan:483-490` directly invokes the source-private
-  `resume_task_from_callback` from `ticker_callback`.
-
-Neither route is exposed by `doc/language/standard-library-timer.md`, which
-promises only tick/coalescing/close behavior. Until maintainers reconcile source
-and implementation prose, do not teach or test exact Ticker callback phase or
-iteration order. This alert concerns **private implementation only**, not a
-second public scheduling mode.
 
 ## Source map
 
