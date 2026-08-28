@@ -118,6 +118,36 @@ explanations of:
 This case is intentionally unscored until it is run in a fresh cartridge-only
 context under the evaluation rules above.
 
+### P5 — spread expressions (`titan-programmer` only)
+
+Review a module that writes a collection spread before another argument,
+treats `...[index]` as a ranged input-vararg spread, casts an optional Array
+before spreading it, assumes a non-integer-keyed Map can be spread, and forwards
+a Titan spread into a C function's variadic arguments. Require corrected Titan
+code where applicable and exact explanations of:
+
+- accepted Array qualifiers and exact integer-keyed Map subjects, including the
+  ordinary once-only Option force and rejection of unconverted `value`/C-array
+  subjects;
+- whole and comma-bearing closed-range collection/input-vararg syntax versus
+  bare `...`, scalar `...[index]`, and scalar `(...)`;
+- final-position-only expansion and the accepted positional expression-list
+  consumers;
+- one-based inclusive defaults and once-only left-to-right subject/bound
+  evaluation;
+- finite `T?` projection and normal destination adjustment versus open `T`
+  consumption, including the three open sinks and ordinary Array-hole/Map
+  metamethod reads;
+- finite declared consumption at nonvariadic C calls versus the inability of a
+  Titan spread to supply C variadic operands, including routing foreign-call
+  details to `titan-ffi`; and
+- the existing destination capacities and the pre-read capacity check for a
+  run-time-sized spread.
+
+A fresh cartridge-only evaluator passed this case on 2026-08-28: it recovered
+the complete subject, range, placement, finite/open, capacity, and C-vararg
+separation rules without consulting another authority.
+
 ### T1 — native tests (`titan-programmer` + `titan-tester`)
 
 Replace a Busted wrapper around twenty Titan behavior rows with discoverable
@@ -223,6 +253,7 @@ the later focused P2 evaluator passed as well:
 | --- | --- | --- |
 | P1 | Correct after linked-authority research | Exact from primary cartridge alone |
 | P2 | Not present in the original baseline | Exact compiler-witness, per-state, container/generic, freshness, and forged-entry behavior from the primary cartridge alone |
+| P5 | Not present in the original baseline | Exact spread subjects, ranges, placement, finite/open adjustment, capacity, and C-vararg separation from the primary cartridge alone |
 | T1 | Correct after linked test research | Exact native tests, subtests, cleanup, filters, and Runtime modes |
 | A1 | Correct after linked async/source research | Exact cooperative scheduling and direct watcher ownership |
 | N1 | APIs UNKNOWN | Exact current client/server APIs and protocol constraints |
@@ -260,6 +291,10 @@ records the final run summary.
 The focused P2 addition was run on 2026-08-17 in a separate fresh context with
 only `titan-programmer`; it did not inspect manuals, source, tests, plans, or
 the worktree diff.
+
+The focused P5 addition was run on 2026-08-28 in a separate fresh context with
+only `titan-programmer`; it did not inspect manuals, source, tests, plans,
+`EVALUATION.md`, `AGENTS.md`, or the worktree diff.
 
 ## Mechanical gates
 

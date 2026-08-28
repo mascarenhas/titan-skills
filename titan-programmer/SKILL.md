@@ -1,6 +1,6 @@
 ---
 name: titan-programmer
-description: Write, review, compile, and debug ordinary Titan modules and programs. Covers the Titan language, automatic conversions, core data modeling, errors and cleanup, modules, titanc, and the core string/math/iteration/io/fs/os libraries. Load a narrower Titan skill as well for tests, async internals, networking, FFI/Lua escape hatches, or PEG parsers.
+description: Write, review, compile, and debug ordinary Titan modules and programs. Covers the Titan language, automatic conversions, expression-list and spread adjustment, core data modeling, errors and cleanup, modules, titanc, and the core string/math/iteration/io/fs/os libraries. Load a narrower Titan skill as well for tests, async internals, networking, FFI/Lua escape hatches, or PEG parsers.
 ---
 
 # Titan programmer: the Titan basics cartridge
@@ -479,6 +479,78 @@ sees each requested flexible position as `T?`; an open sink preserves every
 actual value. Open sinks are a variadic call tail, a flexible `return` tail,
 and the final position of a positional Array/integer-Map constructor. Use an
 explicit Array instead when the collection is conceptually unbounded.
+
+### Spread expressions
+
+A spread expression expands an Array, an integer-keyed Map, or a selected part
+of the current function's input-vararg run into the surrounding positional
+expression list. Only the final item can expand. The collection and ranged
+input-vararg forms are:
+
+```text
+...subject
+...subject[, last]
+...subject[first,]
+...subject[first, last]
+
+...                    whole current input-vararg run
+...[, last]
+...[first,]
+...[first, last]
+```
+
+A collection subject may be an Array `{T}` (including `const { T }` and
+`const? { T }`) or an exact integer-keyed Map `{integer: T}`. The corresponding
+Option types are accepted and undergo the ordinary checked `S? -> S` force
+once. Other Map key types, `value`, and C arrays are not spread subjects unless
+a written conversion first produces one of those accepted Titan types.
+
+Ranges are one-based, closed, and inclusive. A missing lower bound means 1; a
+missing upper bound means the subject's length. The subject and explicit bounds
+are evaluated once, left-to-right, even when the consumer ultimately requests
+no elements. Array holes and Map `__len`/`__index` behavior remain the ordinary
+container behavior.
+
+```titan
+function relay(sink: (...: integer) -> (), values: {integer}?)
+  sink(0, ...values[2,])
+end
+
+function middle(values: {string}): {string}
+  return {...values[2, #values - 1]}
+end
+
+function forward_middle(...: string): (...: string)
+  return ...[2,]
+end
+```
+
+A finite consumer requests only its remaining fixed positions and observes
+each projected element as `T?`; normal assignment adjustment then preserves
+nil at an optional destination or forces presence at a required `T` destination.
+An open consumer preserves the selected run-time length and observes elements
+as `T`. Open consumers are a variadic call tail, a flexible `return` tail, and
+the final positional field of an Array or exact integer-keyed Map constructor.
+Declarations, assignments, fixed calls/returns, and generic-`for` tuples are
+finite when their remaining shape is fixed.
+
+Do not write another positional item after a spread: `sink(...values, 0)` is
+rejected. Bare `...` is the whole input-vararg tail, `...[index]` is the scalar
+raising index operation, and only comma-bearing input-vararg brackets select a
+spread range. Parenthesized `(...)` is the single adjusted vararg value. Thus
+`... -1` is a collection spread whose subject is unary `-1` (and is rejected by
+type), while `(...) - 1` is scalar subtraction.
+
+Titan input-vararg spreading and C variadic arguments are different mechanisms.
+A direct nonvariadic C function, C function pointer, or C allocation pseudo-call
+may consume a spread only through its declared finite positions; a Titan spread
+does not supply a C function's `...` operands. Load **`titan-ffi`** before using
+spreads at a foreign-call boundary.
+
+Existing tail, container, and generic-result capacity limits still apply. When
+a spread's length is known only at run time, the generated code checks the
+applicable remaining capacity before reading its selected elements or partially
+updating a destination.
 
 Functions are first-class. A lambda takes parameter/result types from its
 expected function type; absent usable context, annotate its parameters and
@@ -1521,6 +1593,7 @@ disagree, resolve it at the narrow owner:
   [`expressions.md`](../../../doc/language/expressions.md);
 - declarations and data modeling:
   [`functions.md`](../../../doc/language/functions.md),
+  [`spread-expressions.md`](../../../doc/language/spread-expressions.md),
   [`closures.md`](../../../doc/language/closures.md),
   [`const-values.md`](../../../doc/language/const-values.md),
   [`generics.md`](../../../doc/language/generics.md),
@@ -1565,7 +1638,9 @@ skill tree should rerun the lightweight cartridge and routing matrix in
   requests broader dynamic conversion, a downcast, or FFI behavior.
 - Recheck Option preservation (`name?`) versus fail-fast force, especially for
   false-capable bases.
-- Recheck fixed/variadic/flexible call shape and the “last call expands” rule.
+- Recheck fixed/variadic/flexible call shape, tail-only spreads, inclusive
+  range bounds, evaluate-once carriers, and finite `T?` versus open `T`
+  consumption.
 - Recheck Array versus Map constructor shape, holes, deterministic Array
   length, and typed read guards. For Maps, verify raw-hit-first `__index`,
   absent-key-only `__newindex`, exact-integer `__len`, scoped Map table `__eq`,
