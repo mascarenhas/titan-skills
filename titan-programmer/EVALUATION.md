@@ -192,14 +192,15 @@ invented convenience APIs.
 
 Require exact examples and review for foreign imports, automatic and owned C
 storage, contextual pointer conversion, one source-defined foreign callback,
-the built-in `L`, and `titan.lua.load`. The answer must keep C types private,
-root every retained owner, distinguish public call-only string borrowing from
-the trusted standard-library exception, state the `void *` object/function-
-pointer rules precisely, and treat `titan.lua` as an FFI-strength audited
-escape hatch rather than a default module mechanism. For a Lua table observed
-as a Map, also require the exact `__index`, `__newindex`, `__len`, and scoped
-`__eq` behavior, including strict returned-value tags and raw `value`/`value`
-equality.
+the built-in `L`, and `titan.lua.load`. The answer must distinguish the
+exportable contextual primitive/pointer/function/owner closure from imported
+header-dependent C types that remain private, root every retained owner,
+distinguish public call-only string borrowing from the trusted standard-library
+exception, state the `void *` object/function-pointer rules precisely, and
+treat `titan.lua` as an FFI-strength audited escape hatch rather than a default
+module mechanism. For a Lua table observed as a Map, also require the exact
+`__index`, `__newindex`, `__len`, and scoped `__eq` behavior, including strict
+returned-value tags and raw `value`/`value` equality.
 
 ### G1 — PEGs (`titan-programmer` + `titan-pegs`)
 

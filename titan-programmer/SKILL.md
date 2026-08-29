@@ -39,6 +39,12 @@ for lifecycle or implementation changes. `titan.lua` can be as powerful an
 escape hatch as the C FFI. Use it just as sparingly and keep it behind a narrow,
 typed, audited boundary.
 
+`async.run_foreign` is the deliberate cross-cutting exception: it exposes a
+portable raw C function-pointer/pointer signature so a Task can wait for a
+blocking external C call in libuv's worker pool. Load both **`titan-async`** and
+**`titan-ffi`** before using or changing it; the worker may not enter Titan or
+Lua, and cancellation does not end accepted native ownership.
+
 Across this skill tree, a `titan` fence is a complete module or an explicitly
 named file in a paired composition. Signature inventories, placeholders,
 continuations, and intentionally invalid examples use `text`; do not paste a
@@ -182,6 +188,26 @@ all-or-none. Owner arguments attach to the owner (`Pair<integer,
 string>.new(...)`), not to `new`. Generics are invariant and erased; a generic
 body is checked once. A bare generic owner in an ordinary type position means
 the all-`value` application, not a wildcard.
+
+### Contextual portable C types are a specialist boundary
+
+In C type context, Titan directly recognizes `void`, `bool`, `char`,
+`signed char`, `unsigned char`, `short`, `unsigned short`, `int`,
+`unsigned int`, `long`, `unsigned long`, `long long`, `unsigned long long`,
+`foreign float`, `double`, and `long double`. These are target-profile C types,
+not aliases for Titan's scalar types, and need no `titan/ffi.h` import.
+`foreign float` is the C type; unqualified `float` remains Titan's numeric type.
+The newly used words are not lexer keywords: ordinary single-word aliases and
+value bindings retain lookup precedence, while records, unions, and Interfaces
+cannot take a contextual component name such as `signed` or `unsigned`.
+
+A compiled public interface may recursively use those primitives, portable
+pointers/const pointers, structural `foreign (...) -> ...` function pointers,
+and eligible `owned` forms. A type imported from a header remains module-local
+even when its underlying C declaration is a primitive. Header aggregates,
+arrays, enums, and imported function-pointer typedefs are likewise not public
+metadata. Load **`titan-ffi`** for allocation pseudo-members, pointer and owner
+lifetimes, casts, callbacks, Lua representation, and the exact export boundary.
 
 ## Automatic conversions: use the typed context
 
@@ -1543,6 +1569,10 @@ to the language rules:
   only by yielding through the runtime protocol; no libuv callback fires while
   Titan code is currently running on that main loop thread. Load **Titan
   async** before reasoning about callback order.
+- **Keep foreign worker code C-only.** `async.run_foreign` is the one explicit
+  worker-pool escape from main-loop Titan execution: the worker performs only
+  its C `f(arg)`, never touches Titan/Lua state, and retains native ownership
+  through the loop-thread after-work callback.
 - **Cleanup remains owned until terminal native completion.** Cancellation
   does not license dropping a callback owner or double-closing a libuv handle.
   Native callback resumption stays token-free, while explicit
@@ -1631,6 +1661,9 @@ skill tree should rerun the lightweight cartridge and routing matrix in
   source-versus-binary visibility. Ordinary imports stay public-only even when
   source wins; private collaboration requires a terminal `.titan` marker and a
   real source module.
+- For a public C type, prove the complete graph uses only contextual portable
+  primitives/pointers/functions/owners; keep every imported/header-dependent C
+  type private.
 - Recheck const-local RHS requirements, nil-bearing mutable omissions, owner
   initializer authority, shallow const fields/Interface snapshots, and exact
   mutable versus const Array tags. Treat mutable-to-const copy elision as valid

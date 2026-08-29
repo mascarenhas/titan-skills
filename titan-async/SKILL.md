@@ -26,9 +26,10 @@ Titan async is **cooperative, single-loop continuation execution**:
   suspended continuation directly. The Task can run through immediate outcomes
   until it submits the next callback-bearing operation, returns, or raises;
   then the callback returns to libuv.
-- Filesystem and DNS work may execute in libuv worker threads, but only the
-  loop-thread completion callback enters Titan. Worker threads never read or
-  mutate Titan records.
+- Filesystem, DNS, and explicit `async.run_foreign` work may execute in libuv
+  worker threads, but only the loop-thread completion callback enters Titan.
+  Worker threads never read or mutate Titan records; `run_foreign` performs
+  exactly its supplied C function-pointer call over native data.
 - CPU-bound Titan code that does not finish or yield blocks every Task and the
   event loop. Call `async.yield()` or `timer.yield()` deliberately in such a
   loop.
@@ -157,6 +158,7 @@ The exact top-level scheduling API is:
 
 ```text
 function run<A, B>(func: () -> A): Task<A, B>
+function run_foreign(f: foreign (*void) -> (), arg: *void)
 function loop()
 function yield()
 function running(): Task<value, value>
@@ -191,6 +193,32 @@ occurs only when a typed view projects that payload. Identity comparison,
 
 Evidence: `titan/async.titan`, `titan/uv/task.titan`, and
 `doc/language/async-io.md`.
+
+### Foreign blocking work is a narrow C-only boundary
+
+`async.run_foreign(f, arg)` submits exactly `f(arg)` to libuv's process-wide
+worker pool and suspends the current Task until the after-work callback returns
+to the event-loop thread. Use it only for a blocking call into an external C
+library. The callback is a restricted source `foreign function` or a compatible
+C function pointer—not a Titan closure—and the argument points at native
+storage that remains alive until completion. Load `titan-ffi` when designing
+that boundary.
+
+The worker must not inspect Titan or Lua values, enter an ordinary Titan
+function or closure, call a Titan runtime helper or the Lua API, allocate
+through Titan, raise, resume a Task, or touch `TValue`/`Udata`/GC state. A
+restricted source `foreign function` is the deliberate exception: the compiler
+emits it as an exact C callback whose body must itself obey this raw-C boundary.
+The suspended caller must retain every owner and must not concurrently access
+bytes the worker may read or write. Submission failure raises immediately. Once
+accepted, cancellation does not stop the C call or release its state early:
+completion stays authoritative, then the Task receives its pending
+cancellation. The pool is shared with filesystem and DNS requests, so long or
+numerous jobs can delay unrelated I/O.
+
+The portable raw-pointer signature is statically callable across compiled Titan
+modules. It does not create a dynamic Lua coercion for raw pointers or foreign
+function pointers.
 
 ### Exact fixed-arity combinator signatures
 
@@ -895,6 +923,7 @@ records is public application API.
 | synchronous call, no retained callback | no `Call` variant | automatic/local state unless the contract retains a pointer |
 | one-shot request that suspends a Task | one submission `Call` variant | one request owner, normally rooted by the Task's private `pending` field |
 | one-shot callback on a new handle | usually one submission variant plus close | one rooted handle owner transferred through `uv_close` |
+| explicit worker-pool call | one `run_foreign` variant | one request owner retaining raw carrier and completion callback until after-work |
 | persistent multi-shot source | wait/consume and close variants | one rooted handle owner with natural buffered/terminal state and at most one waiter |
 
 Do not rebuild a control hierarchy, operation registry, event-kind dispatcher,
@@ -946,6 +975,27 @@ Evidence: `doc/implementation/libuv-extension-guide.md`.
 Evidence: `doc/implementation/libuv-extension-guide.md` and
 `titan/uv/file.titan`/`titan/uv/tcp.titan`.
 
+### Foreign worker ownership
+
+`Call.run_foreign` carries `WorkCall`, whose `owned WorkPointer[]` carrier has
+three slots: after-work owner, erased `WorkFunction`, and argument. Dispatch
+allocates an owned `uv_work_t`; `WorkOwner` retains that request, the carrier,
+and its ordinary loop-thread completion closure, and `Task.pending` roots the
+complete owner before `uv_queue_work` can accept it.
+
+The source `uv_work_cb` is intentionally unlike ordinary callbacks. It runs on
+a worker thread, reads only the function and argument carrier slots, and calls
+`f(arg)`. It must never recover the after-work owner or enter any Titan/Lua
+helper. The source `uv_after_work_cb` runs on the loop thread, recovers the
+owner, and invokes the protected `complete_work` path. Only submission status
+zero is accepted; a nonzero status is the no-callback case and clears the
+pending root synchronously. An
+accepted submission is never cancelled with `uv_cancel`; the after-work
+callback owns terminal release even if Task cancellation is pending.
+
+Evidence: `titan/uv/work.titan`, `doc/implementation/libuv-runtime.md`, and
+`doc/implementation/libuv-extension-guide.md`.
+
 ### Persistent handle ownership
 
 - The owner is the complete callback owner: stable native handle, exact callback
@@ -978,10 +1028,11 @@ Evidence: `doc/implementation/libuv-extension-guide.md`,
 
 ### Callback production must stay small
 
-A raw native callback copies or converts data that is valid only during the
-callback, publishes one natural event/result, wakes its exact continuation, and
-returns. It must not do synchronous filesystem work or other potentially
-blocking classification.
+A raw loop-thread native callback copies or converts data that is valid only
+during the callback, publishes one natural event/result, wakes its exact
+continuation, and returns. It must not do synchronous filesystem work or other
+potentially blocking classification. The `run_foreign` worker callback is the
+separate C-only exception described above; it cannot publish or resume at all.
 
 The current filesystem watcher is the model:
 
@@ -1175,6 +1226,9 @@ Before accepting Task/application code, verify:
 - It does not call `async.loop` from a Task or callback.
 - It remembers that `async.run` never starts inline and that standalone `main`
   is already bootstrapped.
+- If it uses `run_foreign`, the function is C-only, every native argument owner
+  survives completion, shared bytes are synchronized, and pool starvation is
+  an accepted/documented tradeoff.
 - It uses precise `Task<A,B>` types and supplies both explicit type arguments or
   neither.
 - It handles the six status variants without inventing `cancelling`.
@@ -1214,6 +1268,9 @@ Before accepting private libuv code, also verify:
   explicit suspension.
 - Cancellation does not drop accepted work early or synchronously enter another
   Task.
+- A worker callback reads only its raw function/argument carrier, never enters
+  Titan/Lua, and leaves owner recovery and Task resumption to after-work on the
+  loop thread.
 - `uv_is_closing` and `uv_walk` remain authoritative; no duplicate resource
   graph, generation, or close flag appears.
 - Behavioral tests use the public production facade unless a genuinely new
@@ -1408,6 +1465,22 @@ Lua's coroutine library is different again, and async's tag is private.
 **Fail:** Call Lua's coroutine API, invent a public `UV_TAG`, or claim raw
 coroutine creation schedules a Task.
 
+### 14. Foreign worker boundary
+
+**Prompt:** Offload a blocking C call by passing a capturing Titan closure and
+record pointer to `async.run_foreign`, then free the record as soon as the Task
+is cancelled.
+
+**Pass:** Reject the Titan closure and GC record pointer. Use a compatible C
+function pointer over native storage, retain its complete owner through the
+after-work callback, synchronize all shared bytes, and explain that accepted
+work is not stopped by Task cancellation. The worker calls only `f(arg)` and
+never enters Titan/Lua; the shared pool can delay filesystem/DNS work.
+
+**Fail:** Call Titan/Lua from the worker, treat cancellation as native
+completion, release the argument early, or promise a dedicated background
+thread.
+
 ## Source map
 
 - Issue and maintainer corrections: GitHub issue `#82`, “Overhaul the Titan
@@ -1418,7 +1491,8 @@ coroutine creation schedules a Task.
 - Public sources/signatures: `titan/async.titan`, `titan/timer.titan`, and
   `titan/coroutine.titan`.
 - Private Runtime/Task sources: `titan/uv/runtime.titan`,
-  `titan/uv/task.titan`, and the other `titan/uv/*.titan` contributors.
+  `titan/uv/task.titan`, `titan/uv/work.titan`, and the other
+  `titan/uv/*.titan` contributors.
 - Private Runtime design: `doc/implementation/libuv-runtime.md`.
 - Native extension recipes: `doc/implementation/libuv-extension-guide.md`.
 - Coroutine mechanics: `doc/implementation/coroutines.md`.
