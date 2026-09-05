@@ -655,6 +655,14 @@ Do not move the behavior to Busted simply because Busted can spawn a process.
 See `spec/stdlib/titan/uv/runtime_tests.titan`, the OS process tests, and the
 fixtures `uv_bootstrap/*`, `uv_stdio_app.titan`, and `os_exit_app.titan`.
 
+Sandboxed parent-stdio cases extend `uv_stdio_probe.c` with real Unix socket
+endpoints. The Linux fixture installs its narrow seccomp filter only inside
+the exec'd child, denies selected metadata calls only for descriptors 0–2,
+and leaves duplicate descriptors and I/O usable. Do not install that filter
+in the aggregate runner or replace production libuv calls with interposition.
+Keep a portable ordinary-socket companion; skip only the denial-specific
+cases when the native filter fixture is unavailable.
+
 ### Treat shared build products as read-only
 
 Native and Busted helpers must not clean or rebuild the Makefile-owned

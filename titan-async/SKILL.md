@@ -465,6 +465,10 @@ wrapper. The Runtime reports the uncaught failure and traceback immediately;
 later `join`, `race`, or `all` observation does not suppress that report.
 Other Tasks continue.
 
+An uncaught `OperationError` report includes `operation`, `name`, numeric
+`code`, and `message`, followed by the existing traceback. Rendering remains
+protected; it never changes the exact error value stored in the failed Task.
+
 Evidence: `doc/language/async-io.md` and
 `spec/stdlib/titan/async/tests/task_test.titan`.
 
@@ -947,6 +951,21 @@ Use the existing direct owner/helper. Do not add a facade alias or forwarding
 C wrapper around a public `uv_*` function.
 
 Evidence: `doc/implementation/libuv-extension-guide.md`.
+
+### Parent standard-stream classification
+
+Preserve known libuv TTY/pipe classifications and the per-Runtime wrapper over
+a close-on-exec duplicate. An unknown descriptor needs explicit `fstat` socket
+evidence and independent family/type probes, with each failed call's `errno`
+saved immediately. Only `EPERM`/`EACCES`-denied metadata may use the launcher's
+strict `TITAN_STDIO_PIPE_FDS` list of `0`, `1`, and `2`; observed non-Unix or
+non-stream metadata always rejects. Never treat arbitrary unknown handles,
+regular files, or known TCP/UDP handles as pipes. Keep the
+`stdio.parent.kind` operation and fd/probe diagnostic, and preserve actual
+errors such as `EBADF`.
+
+Evidence: `doc/language/standard-library-os.md`,
+`doc/implementation/libuv-runtime.md`, and `titan/uv/process.titan`.
 
 ### One-shot ownership
 

@@ -846,6 +846,12 @@ multiply/divide/bitwise/shift.
 
 ## Macros and enums
 
+Read `errno` only after a C API reports failure under its documented contract,
+and save it before another native call. A classifier such as
+`uv_guess_handle` does not promise that its leftover `errno` explains an
+unknown result. When several metadata probes contribute independent evidence,
+perform each required probe and retain each failure separately.
+
 Titan imports a bounded set of object-like macro values:
 
 * supported integer constant expressions;
