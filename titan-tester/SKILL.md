@@ -804,11 +804,21 @@ to Busted (`spec/support/run_rock_tests.sh`).
 
 - `make test` is the canonical current-source validation because it runs
   `luarocks make --force` before `luarocks test`.
-- Plain `luarocks test` tests the already installed snapshot; it does not build
-  the rock under test.
-- Busted uses `luarocks.loader`. After installation, a direct Busted command may
-  load the installed compiler rather than edited checkout Lua. Re-run the
-  prefix's `luarocks make` after compiler edits.
+- Plain `luarocks test` does not build the rock under test or refresh the
+  installed compiler, SDK, or provider.
+- Default Busted runs, including `make busted-test` and the Busted portion of
+  `luarocks test`, use the installed compiler snapshot. Reinstall compiler edits
+  before those commands and installed consumers such as `titanc`.
+- The explicit `busted --run=checkout` profile loads edited checkout Lua
+  compiler modules through `.busted`, which prepends `./?.lua;./?/init.lua`
+  after the LuaRocks launcher. Pair it with command-scoped
+  `TITAN_ROCKS_ROOT="$PREFIX"` to keep installed headers and runtime libraries
+  selected. The C module path stays unchanged. An ambient checkout-first
+  `LUA_PATH` alone cannot override the launcher. This profile does not refresh
+  installed compiler, SDK, or provider artifacts.
+- The profile's standard Busted helper prepares the existing driver layout and
+  direct checker C-header configuration through one resolver context, then
+  closes it. A missing `TITAN_ROCKS_ROOT` fails before tests run.
 - The native aggregate's production standard modules also come from the
   prepared canonical provider. Reinstall after changing standard-library
   source before trusting a focused leaf run.
@@ -822,13 +832,16 @@ to Busted (`spec/support/run_rock_tests.sh`).
   `TITAN_NO_LINE_DIRECTIVES`. They alter provider selection, probe/generated-C
   context, or source attribution.
 
-Useful direct Busted commands after the install is current:
+Useful focused checkout commands with a prepared, ABI-matched installation:
 
 ```sh
-TITAN_PROBE_CACHE_DISABLE=1 busted spec/test_runner_spec.lua
-TITAN_PROBE_CACHE_DISABLE=1 busted spec/checker/unions_spec.lua \
+TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+  busted --run=checkout spec/test_runner_spec.lua
+TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+  busted --run=checkout spec/checker/unions_spec.lua \
   --filter='case bindings'
-TITAN_PROBE_CACHE_DISABLE=1 busted spec/coder/test_runner_spec.lua \
+TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+  busted --run=checkout spec/coder/test_runner_spec.lua \
   --filter='filters descendants'
 ```
 
@@ -1320,17 +1333,24 @@ inspects generated C instead of child behavior; deletes broad artifacts.
 
 **Must hit:**
 
-- Busted's `luarocks.loader` can load the installed compiler snapshot;
+- default Busted can test the installed compiler snapshot;
+- explicit `--run=checkout` selects edited compiler Lua; command-scoped
+  `TITAN_ROCKS_ROOT="$PREFIX"` keeps installed headers and runtime libraries;
+- the profile leaves the C module path unchanged;
 - native stdlib tests depend on the prepared canonical provider;
 - `luarocks test` and the run-only target do not rebuild;
-- rerun the prefix's `luarocks make`/use `make test` to install current code;
+- rerun the prefix's `luarocks make` after standard-library/runtime changes or
+  before default Busted or installed CLI/compiler consumers; use `make test`
+  for the install-before-full-suite gate;
 - rebuild aggregate after changing tests; run focused filter then owning suite;
 - direct Busted uses `TITAN_PROBE_CACHE_DISABLE=1` from repo root;
 - clear ambient Lua path overrides and relevant build-policy variables for
   canonical validation.
 
-**Fail signatures:** suggests setting `LUA_PATH` to checkout `.lua`; treats
-`make titan-stdlib-test-run` as a build; ignores current provider.
+**Fail signatures:** relies on ambient `LUA_PATH` instead of the explicit
+checkout profile; omits the root option while claiming installed SDK selection;
+claims `.busted` refreshes an installed compiler or provider;
+treats `make titan-stdlib-test-run` as a build; ignores current provider.
 
 ## Eval 14 — Native test manifest and folder ownership
 
@@ -1451,7 +1471,8 @@ make titan-stdlib-test-build
 make titan-stdlib-test-run TITAN_FILTER='<anchored-owner-pattern>'
 
 # Correct compiler layer when applicable.
-TITAN_PROBE_CACHE_DISABLE=1 busted <topical-spec> --filter='<focused text>'
+TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+  busted --run=checkout <topical-spec> --filter='<focused text>'
 ```
 
 Do not reduce evaluation to grep. A syntactically discovered test can still

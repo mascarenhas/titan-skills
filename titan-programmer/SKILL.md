@@ -1534,8 +1534,17 @@ lookup to source-first with compiled fallback on a clean miss; it does not
 change that public-only visibility. Spell a collaborating dependency as
 `import "name.titan"`; that import requires source and exposes locals without
 changing the logical name. Command-line roots themselves remain unsuffixed
-logical names. If compiler Lua sources also changed, reinstall/rebuild the
-compiler snapshot before trusting Busted or `titanc` runs.
+logical names. To test compiler Lua edits without reinstalling them, run the
+prefix's `busted --run=checkout` from the repository root with command-scoped
+`TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1`. The `.busted`
+profile selects checkout Lua after the LuaRocks launcher, and the existing root
+option preserves the installed headers and runtime libraries. The profile's
+Busted helper also prepares direct checker C-header lookup through the existing
+driver APIs and rejects a missing root option. Default Busted
+runs and installed CLI consumers such as `titanc` still require reinstalling
+compiler edits. Reinstall after runtime or standard-library changes as well.
+`make test` installs the current compiler and provider before the complete
+suite; keep its canonical environment free of the focused root override.
 
 ## Standard-library implementation taste: keep the architecture direct
 
