@@ -32,6 +32,8 @@ work crosses one of these boundaries:
   callbacks, the Lua C API, and the `titan.lua` dynamic escape hatch.
 - **`titan-pegs`** — `titan.peg`, relabel grammars, combinators, and parser error
   design.
+- **`titan-reflect`** — `titan.reflect`, runtime value inspection, nominal type queries,
+  descriptors, and dynamic record/interface field access with GC safety.
 
 The core `fs`, `io`, and `os` APIs below have synchronous-looking Titan calls
 that may suspend. Application-level use is covered here; load **`titan-async`**
@@ -1008,7 +1010,7 @@ cannot be re-exported. Circular imports are compile-time errors.
 Canonical short imports are:
 
 ```text
-coroutine uv async timer io fs net ssl url http os peg string test lua gc math iteration
+coroutine uv async timer io fs net ssl url http os peg string test lua gc math iteration reflect
 ```
 
 They mean the corresponding `titan.*` logical modules. 

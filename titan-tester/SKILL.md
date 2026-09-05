@@ -145,7 +145,8 @@ case names.
 
 Do not give a test owner a bare name rewritten by standard-import shorthand:
 `coroutine`, `uv`, `async`, `timer`, `io`, `fs`, `net`, `ssl`, `url`, `http`,
-`os`, `peg`, `string`, or `test`. A bare Lua-library name can also collide at
+`os`, `peg`, `string`, `test`, `lua`, `math`, `gc`, `iteration`, or `reflect`.
+A bare Lua-library name can also collide at
 the native opener boundary; `math` is the canonical example. Prefer
 `calc_test`, `math_spec`, `tests.math`, or a qualified owner such as
 `net.tests`.
@@ -577,7 +578,7 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 
 ## 8. Repository-native test ownership and layout
 
-The aggregate currently has 22 explicit logical roots in
+The aggregate currently has 23 explicit logical roots in
 `Makefile:TITAN_STDLIB_TEST_ROOTS`:
 
 ```text
@@ -603,6 +604,7 @@ url.tests
 os.tests
 os.process_tests
 uv.runtime_tests
+reflect.tests
 ```
 
 Do not replace this manifest with an import-only aggregator. Making each owner
@@ -753,7 +755,7 @@ compiling any requested root.
 The leaf commands are:
 
 ```sh
-# Build all 22 roots once under .titan-tests; does not run them.
+# Build all 23 roots once under .titan-tests; does not run them.
 make titan-stdlib-test-build
 
 # Run the existing aggregate from the repository root.
@@ -791,7 +793,7 @@ streams merged output through a pipe, and preserves exit status. Override
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
 `.titan-tests/test/tests` directly from the repository root with repeated
 `-f`, or use one carefully designed Lua pattern. The filter does not change the
-22-root compile.
+23-root compile.
 
 `BUSTED_FILTER` never filters Titan cases, and `TITAN_FILTER` never filters
 Busted. The LuaRocks command adapter also recognizes explicit
@@ -1388,7 +1390,7 @@ make rock-test \
 ```
 
 Must say `TITAN_FILTER` is a runtime Lua pattern, filters one domain only, and
-does not reduce the 22-root build. Do not accept regex-only escaping or a claim
+does not reduce the 23-root build. Do not accept regex-only escaping or a claim
 that `make rock-test` rebuilds/reinstalls the rock.
 
 ## Eval 17 — API surface discrimination

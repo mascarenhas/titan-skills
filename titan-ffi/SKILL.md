@@ -61,10 +61,11 @@ function-like macro, and the adjacent comment must say why it exists.
    portable pointer, foreign-function-pointer, and owned graphs built from
    them. An imported typedef remains nonexportable even when it resolves to a
    portable primitive.
-   A portable C function pointer may occur in an exact compiled callable
-   signature, but it has no `TValue` representation: do not put one in a
-   module variable or other `TValue`-backed slot. A Lua/strict stack entry for
-   a function-pointer result raises before invoking the native body.
+   A C function pointer boxes as lightuserdata through Titan's toolchain
+   portability cast. Portable function-pointer types can occupy module,
+   record, union, and Option slots and return through Lua/strict stack entries.
+   Boxing does not retain the C signature: recovery from arbitrary `value`
+   requires an explicit unsafe `as` cast.
 3. C pointers are nullable and borrowed unless a documented C API says
    otherwise. A pointer is not an owner or a GC root.
 4. A Titan string passed to C is immutable borrowed bytes valid for the call,
@@ -261,9 +262,9 @@ slot performs the checked `size_t -> integer` adjustment. The C-mode comparison
 boolean coercion. No public caller needs the header.
 
 A private record field or union payload may contain only a C value with a real
-Lua `TValue` representation: a checked C scalar, non-function object pointer,
+Lua `TValue` representation: a checked C scalar, object or function pointer,
 exact `TValue`, Lua-internal `Udata *`, or `owned` storage. A direct C aggregate,
-array, function, or function pointer cannot occupy such a slot. The same rule
+array, or function cannot occupy such a slot. The same rule
 controls C types under `T?`. A pointer being boxable does **not** make its
 pointee type dynamically verifiable after it crosses through `value`.
 
@@ -422,7 +423,7 @@ The important direct edges are:
 | Titan `string` | borrowed `char *` / `void *` for a call |
 | C `char *` / `void *` | `string` by explicit NUL-terminated copy |
 | counted owned character array | `string` by explicit exact-length binary copy |
-| boxable C scalar / object pointer | `value`; pointers become lightuserdata |
+| boxable C scalar / object or function pointer | `value`; pointers become lightuserdata, using the portability cast for function pointers |
 | owned C storage | `value`; remains full userdata with exact owner identity |
 | exact C `TValue` | Titan `value`, and vice versa |
 | Lua-internal `Udata *` | the same full-userdata `value`, and vice versa |
@@ -462,8 +463,9 @@ example, a dynamic integer target accepts `2.0`, and a dynamic boolean target
 applies Lua truthiness. Container crossings check only the outer proxy/table;
 typed reads check contents later.
 
-A raw C pointer is the dangerous exception. An ordinary pointer boxes as
-lightuserdata, but lightuserdata has no pointee tag. Therefore:
+A raw C pointer is the dangerous exception. Object and function pointers
+box as lightuserdata, by implicit coercion or written `as value`, but the
+carrier has no pointee or C-signature tag. Therefore:
 
 * implicit `value -> *c.T` is rejected;
 * typed Array/Map reads that would need to establish a raw pointer are rejected;
@@ -1589,8 +1591,6 @@ support:
   members;
 * foreign variadic parameters, flexible results, multiple results, or a
   Titan `...` forwarded to a C variadic call;
-* a C function pointer in `value`, Option, module variable, record/union slot,
-  or other `TValue`-backed storage;
 * a by-value C aggregate or C array in `value` or a `TValue`-backed slot;
 * a dynamically verified raw C pointee type from lightuserdata (only an unsafe
   written assertion checks the outer representation);
