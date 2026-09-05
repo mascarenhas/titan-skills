@@ -578,7 +578,7 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 
 ## 8. Repository-native test ownership and layout
 
-The aggregate currently has 23 explicit logical roots in
+The aggregate currently has 25 explicit logical roots in
 `Makefile:TITAN_STDLIB_TEST_ROOTS`:
 
 ```text
@@ -605,6 +605,8 @@ os.tests
 os.process_tests
 uv.runtime_tests
 reflect.tests
+sqlite3.tests
+json.tests
 ```
 
 Do not replace this manifest with an import-only aggregator. Making each owner
@@ -763,7 +765,7 @@ compiling any requested root.
 The leaf commands are:
 
 ```sh
-# Build all 23 roots once under .titan-tests; does not run them.
+# Build all 25 roots once under .titan-tests; does not run them.
 make titan-stdlib-test-build
 
 # Run the existing aggregate from the repository root.
@@ -801,7 +803,7 @@ streams merged output through a pipe, and preserves exit status. Override
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
 `.titan-tests/test/tests` directly from the repository root with repeated
 `-f`, or use one carefully designed Lua pattern. The filter does not change the
-23-root compile.
+25-root compile.
 
 `BUSTED_FILTER` never filters Titan cases, and `TITAN_FILTER` never filters
 Busted. The LuaRocks command adapter also recognizes explicit
@@ -1418,7 +1420,7 @@ make rock-test \
 ```
 
 Must say `TITAN_FILTER` is a runtime Lua pattern, filters one domain only, and
-does not reduce the 23-root build. Do not accept regex-only escaping or a claim
+does not reduce the 25-root build. Do not accept regex-only escaping or a claim
 that `make rock-test` rebuilds/reinstalls the rock.
 
 ## Eval 17 — API surface discrimination

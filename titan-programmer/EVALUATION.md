@@ -1,6 +1,6 @@
 # Titan skill-tree evaluation
 
-This companion is the lightweight, repeatable evaluation set for the six Titan
+This companion is the lightweight, repeatable evaluation set for the Titan
 cartridges. It is not required reading for ordinary Titan work; `SKILL.md` files
 remain self-contained. The set exists to detect routing, syntax, API-invention,
 ownership, and concurrency regressions when a cartridge changes.
@@ -212,6 +212,44 @@ capture callback timing, compile-local `Definition` values, and equivalent
 combinator spelling. Reject invented separators and nonconstant module
 initializers.
 
+### J1 — JSON data and nominal mapping (`titan-programmer` + `titan-json`)
+
+Write a complete module that round-trips a public union containing a public
+record with const and optional fields, then preserves the null tail of
+`[1,null,null]`. Explain what changes under default options and when the record
+contains a local field. Require the actual `decode(source, target?, ...options)`
+shape, a fully qualified initialized nominal target, ordinary typed result
+projection, a fresh nonnil reference sentinel reused for both calls, and
+public `new` construction. Reject `decode<T>`, implicit sentinels, allocate-then-
+set construction, and false-defaulting missing required boolean fields.
+
+Ask separately for a const integer Array descriptor. Require the actual
+`ArrayType.new(constness, element)` argument order, the canonical constness
+variant, and the documented construction-time Lua-writer policy for mutable
+results. A follow-up asking for `Box<Person>` reconstruction must acknowledge
+reflection's erased leaves instead of promising specialization validation.
+
+### J2 — JSON errors and PEG maintenance (`titan-programmer` + `titan-json` + `titan-pegs` + `titan-tester`)
+
+Review a parser draft that compiles per call, uses leftmost `peg.match`, stores
+a mutable constant fold seed, passes every child of a 65536-element Array to
+one callback, finalizes children with retained match-time captures, and calls
+`peg.line_column` for every node. Require compiled-once anchored matching and
+end-of-input, exact committed failure labels, a nonnil Node capture, fresh
+delayed fold accumulators with one child per reducer, recognition-only budget
+guards, and one location conversion on failure. Require a concrete linearity
+argument; the word PEG is not a complexity proof. Reject ordinary callback-
+exactly-once assumptions, per-call PEG stack mutations, and eager builders used
+to hide capture limits.
+
+Route JSON syntax and semantics to native `json.tests`, retaining the Titan
+parser suite only for its short-import normalization. Ask for location cases
+covering LF, CR, CRLF, multibyte bytes before failure, and EOF, plus separate
+wide/deep and successful/late-failing scaling checks. Require actual selected
+native test evidence and fresh provider installation before claiming a pass.
+
+The first JSON evaluation results are recorded below.
+
 ## Frontmatter-only routing set
 
 Read only each skill's YAML `name` and `description`, then choose the minimal
@@ -231,13 +269,20 @@ set for these queries:
 12. edit a Lua-only Busted packaging test;
 13. write Python `requests` HTTP code;
 14. write C-only libuv code; and
-15. author a source-defined C callback used by a PEG native Titan test.
+15. author a source-defined C callback used by a PEG native Titan test;
+16. encode Titan records as JSON and preserve explicit nulls;
+17. change the JSON module's Relabel grammar;
+18. add native JSON record/union mapping tests; and
+19. edit a JSON configuration file for an unrelated Python application.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
 negative controls are no PEG cartridge for `titan.string` regex alone, no
 programmer cartridge for a Lua-only test, and no Titan networking/async/FFI
-cartridge for unrelated Python or C work.
+cartridge for unrelated Python or C work; no JSON cartridge merely because
+a configuration file uses JSON. Ordinary JSON use selects programmer + json;
+JSON grammar changes add pegs, JSON tests add tester, and explicit reflection
+construction work adds reflect.
 
 ## Recorded baseline and post-change results
 
@@ -331,3 +376,31 @@ explicitly paired runnable Titan fences and measure as follows with
 These counts are a density guard, not a target to pad. A cartridge should remain
 roughly 10–20K tokens, self-contained in its advertised domain, example-rich,
 and honest about unsupported boundaries.
+
+
+### JSON cartridge evaluation (2026-09-05)
+
+Fresh agents read only the cartridges named by J1/J2; they did not read source,
+manuals, tests, repository instructions, or earlier implementation discussion.
+J1 produced a complete named-union/const-record round trip, lossless sentinel
+tail, default nil-loss baseline, and structural const-Array decoder. A separate
+current-prefix static compile and execution passed. All six complete examples
+extracted from the JSON manual and skill also compiled and ran with that
+provider. The evaluator correctly described private constructors, erased generic
+leaves, and the retained value-Array Lua writer. No invented API was needed.
+
+J2 identified all six parser defects and specified anchored compiled-once
+matching, committed labels, fresh delayed folds, bounded callback arity,
+recognition-only guards, deferred path/location formatting, native test
+placement, and separate wide/deep/scaling evidence. Its exact location oracles
+were correct. It marked the unlisted JSON label spellings and depth-counting
+convention UNKNOWN; the JSON skill now includes the common labels and explicit
+container-depth rule. J1's schema-routing ambiguity was likewise clarified: the
+included recipes are ordinary use; designs beyond them add reflection guidance.
+
+Routing checks selected JSON for ordinary Titan serialization, JSON grammar
+maintenance, and native JSON mapping tests, with the relevant programmer/PEG/
+tester peers. The unrelated Python JSON configuration control did not select
+Titan skills. Modified skill frontmatter, Markdown fences, and JSON-relative
+links passed structural validation. These are scoped J1/J2 and routing results,
+not a re-evaluation of every older cartridge case.

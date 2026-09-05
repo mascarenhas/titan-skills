@@ -34,6 +34,8 @@ work crosses one of these boundaries:
   design.
 - **`titan-reflect`** — `titan.reflect`, runtime value inspection, nominal type queries,
   descriptors, and dynamic record/interface field access with GC safety.
+- **`titan-json`** — JSON encoding/decoding, explicit schema selection, null
+  preservation, record/union mapping, diagnostics, and JSON-library maintenance.
 
 The core `fs`, `io`, and `os` APIs below have synchronous-looking Titan calls
 that may suspend. Application-level use is covered here; load **`titan-async`**
@@ -1010,12 +1012,10 @@ cannot be re-exported. Circular imports are compile-time errors.
 Canonical short imports are:
 
 ```text
-coroutine uv async timer io fs net ssl url http os peg string test lua gc math iteration reflect
+coroutine uv async timer io fs net ssl url http os peg string test lua gc math iteration reflect sqlite3 json
 ```
 
-They mean the corresponding `titan.*` logical modules. 
-
-```
+They mean the corresponding `titan.*` logical modules.
 
 Lua always loads Titan standard modules by qualified name, such as
 `require "titan.fs"`; it does not replace Lua's own `os`, `io`, `math`, or
