@@ -227,14 +227,18 @@ columns do not count Unicode display width. Encoding/option errors have no
 input position. `path` uses `$`, quoted member names, and one-based Array
 indices. Syntax errors use `$` until a semantic path is available.
 
-The defaults are 16 MiB of text, 1,000,000 JSON values, and depth 32. The depth
-option accepts 1 through 64; byte/node options require positive integers.
+The defaults are 16 MiB of text, 1,000,000 JSON values, and depth 32. Depth,
+byte, and node options require positive integers.
 Depth counts nested JSON containers: scalar roots have depth zero, a root
 Array/object has depth one, and union envelopes count as objects. Node limits
 include every JSON value, including nulls, generated union tags, source positions
 later lost to nil, and ignored record members. Exceeding them raises `limit_exceeded`; invalid settings raise
-`invalid_option`. A reduced application PEG stack can independently fail before
-JSON's limit; do not relabel arbitrary engine/runtime errors as bad JSON.
+`invalid_option`. A configured depth budget does not guarantee that a document
+fits PEG matching-stack/capture-recursion or decoder/encoder traversal space.
+JSON never changes the shared PEG stack; do not relabel independent
+engine/runtime errors as bad JSON or a JSON limit failure. Applications own
+`peg.set_max_stack` policy for their workloads; nested sibling lists can need
+more matching-stack space than single-child chains at the same depth.
 Common grammar labels are `expected_value`, `expected_object_key`,
 `expected_colon`, `expected_array_separator`, `expected_object_separator`, and
 `trailing_input`; malformed UTF-8 and duplicate decoded names use `invalid_utf8`
@@ -250,8 +254,12 @@ sites, and compute `peg.line_column` once on error. A leftmost search or grammar
 compilation per decode is not the parser contract.
 
 Keep a nonnil private `Node` for each value and a `Member` per object entry.
-Use ordinary delayed folds with fresh accumulator factories and one child per
-reducer call. Never pass a whole wide list into one callback, hold a mutable
+Use ordinary delayed folds with fresh accumulator factories and one captured
+node per reducer call. Object keys and values are sibling captures, paired by
+fresh typed per-object state holding a pending key and duplicate-name set.
+Do not wrap each member value in another delayed function/group capture;
+that needlessly consumes a recursion layer at every object depth.
+Never pass a whole wide list into one callback, hold a mutable
 constant accumulator across calls, or eagerly finalize every child into retained
 match-time results. Local match-time budget guards return only success and
 update per-call state on committed paths. They do not yield or mutate state
@@ -280,7 +288,11 @@ use an isolated worktree/toolchain for concurrent experiments. Inspect the
 selected-case summary, not only exit status. Include null/default/sentinel
 matrix, constructor arity, sparse/private union tags, exact locations, numeric
 and Unicode boundaries, cycles/sharing, limits, wide folds, warmed scaling, and
-GC pressure. Test actual public behavior instead of inspecting generated JSON
+GC pressure. Exercise arrays and objects at 128 with the default PEG stack and
+mixed nesting with siblings at 128 with an explicitly configured stack, restoring
+the suite's default stack afterward. Cover configured depth rejection, the
+unchanged default depth 32, and independent PEG resource failures.
+Test actual public behavior instead of inspecting generated JSON
 module source from a Lua wrapper.
 
 Read deeper authority when changing a contract or resolving an edge case:
