@@ -834,7 +834,7 @@ to Busted (`spec/support/run_rock_tests.sh`).
   source before trusting a focused leaf run.
 - Run Busted from the repository root: driver/artifact paths are relative to
   that CWD.
-- Compiler specs deliberately disable persistent C-probe markers because
+- Compiler specs deliberately disable persistent C-probe results because
   fixtures reuse header pathnames. The Make Busted adapter exports
   `TITAN_PROBE_CACHE_DISABLE=1`; do the same for a direct invocation.
 - A canonical full run should not inherit ambient `ROCKS_TREE`,
