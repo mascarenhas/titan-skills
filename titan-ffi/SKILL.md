@@ -36,7 +36,7 @@ Before writing code, classify the job:
 
 | Need | Preferred mechanism |
 | --- | --- |
-| Call an ordinary C declaration in a header | `local c = foreign import "header.h"` |
+| Call an ordinary C declaration in a header | `foreign import "header.h"`, then `ffi.member` |
 | Store a fixed C object or buffer owned by Titan | `.new()` / `.new_array(...)`, normally with an explicit `owned` type when it escapes |
 | Pass a C callback implemented in a small C-only body | top-level restricted `foreign function` |
 | Pass an ordinary Titan closure to C | **unsupported**; redesign around a restricted foreign function or a narrowly justified C shim |
@@ -100,19 +100,21 @@ function-like macro, and the adjacent comment must say why it exists.
 
 ## `foreign import`: compile-time declarations, direct C calls
 
-A foreign import is a top-level declaration with a local alias:
+A foreign import is an unbound top-level directive. All its declarations join
+the reserved module-wide `ffi` namespace:
 
 ```titan
-local stdio = foreign import "stdio.h"
+foreign import "stdio.h"
 
 function hello(name: string): integer
-  return stdio.printf("hello, %s\n", name)
+  return ffi.printf("hello, %s\n", name)
 end
 ```
 
-The compiler preprocesses and parses the header at compile time. The generated
-translation unit includes the real header and emits a plain C call; there is no
-run-time reflection or libffi layer. `stdio` is a namespace, not a value.
+The compiler preprocesses and parses the module's ordered header environment at
+compile time. Generated C includes that environment and emits a plain C call;
+there is no run-time reflection or libffi layer. `ffi` is a namespace, not a
+value, and cannot be shadowed. The old bound import syntax is rejected.
 
 Header spelling controls resolution:
 
@@ -135,13 +137,22 @@ For a simple library name, `titanc app.main -lwidget` is convenient. CPP flags
 supply declarations; link flags or `-l` supply implementations. `titanc` takes
 dotted module names, not `.titan` paths.
 
-All foreign headers are hoisted into generated C in source order. The compiler
-validates the complete ordered preamble, including include guards, macro state,
-ordinary-name redeclarations, and tag definitions. Individual declaration
-extraction still preprocesses each header independently. If one header's
-public declarations or scalar macros depend on macro state from another, write
-one umbrella header and import it once. Do not try to coordinate such an API
-with several order-sensitive foreign namespaces.
+Every source module generates `A.ffi.h`. It includes explicit `.titan` source
+dependencies' `.ffi.h` files first, then direct foreign directives in module
+order. Folder modules use main directives followed by bytewise-sorted
+contributors. Ordinary Titan imports do not inherit C declarations. The compiler
+parses that combined environment once; include guards, macro state, ordinary
+redeclarations, and tag scopes follow normal C semantics. All final `ffi`
+names, macros, and complete types are visible even in earlier module-variable
+initializers. Ordinary Titan aliases and variables keep their earlier-import
+and earlier-variable restrictions.
+
+An explicit source dependency's C environment is transitive. Its private Titan
+members still require a direct explicit `.titan` import. Generated C includes
+`A.ffi.h` before `A.titan.h` when present; the latter contains foreign-function
+C declarations and eligible inline bodies. Both source-adjacent header paths are compiler-owned;
+do not author either file. Conflicts caused by combining a consumer's headers
+with imported source declarations may be reported by final C compilation.
 
 ### What an imported namespace contains
 
@@ -155,13 +166,13 @@ An imported namespace can contain:
   no ordinary value has the same name.
 
 The C type and value namespaces are distinct. `extern int count` gives a value
-`c.count`; it does not make `c.count` a type. Assigning directly to an imported
+`ffi.count`; it does not make `ffi.count` a type. Assigning directly to an imported
 C variable name is rejected. Mutation through an imported array element,
 pointer, or aggregate field is supported; use a C setter for a scalar global.
 
 C member/type selectors are contextual C identifiers. A header member, field,
 tag, or named parameter spelled `when`, `type`, `repeat`, or another Titan
-keyword remains available as `c.when`, `value.repeat`, and so on. This does not
+keyword remains available as `ffi.when`, `value.repeat`, and so on. This does not
 make that spelling legal as an ordinary Titan declaration name.
 
 ## Supported C types and where they may appear
@@ -186,14 +197,14 @@ Imported and contextual C types remain distinct C types:
 | `void` | contextual C call result and allocation validation |
 | `_Bool`, character and integer types | distinct C integer types |
 | `float`, `double`, `long double` | distinct C floating types |
-| `T *` | `*c.T`, or `*int` and similar portable pointers |
-| `const T *` | `const *c.T`, or a portable contextual pointee |
+| `T *` | `*ffi.T`, or `*int` and similar portable pointers |
+| `const T *` | `const *ffi.T`, or a portable contextual pointee |
 | C function pointer | imported typedef, or `foreign (P...) -> R` |
 | `T[N]` | fixed C array at a direct initialized local sink |
-| borrowed `T *` array view | `c.T[]` at a direct initialized local sink |
+| borrowed `T *` array view | `ffi.T[]` at a direct initialized local sink |
 | `struct` / `union` | imported typedef or eligible file-scope tag name |
-| one Titan-GC-owned object | `owned *c.T` |
-| counted Titan-GC-owned array | `owned c.T[]` |
+| one Titan-GC-owned object | `owned *ffi.T` |
+| counted Titan-GC-owned array | `owned ffi.T[]` |
 | Lua internal value | exact imported `TValue` from `titan/ffi.h` |
 
 `*T` requires a C pointee. `*integer` and pointers to Titan records, Arrays, or
@@ -211,11 +222,11 @@ definition happens to resolve to a portable primitive or function signature.
 This is wrong:
 
 ```text
-local c = foreign import "widget.h"
+foreign import "widget.h"
 
 -- WRONG: a public compiled-module signature leaks a header-local C type.
-function raw_widget(): *c.widget
-  return c.widget_current()
+function raw_widget(): *ffi.widget
+  return ffi.widget_current()
 end
 ```
 
@@ -236,7 +247,7 @@ void widget_close(widget *w);
 ```
 
 ```titan
-local c = foreign import "widget.h"
+foreign import "widget.h"
 
 record Info
   bytes: integer
@@ -244,14 +255,14 @@ record Info
 end
 
 function inspect(name: string): Info?
-  local handle = c.widget_open(name)
+  local handle = ffi.widget_open(name)
   if not handle then return nil end
-  defer c.widget_close(handle)
+  defer ffi.widget_close(handle)
 
   -- Direct `.new()` inference for a complete struct selects zeroed automatic
   -- C storage. Passing the mutable local to `widget_info *` takes its address.
-  local raw = c.widget_info.new()
-  if c.widget_get_info(handle, raw) ~= 0 then return nil end
+  local raw = ffi.widget_info.new()
+  if ffi.widget_get_info(handle, raw) ~= 0 then return nil end
   return Info.new(raw.bytes, raw.ready ~= 0)
 end
 ```
@@ -268,7 +279,7 @@ array, or function cannot occupy such a slot. The same rule
 controls C types under `T?`. A pointer being boxable does **not** make its
 pointee type dynamically verifiable after it crosses through `value`.
 
-`c.T.sizeof` and `c.T.alignof`, as well as contextual primitive pseudo-members,
+`ffi.T.sizeof` and `ffi.T.alignof`, as well as contextual primitive pseudo-members,
 produce Titan `integer` after a checked conversion from the target's exact
 `size_t`:
 
@@ -289,9 +300,9 @@ Titan binding constness is distinct from C pointee constness and from a const
 Array qualifier:
 
 ```text
-const pointer: *c.Item = acquire()  -- binding is const; pointee may be mutable
-local view: const *c.Item           -- mutable binding, pointer to const C Item
-const { *c.Item }                   -- const Titan Array of mutable C pointers
+const pointer: *ffi.Item = acquire()  -- binding is const; pointee may be mutable
+local view: const *ffi.Item           -- mutable binding, pointer to const C Item
+const { *ffi.Item }                   -- const Titan Array of mutable C pointers
 ```
 
 A const local whose value is inline C struct/union or fixed-array storage
@@ -316,10 +327,10 @@ int clamp_int(int value, int low, int high);
 ```
 
 ```titan
-local c = foreign import "api.h"
+foreign import "api.h"
 
 function clamp(input: integer): integer
-  return c.clamp_int {
+  return ffi.clamp_int {
     high = 100,
     value = input,
     low = 0,
@@ -339,12 +350,12 @@ cannot forward a Titan `...` run into C `...`. Choose exact C types explicitly
 for numeric variadic arguments:
 
 ```titan
-local stdio = foreign import "stdio.h"
+foreign import "stdio.h"
 
 local function print_count(n: integer)
   -- `%lld` requires the matching promoted C type; a bare Titan integer uses
   -- the configured lua_Integer type, which must not be guessed from the host.
-  stdio.printf("%lld\n", n as long long)
+  ffi.printf("%lld\n", n as long long)
 end
 ```
 
@@ -360,11 +371,11 @@ int apply(callback fn, int value);
 ```
 
 ```titan
-local c = foreign import "callbacks.h"
+foreign import "callbacks.h"
 
 local function apply_one(): integer
-  local cb: c.callback = c.add_one
-  return c.apply(cb, 41)
+  local cb: ffi.callback = ffi.add_one
+  return ffi.apply(cb, 41)
 end
 ```
 
@@ -384,18 +395,18 @@ In ordinary code, prefer the implicit checked conversion supplied by the
 receiving type:
 
 ```titan
-local c = foreign import "api.h"
+foreign import "api.h"
 
 function current_count(): integer
-  return c.current_count()       -- checked C integer -> Titan integer
+  return ffi.current_count()       -- checked C integer -> Titan integer
 end
 
 local function set_count(n: integer)
-  c.set_count(n)                 -- checked Titan integer -> C parameter type
+  ffi.set_count(n)                 -- checked Titan integer -> C parameter type
 end
 ```
 
-Do not mechanically write `as integer` on every C result or `as c.api_int` on every
+Do not mechanically write `as integer` on every C result or `as ffi.api_int` on every
 C argument. Use `as` when it communicates a real choice:
 
 * select Titan semantics before an operator;
@@ -467,11 +478,11 @@ A raw C pointer is the dangerous exception. Object and function pointers
 box as lightuserdata, by implicit coercion or written `as value`, but the
 carrier has no pointee or C-signature tag. Therefore:
 
-* implicit `value -> *c.T` is rejected;
+* implicit `value -> *ffi.T` is rejected;
 * typed Array/Map reads that would need to establish a raw pointer are rejected;
 * Lua-callable results cannot dynamically establish a raw pointer;
-* `v as *c.T` is allowed only as an explicit unsafe lightuserdata/nil
-  assertion, and `v is *c.T` can test only that outer representation—not the
+* `v as *ffi.T` is allowed only as an explicit unsafe lightuserdata/nil
+  assertion, and `v is *ffi.T` can test only that outer representation—not the
   address, alignment, lifetime, or pointee.
 
 Do not use `value` as an untyped pointer registry.
@@ -483,13 +494,13 @@ model that as inheritance. A destination pointer type must be explicit, and the
 configured C compiler validates that exact directional cast:
 
 ```titan
-local uv = foreign import "uv.h"
+foreign import "uv.h"
 
-local function close_tcp(tcp: *uv.uv_tcp_t)
-  uv.uv_close(tcp, nil)       -- parameter supplies *uv_handle_t
+local function close_tcp(tcp: *ffi.uv_tcp_t)
+  ffi.uv_close(tcp, nil)       -- parameter supplies *uv_handle_t
 end
 
-local function handle_of(tcp: *uv.uv_tcp_t): *uv.uv_handle_t
+local function handle_of(tcp: *ffi.uv_tcp_t): *ffi.uv_handle_t
   return tcp                  -- return type supplies the destination
 end
 ```
@@ -503,13 +514,13 @@ cast. C function pointers cross to or from `void *` only through an explicit
 written portability cast. Direct object-pointer/function-pointer crossings
 remain rejected, and no global "compatible pointer" relation is created.
 
-With a header-defined `c.callback`, the shape is:
+With a header-defined `ffi.callback`, the shape is:
 
 ```text
 local object: *int = opaque_void             -- ordinary typed sink
 local bytes = opaque_void as *char           -- character case is written
 local erased = callback as *void             -- written portability cast
-local recovered = erased as c.callback       -- written portability cast
+local recovered = erased as ffi.callback       -- written portability cast
 ```
 
 The round trip preserves only the C address representation. It does not root a
@@ -525,13 +536,13 @@ outer conversion. An optional owner cannot both force `Owner? -> Owner` and
 then decay `Owner -> *T` in one C argument. Make the intermediate owner typed:
 
 ```titan
-local c = foreign import "consumer.h"
+foreign import "consumer.h"
 local type IntOwner = owned *int
 
 local function consume(maybe: IntOwner?)
   if maybe ~= nil then
     local owner: IntOwner = maybe  -- ordinary checked Option force
-    c.consume_int(owner)           -- owner-to-pointer adjustment
+    ffi.consume_int(owner)           -- owner-to-pointer adjustment
   end
 end
 ```
@@ -550,10 +561,10 @@ Casting a C `char *` or `void *` to `string` checks non-NULL and copies through
 the first NUL:
 
 ```titan
-local c = foreign import "stdlib.h"
+foreign import "stdlib.h"
 
 function path(): string?
-  local p = c.getenv("PATH")
+  local p = ffi.getenv("PATH")
   if not p then return nil end
   return p as string
 end
@@ -566,12 +577,12 @@ when it really points to a NUL-terminated byte sequence.
 Pointers are nullable and truthy by nullness:
 
 ```titan
-local stdio = foreign import "stdio.h"
+foreign import "stdio.h"
 
 function exists(path: string): boolean
-  local file = stdio.fopen(path, "r")
+  local file = ffi.fopen(path, "r")
   if not file then return false end
-  defer stdio.fclose(file)
+  defer ffi.fclose(file)
   return true
 end
 ```
@@ -624,23 +635,23 @@ For a complete non-GC-bearing struct or union:
 
 | Direct declaration | Representation |
 | --- | --- |
-| `local x = c.T.new()` | automatic block-local `c.T` |
-| `local x: c.T = c.T.new()` | automatic block-local `c.T` |
-| `local x: owned *c.T = c.T.new()` | GC-owned inline C object |
-| `local x: *c.T = c.T.new()` | pointer into a hidden frame-rooted owner |
-| call used anywhere other than a direct local initializer | `owned *c.T` |
+| `local x = ffi.T.new()` | automatic block-local `ffi.T` |
+| `local x: ffi.T = ffi.T.new()` | automatic block-local `ffi.T` |
+| `local x: owned *ffi.T = ffi.T.new()` | GC-owned inline C object |
+| `local x: *ffi.T = ffi.T.new()` | pointer into a hidden frame-rooted owner |
+| call used anywhere other than a direct local initializer | `owned *ffi.T` |
 
 For a positive literal array count:
 
 ```titan
-local c = foreign import "geometry.h"
+foreign import "geometry.h"
 
 local function examples(count: integer)
-  local fixed = c.Point.new_array(4)          -- c.Point[4], automatic
-  local exact: c.Point[4] = c.Point.new_array(4)
-  local view: c.Point[] = c.Point.new_array(4) -- uncounted borrowed pointer view
-  local pointer: *c.Point = c.Point.new_array(4) -- hidden rooted owner
-  local owner: owned c.Point[] = c.Point.new_array(count)
+  local fixed = ffi.Point.new_array(4)          -- ffi.Point[4], automatic
+  local exact: ffi.Point[4] = ffi.Point.new_array(4)
+  local view: ffi.Point[] = ffi.Point.new_array(4) -- uncounted borrowed pointer view
+  local pointer: *ffi.Point = ffi.Point.new_array(4) -- hidden rooted owner
+  local owner: owned ffi.Point[] = ffi.Point.new_array(count)
 
   fixed[0].x = 10
   local fixed_length = #fixed                 -- 4
@@ -736,11 +747,11 @@ typedef struct Packet {
 ```
 
 ```titan
-local c = foreign import "packet.h"
+foreign import "packet.h"
 
 local function packet(n: integer)
-  local owner: owned *c.Packet = c.Packet.new(n)
-  owner.payload[0] = 1 as c.byte
+  local owner: owned *ffi.Packet = ffi.Packet.new(n)
+  owner.payload[0] = 1 as ffi.byte
   local capacity = #owner.payload
 end
 ```
@@ -749,12 +760,12 @@ A nonnegative literal may select aligned automatic backing; a dynamic count or
 explicit owner/pointer selects one owner userdata. Negative counts and
 `size_t` extent overflow are checked. `#parent.field` and checked indexing work
 while the original automatic/owned parent carries count provenance. Converting
-the parent to raw `*c.Packet` erases it. Titan never constructs an array of
+the parent to raw `*ffi.Packet` erases it. Titan never constructs an array of
 variably extended structs.
 
 ## Structs, unions, fields, and assignment storage
 
-A named file-scope `struct Tag` or `union Tag` is available as `c.Tag` even when
+A named file-scope `struct Tag` or `union Tag` is available as `ffi.Tag` even when
 the header has no typedef. Titan renders the exact `struct Tag`/`union Tag`
 spelling and does not invent a typedef. A real same-named typedef takes
 precedence. Anonymous aggregates, enum tags, and prototype-only tags do not get
@@ -766,10 +777,10 @@ Complete aggregate fields are accessed with `.` in Titan. The compiler emits C
 `.` for a value and `->` for a pointer or owner:
 
 ```titan
-local c = foreign import "point.h"
+foreign import "point.h"
 
 local function sum(): integer
-  local p = c.Point.new()
+  local p = ffi.Point.new()
   p.x = 10
   p.y = 20
   return p.x + p.y
@@ -788,9 +799,9 @@ nested fields/elements rooted in those forms work. A call/cast temporary does
 not:
 
 ```text
-local p: c.Point = c.make_point()
+local p: ffi.Point = ffi.make_point()
 p.x = 1                  -- valid: persistent local
-c.make_point().x = 2     -- rejected: by-value aggregate temporary
+ffi.make_point().x = 2     -- rejected: by-value aggregate temporary
 ```
 
 Reading a temporary is valid. Extracting a pointer field from a temporary and
@@ -833,8 +844,8 @@ implementation-defined right shift. Titan integer arithmetic uses Lua-faithful
 semantics instead. Choose before the operation:
 
 ```text
-local titan_total = (c.total() as integer) + 1  -- Titan integer `+`
-local c_total = c.total() + 1                   -- C-mode `+`, then later conversion
+local titan_total = (ffi.total() as integer) + 1  -- Titan integer `+`
+local c_total = ffi.total() + 1                   -- C-mode `+`, then later conversion
 ```
 
 Mixed Titan `integer`/`float` operands enter C mode as the configured
@@ -883,10 +894,10 @@ boundary converts it. Only an enumerator-to-its-own-enum adjustment is implicit.
 Use imported names rather than copying platform constants:
 
 ```titan
-local uv = foreign import "uv.h"
+foreign import "uv.h"
 
 local function cancelled(status: int): boolean
-  return status == uv.UV_ECANCELED
+  return status == ffi.UV_ECANCELED
 end
 ```
 
@@ -915,17 +926,17 @@ void sort_items(Item *items, size_t count, item_compare compare);
 ```
 
 ```titan
-local c = foreign import "sort_api.h"
+foreign import "sort_api.h"
 
-foreign function compare_items(left: const *c.Item,
-                               right: const *c.Item): c.item_order
+foreign function compare_items(left: const *ffi.Item,
+                               right: const *ffi.Item): ffi.item_order
   if left.key < right.key then return -1 end
   if left.key > right.key then return 1 end
   return 0
 end
 
-local function sort(items: owned c.Item[], count: c.size_t)
-  c.sort_items(items, count, compare_items)
+local function sort(items: owned ffi.Item[], count: ffi.size_t)
+  ffi.sort_items(items, count, compare_items)
 end
 ```
 
@@ -937,8 +948,8 @@ no Titan callable adjustment.
 The source-written callback-pointer type is already a pointer:
 
 ```text
-local type Compare = foreign (const *c.Item, const *c.Item) -> c.item_order
-local type Notify = foreign (*c.Item) -> ()
+local type Compare = foreign (const *ffi.Item, const *ffi.Item) -> ffi.item_order
+local type Notify = foreign (*ffi.Item) -> ()
 
 local callback: Compare = compare_items
 ```
@@ -953,11 +964,11 @@ source imports, and binary imports. Physical co-residence in one provider does
 not make it public. Do not design an installed API around a consumer reaching
 another module's foreign function.
 
-A module with foreign functions also owns one compiler-generated source-adjacent
-header ending in `.titan.h`; a folder module uses the canonical main's path.
-The compiler prepares these headers before compiling source peers so direct
-source consumers can sort independently. The path is reserved and is not an
-installed/binary interface—never place an author-written file there.
+Each source module owns a compiler-generated source-adjacent `.ffi.h` for the
+ordered C environment. A module defining foreign functions also owns `.titan.h`
+for their prototypes and eligible inline bodies. A folder module uses its
+canonical main's path. The compiler prepares required headers before compiling
+source peers. These paths are reserved and are not installed/binary interfaces.
 
 ## Signature and body limits
 
@@ -1007,8 +1018,8 @@ An ordinary Titan function or capturing lambda is never adapted to C:
 ```text
 -- WRONG: C cannot call this closure ABI.
 local delta = 10
-local callback = function (x: c.item_order): c.item_order return x + delta end
-c.install(callback)
+local callback = function (x: ffi.item_order): ffi.item_order return x + delta end
+ffi.install(callback)
 ```
 
 Use a restricted `foreign function` only when the callback can operate entirely
@@ -1018,7 +1029,7 @@ until the C library guarantees that no callback can occur, and do not assume a
 Titan record can be reconstructed portably from an arbitrary `void *`.
 
 When a callback needs Lua, give its foreign signature an explicit
-`*lua.lua_State` from the C protocol. A foreign function has no generated
+`*ffi.lua_State` from the C protocol. A foreign function has no generated
 Titan error frame or GC-root frame. A Lua API call that longjmps follows that
 API's C contract; Titan cannot run `defer` or translate it to `raise` inside the
 foreign body.
@@ -1304,16 +1315,16 @@ on their entry frame's `LUA_MINSTACK` reserve:
 This exact helper from `titan/lua.titan` is the model:
 
 ```titan
-local lua = foreign import "lua.h"
-local ffi = foreign import "titan/ffi.h"
+foreign import "lua.h"
+foreign import "titan/ffi.h"
 
 local function global_value(name: string): value
-  local top = lua.lua_gettop(L)
-  defer lua.lua_settop(L, top)
-  if lua.lua_checkstack(L, 1) == 0 then
+  local top = ffi.lua_gettop(L)
+  defer ffi.lua_settop(L, top)
+  if ffi.lua_checkstack(L, 1) == 0 then
     raise "cannot reserve Lua stack for global lookup"
   end
-  lua.lua_getglobal(L, name)
+  ffi.lua_getglobal(L, name)
   return ffi.lua_totvalue(L, -1)
 end
 ```
@@ -1327,24 +1338,24 @@ pops on normal paths while leaving exceptional paths unbalanced.
 The model for compiling a chunk is similarly explicit:
 
 ```text
-local top = lua.lua_gettop(L)
-defer lua.lua_settop(L, top)
-if lua.lua_checkstack(L, 2) == 0 then
+local top = ffi.lua_gettop(L)
+defer ffi.lua_settop(L, top)
+if ffi.lua_checkstack(L, 2) == 0 then
   raise "cannot reserve Lua stack for chunk loading"
 end
 
-local status = lual.luaL_loadbufferx(
-  L, chunk, #chunk as cstddef.size_t, chunkname, nil)
-if status ~= lua.LUA_OK then
+local status = ffi.luaL_loadbufferx(
+  L, chunk, #chunk as ffi.size_t, chunkname, nil)
+if status ~= ffi.LUA_OK then
   local failure: value = ffi.lua_totvalue(L, -1)
   raise failure
 end
 
 if env ~= nil then
   ffi.lua_pushtvalue(L, env)
-  if not lua.lua_setupvalue(L, -2, 1) then
+  if not ffi.lua_setupvalue(L, -2, 1) then
     -- On failure lua_setupvalue leaves the supplied value on the stack.
-    lua.lua_settop(L, -2)
+    ffi.lua_settop(L, -2)
   end
 end
 
@@ -1431,7 +1442,7 @@ Classify every native value before coding:
 | --- | --- |
 | Titan string passed to C | Titan GC owner; borrowed immutable byte pointer for call only |
 | raw C pointer returned by C | external API-defined; usually borrowed or paired with exact free/close |
-| automatic `c.T` / `c.T[N]` | current C block; no escape analysis |
+| automatic `ffi.T` / `ffi.T[N]` | current C block; no escape analysis |
 | pointer selected from direct local `.new()` | hidden owner rooted for current function frame only |
 | explicit `owned *T` / `owned T[]` | Titan full userdata reachable through ordinary GC roots; inline bytes only |
 | pointer into an owner | borrowed; owner must remain reachable |
@@ -1444,9 +1455,9 @@ Classify every native value before coding:
 Acquire, then install cleanup immediately:
 
 ```text
-local handle = c.open_resource()
+local handle = ffi.open_resource()
 if not handle then raise "open_resource failed" end
-defer c.close_resource(handle)
+defer ffi.close_resource(handle)
 ```
 
 Multiple defers run LIFO on fallthrough, return, break, or error. Use explicit
@@ -1467,7 +1478,7 @@ authoritative state query, and never call a native close twice.
 
 ### Public raw C type -> private native state plus public Titan value
 
-**Wrong:** export `*c.Handle`, `c.size_t`, or `owned *c.Context`; each graph
+**Wrong:** export `*ffi.Handle`, `ffi.size_t`, or `owned *ffi.Context`; each graph
 depends on a foreign header namespace.
 
 **Right:** keep it in a local function/private eligible record, expose a
@@ -1487,10 +1498,10 @@ Remember that implicit projection is strict while written `as` is dynamic.
 
 ### Redundant casts -> destination-driven conversion
 
-**Wrong:** `return c.count() as integer` when the declared return already is
-`integer`, or `c.set(n as c.api_int)` when its header typedef supplies `c.api_int`.
+**Wrong:** `return ffi.count() as integer` when the declared return already is
+`integer`, or `ffi.set(n as ffi.api_int)` when its header typedef supplies `ffi.api_int`.
 
-**Right:** `return c.count()` and `c.set(n)`. Keep `as` when choosing C versus
+**Right:** `return ffi.count()` and `ffi.set(n)`. Keep `as` when choosing C versus
 Titan operator behavior, numeric variadic ABI, or an unsafe explicit edge.
 
 ### Lua C API for loading -> `titan.lua`
@@ -1529,10 +1540,10 @@ the complete C borrow, and derive/reacquire the pointer when needed.
 
 ### Hidden backing escapes -> explicit owner
 
-**Wrong:** `local p: *c.T = c.T.new()` followed by returning `p` or asking C to
+**Wrong:** `local p: *ffi.T = ffi.T.new()` followed by returning `p` or asking C to
 retain it.
 
-**Right:** keep `local owner: owned *c.T = c.T.new()` in a traced long-lived
+**Right:** keep `local owner: owned *ffi.T = ffi.T.new()` in a traced long-lived
 owner and pass its payload pointer only while that owner remains reachable.
 
 ### Owner mistaken for destructor -> explicit release
@@ -1640,9 +1651,9 @@ For an FFI change:
 
 1. Read the actual header under the active feature macros. Identify ownership,
    nullability, callback lifetime, thread/yield behavior, and exact release API.
-2. Put imports before module-variable initializers that use them. Remember that
-   module-variable frontiers see only earlier imports; function bodies see the
-   completed declaration environment.
+2. Order foreign directives for the intended C preprocessing environment;
+   `ffi` itself is available throughout the module. Put ordinary Titan imports
+   and prerequisite module variables before initializers that use them.
 3. Sketch the public Titan API first. For each public C type, prove recursively
    that its graph is built only from contextual primitives and portable
    pointer/function/owner constructors; keep every imported type private.
@@ -1780,7 +1791,7 @@ the out pointer; installs `defer client_close` immediately after successful
 open; converts to a public Titan record; handles NULL/status; no unnecessary
 cast at already typed return/argument sinks.
 
-**Fail signals:** public C type, `local raw: c.Info` without initializer,
+**Fail signals:** public C type, `local raw: ffi.Info` without initializer,
 `value` pointer storage, missing close, or hand-written forwarding C.
 
 ## Eval 2 — Pointer lifetime review
@@ -1811,9 +1822,9 @@ allocate owners, catch/defer, or receive implicit `L`.
 
 ## Eval 4 — Automatic versus owned arrays
 
-**Prompt:** Explain the types/lifetimes of `local a = c.Point.new_array(4)`,
-`local b: c.Point[] = ...`, `local p: *c.Point = ...`, and
-`local o: owned c.Point[] = c.Point.new_array(n)`. Which may be returned to C
+**Prompt:** Explain the types/lifetimes of `local a = ffi.Point.new_array(4)`,
+`local b: ffi.Point[] = ...`, `local p: *ffi.Point = ...`, and
+`local o: owned ffi.Point[] = ffi.Point.new_array(n)`. Which may be returned to C
 for later use?
 
 **Pass criteria:** `a` is fixed automatic `[4]`, checked and length-aware; `b`
@@ -1824,7 +1835,7 @@ borrow. Notes 0-based indexing and `#` only for fixed/counted forms.
 
 ## Eval 5 — C versus Titan arithmetic
 
-**Prompt:** Review `(c.read_i32() + 1) / 3` where the author expects Titan
+**Prompt:** Review `(ffi.read_i32() + 1) / 3` where the author expects Titan
 wrapping addition and floor division. Also review `printf("%d", n)` for Titan
 `integer n`.
 
@@ -1843,8 +1854,9 @@ An agent copies all constants and writes a large C shim.
 **Pass criteria:** uses supported enum/object-like members and public field
 spelling directly; leaves carrier/range checks to the target compiler; wraps
 only `LIB_INIT` in one tiny namespaced author-owned inline C function if no
-ordinary API exists; imports one umbrella header when macro state is coupled;
-flags function-like macros and `__int128` enum carriers as unsupported.
+ordinary API exists; orders foreign directives so the combined C environment
+has the intended macro state; flags function-like macros and `__int128` enum
+carriers as unsupported.
 
 ## Eval 7 — `value` boundary precision
 
@@ -1852,7 +1864,7 @@ flags function-like macros and `__int128` enum carriers as unsupported.
 metatable that supplies `__index`, `__newindex`, `__len`, and `__eq`. Write a
 Titan dynamic loader, explain which metamethods affect typed Map operations and
 comparisons, and explain strict versus dynamic conversions. The draft uses
-implicit `value -> *c.Context` for a lightuserdata field and assumes two raw
+implicit `value -> *ffi.Context` for a lightuserdata field and assumes two raw
 `value` operands invoke table `__eq`.
 
 **Pass criteria:** uses `titan.lua.require`, casts once to `{string: value}`,

@@ -1024,8 +1024,11 @@ languages (`import "app.model"`, `require "app.model"`).
 
 Most declarations and all function/method bodies are placement-independent.
 A module-variable declaration is the important frontier: its annotation and
-initializer see only earlier imports and earlier module variables, although
-nominal types, aliases, and callable declarations are known module-wide. Its
+initializer see only earlier ordinary Titan imports and earlier module variables,
+although nominal types, aliases, and callable declarations are known module-wide.
+Unbound `foreign import "header.h"` directives populate the reserved `ffi`
+namespace from the complete ordered module C environment; its declarations and
+macros are available throughout the module, including earlier initializers. Its
 initializer must be a compile-time constant. Put computed one-time work in the
 single final root `do ... end` initializer.
 
