@@ -919,6 +919,12 @@ owned `.c`, `.o`, `.so`, `.a`, executable, and dSYM outputs. They must not
 invalidate shared Make artifacts. Set `helpers.verbose = true` only when the
 owning debugging workflow calls for retained generated C and printed commands.
 
+For incremental native-binding regressions, use separate consumers of one DSO:
+a direct import alias uses a handle, while an indirectly exposed nominal owner
+uses global lookup. Execute an owner method after unchanged warm reuse and
+separate object/final-link steps; also prove that incompatible provider changes
+and direct-versus-dynamic binding changes still reject cached objects.
+
 Parser/checker ASTs become decorated and sometimes self-referential. Parser
 specs compare only an expected subset. Do not set luassert's table depth to
 unlimited around a checked AST; a failing diff can hang.
