@@ -19,6 +19,24 @@ manual merely to answer the cartridge's advertised domain.
 
 ## Cartridge cases
 
+### P0 — current grammar and foreign boundary (`titan-programmer`, `titan-ffi`)
+
+Ask for a generic function with a callable parameter, a two-variant union and
+case, a raw C pointer alias shared through an explicit source import, and an
+owned alias around that pointer. Require `function(...): results`, `<|...|>`,
+`none()`/`some(T)`, and `when some(binding) then`. The raw alias is
+`foreign type Pointer = *int` with no `local`; the owner is
+`type Owner = owned Pointer`. It must not emit an owned C typedef or qualify a
+foreign type with `ffi.`. Require `foreign int.new_array(4)` and distinguish
+inferred automatic arrays from explicit owners, without a size threshold.
+
+Review a module that shadows `ffi`, declares a member with a reserved-word
+name, and omits a mutable module-variable initializer. Require the builtin's
+readonly/shadowable distinction, `M.member` / body-local `M.Type`, an explicit
+nil-admitting module-variable annotation, and no `L`/`M`/owned-local privilege
+inside a foreign function. Do not change runtime API contracts during syntax
+migration.
+
 ### P1 — language basics (`titan-programmer` only)
 
 Review a function that unnecessarily casts `string?` after a presence test,
@@ -76,7 +94,8 @@ mutable record field, and assumes mutable `{T}` implicitly converts to
   qualifier checks, and the lack of a const Map form;
 - mandatory expression lists for const locals versus omitted mutable locals
   only with explicit nil-bearing types and compiler-supplied nil values;
-- initializer-less const module variables, including the owning root
+- initializer-less mutable/const module variables with explicit nil-admitting
+  types; for const variables, the owning root
   initializer's nested-block authority and the lack of authority in nested
   callables or importers;
 - shallow const record fields and explicit Lua write rejection;
@@ -192,7 +211,7 @@ invented convenience APIs.
 
 Require exact examples and review for foreign imports, automatic and owned C
 storage, contextual pointer conversion, one source-defined foreign callback,
-the built-in `L`, and `titan.lua.load`. The answer must distinguish the
+the built-ins `L` and `M`, and `titan.lua.load`. The answer must distinguish the
 exportable contextual primitive/pointer/function/owner closure from imported
 header-dependent C types that remain private, root every retained owner,
 distinguish public call-only string borrowing from the trusted standard-library
@@ -220,13 +239,13 @@ record with const and optional fields, then preserves the null tail of
 contains a local field. Require the actual `decode(source, target?, ...options)`
 shape, a fully qualified initialized nominal target, ordinary typed result
 projection, a fresh nonnil reference sentinel reused for both calls, and
-public `new` construction. Reject `decode<T>`, implicit sentinels, allocate-then-
+public `new` construction. Reject `decode<|T|>`, implicit sentinels, allocate-then-
 set construction, and false-defaulting missing required boolean fields.
 
 Ask separately for a const integer Array descriptor. Require the actual
 `ArrayType.new(constness, element)` argument order, the canonical constness
 variant, and the documented construction-time Lua-writer policy for mutable
-results. A follow-up asking for `Box<Person>` reconstruction must acknowledge
+results. A follow-up asking for `Box<|Person|>` reconstruction must acknowledge
 reflection's erased leaves instead of promising specialization validation.
 
 ### J2 — JSON errors and PEG maintenance (`titan-programmer` + `titan-json` + `titan-pegs` + `titan-tester`)

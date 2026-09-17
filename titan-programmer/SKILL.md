@@ -145,6 +145,16 @@ A local enters scope only after its whole declaration, so `local x = x + 1`
 reads an outer `x`. `return` must be the final statement of its current block.
 Only a call may be used as an expression statement.
 
+Type words `boolean`, `integer`, `float`, `string`, and `value` are contextual
+identifiers. Top-level declarations and members accept `AnyName`, including
+reserved words; locals/parameters use nonreserved `Name`. Ordinary functions,
+methods, lambdas, and the module initializer bind readonly `L` (current Lua
+state) and `M` (current module). `M.member` and body-local types `M.Type` select
+module declarations despite local/generic shadows, including keyword-named
+members; `M as foreign *Udata` exposes the borrowed module pointer. Foreign
+functions receive neither builtin. The readonly builtin `ffi` may be shadowed
+by ordinary declarations.
+
 ## The type vocabulary
 
 | Purpose | Titan spelling |
@@ -155,13 +165,13 @@ Only a call may be used as an expression statement.
 | optional value | `T?` |
 | mutable / const / maybe-const Array | `{T}` / `const { T }` / `const? { T }` |
 | Map | `{K: V}` |
-| function | `(A, B) -> R`, `() -> ()`, `(A) -> (R1, R2)` |
-| variadic input | `(...: T) -> R` or fixed prefix plus `...: T` |
-| flexible results | `() -> (...: T)` or `() -> (R, ...: T)` |
+| function | `function (A, B): (R)`, `function (): ()`, `function (A): (R1, R2)` |
+| variadic input | `function (...: T): (R)` or fixed prefix plus `...: T` |
+| flexible results | `function (): (...: T)` or `function (): (R, ...: T)` |
 | transparent alias | `type Name = T` |
 | nominal data | `record R ... end`, `union U ... end` |
 | nominal behavioral view | `interface I ... end` |
-| generics | `Box<T>`, `function id<T>(x: T): T` |
+| generics | `Box<\|T\|>`, `function id<\|T\|>(x: T): T` |
 
 `integer` and `float` are distinct static types. Strings are immutable byte
 strings, not implicit Unicode text. Type equality is structural for basic,
@@ -172,46 +182,61 @@ nominal by fully qualified declaration identity. A type alias is transparent:
 A generic owner or named callable may declare parameters:
 
 ```titan
-record Pair<T, U>
+record Pair<|T, U|>
   first: T
   second: U
 end
 
-function id<T>(item: T): T
+function id<|T|>(item: T): T
   return item
 end
 
 function use_generics(): integer
-  local pair = Pair.new(1, "one")          -- Pair<integer, string>
-  return id<integer>(pair.first)
+  local pair = Pair.new(1, "one")          -- Pair<|integer, string|>
+  return id<|integer|>(pair.first)
 end
 ```
 
 Calls normally infer a complete argument list locally. Explicit lists are
-all-or-none. Owner arguments attach to the owner (`Pair<integer,
-string>.new(...)`), not to `new`. Generics are invariant and erased; a generic
+all-or-none. Owner arguments attach to the owner (`Pair<|integer,
+string|>.new(...)`), not to `new`. Generics are invariant and erased; a generic
 body is checked once. A bare generic owner in an ordinary type position means
 the all-`value` application, not a wildcard.
 
-### Contextual portable C types are a specialist boundary
+### Foreign types and owned storage are a specialist boundary
 
-In C type context, Titan directly recognizes `void`, `bool`, `char`,
-`signed char`, `unsigned char`, `short`, `unsigned short`, `int`,
-`unsigned int`, `long`, `unsigned long`, `long long`, `unsigned long long`,
-`foreign float`, `double`, and `long double`. These are target-profile C types,
-not aliases for Titan's scalar types, and need no `titan/ffi.h` import.
-`foreign float` is the C type; unqualified `float` remains Titan's numeric type.
-The newly used words are not lexer keywords: ordinary single-word aliases and
-value bindings retain lookup precedence, while records, unions, and Interfaces
-cannot take a contextual component name such as `signed` or `unsigned`.
+Titan types and raw foreign types have separate syntax and name resolution.
+Use `foreign int`, `foreign float`, `foreign *Item`, and
+`foreign function(*void): void` in ordinary annotations/casts. Within a foreign
+signature/type, names are unqualified: no `ffi.` or module prefix. Primitive
+C words remain identifiers elsewhere, so Titan names do not reserve them.
+Nested pointer/array/callback constructors are grouped, as `foreign *(*int)`.
 
-A compiled public interface may recursively use those primitives, portable
-pointers/const pointers, structural `foreign (...) -> ...` function pointers,
-and eligible `owned` forms. A type imported from a header remains module-local
-even when its underlying C declaration is a primitive. Header aggregates,
-arrays, enums, and imported function-pointer typedefs are likewise not public
-metadata. Load **`titan-ffi`** for allocation pseudo-members, pointer and owner
-lifetimes, casts, callbacks, Lua representation, and the exact export boundary.
+`foreign type Name = foreigntype` creates an always-local raw C typedef, with no
+`local` modifier. It is emitted in the generated `.ffi.h`; explicit source
+imports inherit its unqualified name through transitive C headers. Ordinary
+imports do not. Names obey real C collision rules, including the native SDK.
+Ordinary `type` aliases may contain raw C components inside Titan structures,
+but cannot alias a direct raw C type just by adding parentheses.
+
+`owned foreigntype` is a Titan constructor. Its operand must resolve to a C
+pointer or array, including through an alias: `owned *Item`, `owned Item[]`,
+and `type Owner = owned *Item` are valid. Ownership does not belong in foreign
+alias RHS types, foreign signatures, or local declarations in foreign bodies.
+An outer `const` on the resolved operand is rejected: Titan cannot allocate
+and initialize const owned storage together.
+
+Allocation/layout expressions spell `foreign T.new()`, `.new_array(count)`,
+`.sizeof`, and `.alignof`; type operations never come from term lookup. Positive
+literal or eligible integer macro counts can infer fixed automatic C arrays at
+a direct local sink. An explicit owned type requests GC-owned storage. Written
+sized C array annotations are removed; there is no size threshold.
+
+A public compiled interface may recursively contain portable C primitives,
+pointers, structural callback pointers, and eligible owners. Header typedefs,
+aggregates, arrays, enums, and graphs containing them remain source-local.
+Load **`titan-ffi`** for exact export, coercion, lifetime, callback, and allocation
+rules.
 
 ## Automatic conversions: use the typed context
 
@@ -247,8 +272,8 @@ owner, record field layout, or union payload:
 integer -> float                  accepted
 integer -> integer?               accepted
 {integer} -> {float}              rejected
-() -> integer -> () -> float     rejected
-() -> integer -> () -> integer?  rejected
+function(): integer  ->  function(): float     rejected
+function(): integer  ->  function(): integer?  rejected
 ```
 
 `{T}` and `const { T }` are distinct invariant types. `const? { T }` is a
@@ -448,10 +473,10 @@ Every named-function parameter is annotated. Omitting a return annotation means
 **zero results**, not one nil:
 
 ```titan
-function log(message: string)          -- (string) -> ()
+function log(message: string)          -- function(string): ()
 end
 
-function one_nil(): nil                -- () -> nil
+function one_nil(): nil                -- function(): nil
   return nil
 end
 
@@ -542,7 +567,7 @@ no elements. Array holes and Map `__len`/`__index` behavior remain the ordinary
 container behavior.
 
 ```titan
-function relay(sink: (...: integer) -> (), values: {integer}?)
+function relay(sink: function (...: integer): (), values: {integer}?)
   sink(0, ...values[2,])
 end
 
@@ -588,7 +613,7 @@ result. Without a return annotation or expected result shape it returns zero
 values, even if its body writes `return expression`:
 
 ```titan
-function apply(transform: (integer) -> integer, item: integer): integer
+function apply(transform: function (integer): (integer), item: integer): integer
   return transform(item)
 end
 
@@ -761,8 +786,8 @@ function total(scores: {string: integer}): integer
 end
 ```
 
-`iteration.next<K,V>` and `iteration.pairs<K,V>` preserve Map key/value types.
-`iteration.ipairs<T>` visits every integer position from 1 through `#array`,
+`iteration.next<|K, V|>` and `iteration.pairs<|K, V|>` preserve Map key/value types.
+`iteration.ipairs<|T|>` visits every integer position from 1 through `#array`,
 including holes; its **index** is the nonnil first result, while its item is
 `T?`:
 
@@ -853,7 +878,7 @@ A field may be declared `const` after an optional `local`:
 ```titan
 record Request
   const method: string
-  local const token?: string
+  local const token: string?
   metadata: {string: value}
 end
 ```
@@ -895,15 +920,15 @@ or one payload and gets a positional constructor:
 
 ```titan
 union Lookup
-  found: string
-  missing
+  found(string)
+  missing()
 end
 
 function describe_lookup(result: Lookup): string
   case result
-  when found: text then
+  when found(text) then
     return "found " .. text
-  when missing then
+  when missing() then
     return "missing"
   else
     return "unknown"
@@ -926,7 +951,8 @@ variant/payload structural equality.
 
 An Interface is a public, nonempty, type-only list of read-only fields and
 bodyless method signatures. Interface fields use `name: T` and are implicitly
-const; write `name: T?`, not the record-only `name?: T`, for an optional field.
+const; write `name: T?` for an optional field. Records use the same type-side
+option spelling; `name?: T` is not accepted on fields.
 Field and method names share one namespace:
 
 ```titan
@@ -1026,16 +1052,16 @@ Most declarations and all function/method bodies are placement-independent.
 A module-variable declaration is the important frontier: its annotation and
 initializer see only earlier ordinary Titan imports and earlier module variables,
 although nominal types, aliases, and callable declarations are known module-wide.
-Unbound `foreign import "header.h"` directives populate the reserved `ffi`
-namespace from the complete ordered module C environment; its declarations and
-macros are available throughout the module, including earlier initializers. Its
-initializer must be a compile-time constant. Put computed one-time work in the
+Unbound `foreign import "header.h"` directives populate the complete ordered C
+environment. Values use the readonly, shadowable builtin `ffi`; foreign types
+use their separate unqualified namespace. Imported declarations/macros are
+available throughout the module, including earlier initializers. A written
+module-variable initializer must be a compile-time constant. Put computed one-time work in the
 single final root `do ... end` initializer.
 
-An initialized `const` module variable is read-only immediately. An
-initializer-less const module variable must have an explicit type accepted by
-the same narrow missing-nil rule as an omitted mutable local. Only its owning
-module's directly executing root initializer may assign it; nested blocks keep
+An initialized `const` module variable is read-only immediately. A
+module variable without an initializer, mutable or const, must have an explicit
+type accepted by the same missing-nil rule as an omitted mutable local. For an initializer-less const variable, only its owning module's directly executing root initializer may assign it; nested blocks keep
 that authority, but nested functions/lambdas and importing modules do not. The
 owner initializer may assign conditionally or more than once—this is an
 initialization region, not definite single assignment. Public const module
@@ -1123,8 +1149,8 @@ body; a defer in an `if` or `case` arm belongs only to that arm. Use
 `defer do ... end` only when one logical cleanup contains several statements:
 
 ```titan
-function cleanup_example(flush_pending: () -> (),
-                         close_resource: () -> ())
+function cleanup_example(flush_pending: function (): (),
+                         close_resource: function (): ())
   defer do
     flush_pending()
     close_resource()
@@ -1139,7 +1165,7 @@ outer loop.
 
 ### `string`: bytes, conversion, building, packing, regex
 
-Import it as an alias because `string` is a type keyword:
+Use a descriptive import alias to distinguish the module from the scalar type:
 
 ```titan
 local strings = import "string"
@@ -1208,7 +1234,7 @@ end
 
 `Regex:match` is a leftmost search unless `^` anchors it. `Regex:gmatch`
 yields nonnil `RegexMatch` records; `Regex:gsub` takes exactly a
-`(string) -> string` callback receiving the whole match. Load **Titan PEGs**
+`function (string): (string)` callback receiving the whole match. Load **Titan PEGs**
 when implementing a real grammar or structured parser.
 
 ### `math`: typed numerical operations
@@ -1267,11 +1293,11 @@ The generator matches Lua 5.5's xoshiro256** stream and is not cryptographic.
 Import the module. Its public generic signatures are:
 
 ```text
-function next<K, V>(map: {K: V}, key: K?): (K?, V?)
-function pairs<K, V>(map: {K: V}):
-    (({K: V}, K?) -> (K?, V?), {K: V}, nil, nil)
-function ipairs<T>(array: {T}):
-    (({T}, integer) -> (integer?, T?), {T}, integer, nil)
+function next<|K, V|>(map: {K: V}, key: K?): (K?, V?)
+function pairs<|K, V|>(map: {K: V}):
+    (function ({K: V}, K?): (K?, V?), {K: V}, nil, nil)
+function ipairs<|T|>(array: {T}):
+    (function ({T}, integer): (integer?, T?), {T}, integer, nil)
 ```
 
 Types normally infer from the collection. Map traversal order is unspecified.

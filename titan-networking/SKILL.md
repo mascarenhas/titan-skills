@@ -244,7 +244,7 @@ function ClientResponse:read_until(delimiter: string,
                                    chop: boolean?): string?
 function ClientResponse:close()
 
-type Handler = (Request, Response) -> ()
+type Handler = function(Request, Response): ()
 
 record Request
   method: string
@@ -334,8 +334,8 @@ interface ReaderWriterCloser
 end
 
 function lines(reader: ReaderCloser):
-    ((ReaderCloser) -> string?, ReaderCloser, nil,
-     (ReaderCloser) -> ())
+    (function (ReaderCloser): (string?), ReaderCloser, nil,
+     function (ReaderCloser): ())
 ```
 
 Interface satisfaction is structural at an explicit conversion site. It is not
@@ -365,19 +365,19 @@ record OperationError
   message: string
   operation: string
 end
-union CancellationReason<B>
-  simple: string
-  complex: B
+union CancellationReason<|B|>
+  simple(string)
+  complex(B)
 end
-union TaskStatus<A, B>
-  ready
-  running
-  waiting
-  succeeded: A
-  failed: Error
-  cancelled: CancellationReason<B>
+union TaskStatus<|A, B|>
+  ready()
+  running()
+  waiting()
+  succeeded(A)
+  failed(Error)
+  cancelled(CancellationReason<|B|>)
 end
-record Task<A, B>  -- opaque
+record Task<|A, B|>  -- opaque
 ```
 
 The application facade re-exports those owners with constructor-preserving
@@ -395,35 +395,35 @@ type CancellationReason = uv.CancellationReason
 type TaskStatus = uv.TaskStatus
 type Task = uv.Task
 type ResumeToken = uv.ResumeToken
-type SuspendCancelAction = () -> ()
+type SuspendCancelAction = function(): ()
 
-function run<A, B>(func: () -> A): Task<A, B>
+function run<|A, B|>(func: function (): (A)): Task<|A, B|>
 function loop()
 function yield()
-function running(): Task<value, value>
+function running(): Task<|value, value|>
 function suspend(token: ResumeToken,
                  cancel_action: SuspendCancelAction?)
-function join<A, B>(task: Task<A, B>): TaskStatus<A, B>
-function join_two<A1, B1, A2, B2>(
-    first: Task<A1, B1>, second: Task<A2, B2>):
-    (TaskStatus<A1, B1>, TaskStatus<A2, B2>)
-function any_two<A1, B1, A2, B2>(
-    first: Task<A1, B1>, second: Task<A2, B2>):
-    AnyTwoResult<A1, A2>
-function race_two<A1, B1, A2, B2>(
-    first: Task<A1, B1>, second: Task<A2, B2>):
-    RaceTwoResult<A1, B1, A2, B2>
+function join<|A, B|>(task: Task<|A, B|>): TaskStatus<|A, B|>
+function join_two<|A1, B1, A2, B2|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
+    (TaskStatus<|A1, B1|>, TaskStatus<|A2, B2|>)
+function any_two<|A1, B1, A2, B2|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
+    AnyTwoResult<|A1, A2|>
+function race_two<|A1, B1, A2, B2|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
+    RaceTwoResult<|A1, B1, A2, B2|>
 
-function Task:cancel(reason: CancellationReason<B>?)
-function Task:status(): TaskStatus<A, B>
+function Task:cancel(reason: CancellationReason<|B|>?)
+function Task:status(): TaskStatus<|A, B|>
 function Task:add_terminal_listener(
-    listener: (TaskStatus<A, B>) -> ()): () -> ()
+    listener: function (TaskStatus<|A, B|>): ()): function (): ()
 function Task:resume(token: ResumeToken)
 function TaskStatus:as_string(): string
 function TaskStatus:has_finished(): boolean
 function TaskStatus:has_succeeded(): (boolean, A?)
 function TaskStatus:has_failed(): (boolean, Error?)
-function TaskStatus:has_cancelled(): (boolean, CancellationReason<B>?)
+function TaskStatus:has_cancelled(): (boolean, CancellationReason<|B|>?)
 
 -- These declarations are inside timer; callers use timer.sleep/yield.
 function sleep(milliseconds: integer)
@@ -614,7 +614,7 @@ function client(): value
 end
 
 function main(args: {string}): integer
-  async.run<value, value>(client)
+  async.run<|value, value|>(client)
   return 0
 end
 ```
@@ -630,8 +630,8 @@ Use `async.run` for actual concurrency or a separately observable operation.
 local async = import "async"
 local net = import "net"
 
-local function start_client(connection: net.Connection): async.Task<nil, value>
-  return async.run<nil, value>(function (): nil
+local function start_client(connection: net.Connection): async.Task<|nil, value|>
+  return async.run<|nil, value|>(function (): nil
     defer connection:close()
     local line? = connection:read_until("\n", true)
     if line then connection:write(line .. "\n") end
@@ -719,7 +719,7 @@ function fetch_head(): value
 end
 
 function main(args: {string}): integer
-  async.run<value, value>(fetch_head)
+  async.run<|value, value|>(fetch_head)
   return 0
 end
 ```
@@ -971,7 +971,7 @@ loser still own?"
 **REPOSITORY-VERIFIED — ownership pattern from the async manual:**
 
 ```text
-local reading = async.run<string?, value>(function (): string?
+local reading = async.run<|string?, value|>(function (): string?
   return connection:read()
 end)
 local deadline = async.run(function (): nil
@@ -980,13 +980,13 @@ end)
 
 local result = async.any_two(reading, deadline)
 case result
-when first: data then
+when first(data) then
   deadline:cancel(async.CancellationReason.simple("read completed"))
   consume(data)
-when second then
+when second() then
   reading:cancel(async.CancellationReason.simple("read timed out"))
   async.join(reading)
-when none then
+when none() then
   -- Both Tasks failed or were cancelled; inspect their final statuses.
   local read_status, deadline_status = async.join_two(reading, deadline)
   report(read_status, deadline_status)

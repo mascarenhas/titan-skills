@@ -15,15 +15,15 @@ local reflect = import "reflect"
 function read_public_field(candidate: value, name: string): value
   local inspected = reflect.inspect(candidate)
   case inspected
-  when is_record: record_value then
+  when is_record(record_value) then
     for i = 1, record_value.n_fields do
-      if record_value.descriptor.fields[i].name == name then
+      if record_value.type.fields[i].name == name then
         return record_value:get(i)
       end
     end
-  when is_interface: interface_value then
+  when is_interface(interface_value) then
     for i = 1, interface_value.n_fields do
-      if interface_value.descriptor.fields[i].name == name then
+      if interface_value.type.fields[i].name == name then
         return interface_value:get(i)
       end
     end
@@ -45,20 +45,20 @@ the result. Integer and float variants preserve the actual Lua tag; an
 integral float is still `is_float`. A written `v is integer` test has broader
 conversion semantics and is unsuitable for implementing this classification.
 
-Container wrappers expose the original container through `.val`, using
+Container wrappers expose the original container through `.value`, using
 `{value}`, `const {value}`, or `{value: value}`. Inspection does not recover
 erased element arguments or clone the container. `ArrayTypeConstness` spells
 its variants `is_mutable`, `is_const`, and `is_maybe_const`.
 
 `RecordValue:get(i)` and `set(i, v)` use **1-based public descriptor ordinals**,
-matching `descriptor.fields[i]`; `n_fields` counts public fields. The separate
+matching the inspected wrapper's `.type.fields[i]`; `n_fields` counts public fields. The separate
 `FieldType.index` is a 0-based storage index and can have gaps from local
 fields. Do not pass it to these methods. Both bounds are checked, const writes
 raise, and mutable writes use the declared field's normal Lua-boundary
 conversion. For example, integer fields accept integral floats but reject
 fractional ones. Failed conversion leaves the field unchanged.
 
-`InterfaceValue:get(i)` reads a captured const field. `.val` is the Interface
+`InterfaceValue:get(i)` reads a captured const field. `.value` is the Interface
 wrapper used as its method receiver; `.wrapped` is the concrete record or
 union, useful for a separate `inspect`. There is no Interface setter.
 
@@ -83,7 +83,7 @@ every other descriptor is returned unchanged. Neither operation recursively
 expands a whole schema.
 
 Descriptors expose the shared erased runtime schema. Distinct specializations
-such as `Box<integer>` and `Box<string>` share the base nominal name.
+such as `Box<|integer|>` and `Box<|string|>` share the base nominal name.
 Unconstrained parameters hydrate to `Type.is_value()`. Interface-constrained
 parameters hydrate to `Type.is_named` for the **outer constraint Interface**;
 generic arguments are erased, and the caller explicitly invokes `:resolve()`
@@ -110,21 +110,21 @@ erasure and explicit Interface-constraint resolution.
 
 ## Reflected callables and C addresses
 
-`MethodType.callable(receiver, ...)` takes the corresponding inspected `.val`
+`MethodType.callable(receiver, ...)` takes the corresponding inspected `.value`
 first; its fixed parameter metadata describes the declared arguments without
 that receiver. Static callables take ordinary arguments, and a variant's
 callable constructs that variant. These calls retain ordinary dynamic callable
 checks and argument/result adjustment. Public record/union methods and statics
 are sorted by name; Interface methods retain declaration order.
 
-Titan, Lua, and Lua C function wrappers all retain callable `.val` fields of
-type `(...: value) -> (...: value)`. Use `.val` for ordinary invocation.
+Titan, Lua, and Lua C function wrappers all retain callable `.value` fields of
+type `function (...: value): (...: value)`. Use `.value` for ordinary invocation.
 `TitanFunctionValue.lua_entry` and `LuaCFunctionValue.entry` are typed
-`foreign (*lua_State) -> int` pointers; `native_entry` is a `*void` address
+`foreign function (*lua_State): int` pointers; `native_entry` is a `foreign *void` address
 without a callable Titan signature. Raw entry invocation belongs at an audited
 FFI/Lua boundary, not in ordinary introspection examples.
 
-Owned C wrappers retain their owner in `.val` and expose a borrowed `payload`
+Owned C wrappers retain their owner in `.value` and expose a borrowed `payload`
 address plus byte `size`; counted Arrays also expose `count`. The raw pointer
 alone neither roots the owner nor owns an external resource. `is_raw_pointer`
 does not establish a pointee type, address validity, or lifetime.

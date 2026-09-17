@@ -76,6 +76,13 @@ library case exposes a compiler coverage gap, add one small, compiler-focused
 checker/coder case in addition to the native behavior case. This policy is
 normative in `AGENTS.md:402-442`.
 
+For the current grammar, assignment/call candidates and non-tail vararg/spread
+expressions may parse successfully; checker tests own their semantic rejection.
+Foreign/Titan alias category and visibility checks belong in checker specs,
+while emitted typedef headers and restored source-import manifests belong in
+driver/cache specs. Keep parser scaling checks focused on bounded terminal
+lookahead, committed syntactic descents, and flat-list capture growth.
+
 ## 2. Native tests are discovered ordinary module functions
 
 A native case is discovered only when a checked declaration satisfies **all**
@@ -171,8 +178,8 @@ test.skip(reason: string?)
 test.Context:name(): string
 test.Context:log(message: string)
 test.Context:run(name: string,
-                 subtest: (test.Context) -> ())
-test.Context:cleanup(f: () -> ())
+                 subtest: function(test.Context): ())
+test.Context:cleanup(f: function(): ())
 ```
 
 In source, these are selected through the import alias, for example
@@ -333,7 +340,7 @@ Titan has no `pcall` syntax and no `try`. Errors are ordinary raised values;
 For a repeated error assertion, isolate only the operation expected to raise:
 
 ```text
-local type Action = () -> ()
+local type Action = function (): ()
 
 local function expect_error(action: Action, expected: string)
   local caught = false
@@ -471,7 +478,7 @@ local timer = import "timer"
 
 function test_async_run_starts_later(_context: test.Context)
   local events = ""
-  local child = async.run<string, value>(function (): string
+  local child = async.run<|string, value|>(function (): string
     events = events .. "child;"
     timer.yield()
     return "done"
@@ -510,7 +517,7 @@ local task_support = import "support.async"
 function test_worker_protocol(_context: test.Context)
   runtime_test.run(function()
     local observed = false
-    local worker = async.run<value, value>(function (): value
+    local worker = async.run<|value, value|>(function (): value
       timer.yield()
       observed = true
       return nil

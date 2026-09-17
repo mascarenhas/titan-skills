@@ -25,6 +25,10 @@ Lua imports the compiled standard module as `require "titan.peg"`, but Lua and
 Titan see opaque Titan records, not the external `lpeglabel` module's pattern
 userdata. The embedded engine has its own native identity and stack setting.
 
+Titan callback signatures use `function(...): results`; Relabel capture arrows
+inside grammar strings remain `->` and `~>`. Do not rewrite those grammar
+operators when migrating Titan type syntax.
+
 ## The five facts to remember
 
 1. **Prefer Relabel notation.** For a grammar that can be written as source,
@@ -564,11 +568,11 @@ not converted to a match failure or label.
 Exact public callback types are:
 
 ```text
-(string, integer, string) -> (...: value)                    -- runtime
-(string, integer, value, ...: value) -> (...: value)         -- match_time
-(value, ...: value) -> (...: value)                          -- function_capture
-(value, ...: value) -> value                                 -- fold_capture
-(string) -> string                                           -- public gsub
+function(string, integer, string): (...: value)                    -- runtime
+function(string, integer, value, ...: value): (...: value)         -- match_time
+function(value, ...: value): (...: value)                          -- function_capture
+function(value, ...: value): value                                 -- fold_capture
+function(string): string                                           -- public gsub
 ```
 
 Authority: `doc/language/standard-library-peg.md:248-289`,
@@ -805,7 +809,7 @@ The public global substitution API is deliberately narrow:
 function gsub(
   subject: string,
   candidate: value,
-  replacement: (string) -> string
+  replacement: function (string): (string)
 ): string
 ```
 
@@ -827,7 +831,7 @@ template/table/selector overload on the callback parameter. If the grammar
 itself needs a template, selector, query table, or dynamic capture callback,
 put the corresponding `-> ...` suffix inside Relabel source or build the
 capture combinator explicitly. The public replacement remains exactly
-`(string) -> string`.
+`function (string): (string)`.
 
 `candidate` may be source or a compiled Pattern. As with search, compile first
 when external definitions are needed.
@@ -887,7 +891,7 @@ function any(count: integer?): Pattern
 function succeed(): Pattern
 function fail(): Pattern
 function runtime(
-  callback: (string, integer, string) -> (...: value)
+  callback: function (string, integer, string): (...: value)
 ): Pattern
 
 function set(bytes: string): Pattern
@@ -961,7 +965,7 @@ function capture(pattern: Pattern): Pattern
 function constant(...: value): Pattern
 function match_time(
   pattern: Pattern,
-  callback: (string, integer, value, ...: value) -> (...: value)
+  callback: function (string, integer, value, ...: value): (...: value)
 ): Pattern
 function back_capture(key: value): Pattern
 function argument(index: integer): Pattern
@@ -970,7 +974,7 @@ function substitution(pattern: Pattern): Pattern
 function table_capture(pattern: Pattern): Pattern
 function fold_capture(
   pattern: Pattern,
-  callback: (value, ...: value) -> value
+  callback: function (value, ...: value): (value)
 ): Pattern
 function group(pattern: Pattern, key: value): Pattern
 
@@ -981,7 +985,7 @@ function query_capture(
 ): Pattern
 function function_capture(
   pattern: Pattern,
-  callback: (value, ...: value) -> (...: value)
+  callback: function (value, ...: value): (...: value)
 ): Pattern
 ```
 
@@ -1020,7 +1024,7 @@ function Match:values(): (...: value)
 function gsub(
   subject: string,
   candidate: value,
-  replacement: (string) -> string
+  replacement: function (string): (string)
 ): string
 function update_locale()
 function line_column(

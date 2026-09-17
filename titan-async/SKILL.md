@@ -97,7 +97,7 @@ type CancellationReason = uv.CancellationReason
 type TaskStatus = uv.TaskStatus
 type Task = uv.Task
 type ResumeToken = uv.ResumeToken
-type SuspendCancelAction = () -> ()
+type SuspendCancelAction = function (): ()
 ```
 
 The underlying public data is:
@@ -119,49 +119,49 @@ record ResumeToken
   const source: string?
 end
 
-union CancellationReason<B>
-  simple: string
-  complex: B
+union CancellationReason<|B|>
+  simple(string)
+  complex(B)
 end
 
-union TaskStatus<A, B>
-  ready
-  running
-  waiting
-  succeeded: A
-  failed: Error
-  cancelled: CancellationReason<B>
+union TaskStatus<|A, B|>
+  ready()
+  running()
+  waiting()
+  succeeded(A)
+  failed(Error)
+  cancelled(CancellationReason<|B|>)
 end
 ```
 
-`Task<A, B>` means success payload `A` and complex-cancellation payload `B`.
+`Task<|A, B|>` means success payload `A` and complex-cancellation payload `B`.
 A bare `Task`, `TaskStatus`, or `CancellationReason` is exactly the all-`value`
 application. There is no public `cancelling` status.
 
 The exact Task/status methods are:
 
 ```text
-function Task:cancel(reason: CancellationReason<B>?)
-function Task:status(): TaskStatus<A, B>
+function Task:cancel(reason: CancellationReason<|B|>?)
+function Task:status(): TaskStatus<|A, B|>
 function Task:add_terminal_listener(
-    listener: (TaskStatus<A, B>) -> ()): () -> ()
+    listener: function (TaskStatus<|A, B|>): ()): function (): ()
 function Task:resume(token: ResumeToken)
 
 function TaskStatus:as_string(): string
 function TaskStatus:has_finished(): boolean
 function TaskStatus:has_succeeded(): (boolean, A?)
 function TaskStatus:has_failed(): (boolean, Error?)
-function TaskStatus:has_cancelled(): (boolean, CancellationReason<B>?)
+function TaskStatus:has_cancelled(): (boolean, CancellationReason<|B|>?)
 ```
 
 The exact top-level scheduling API is:
 
 ```text
-function run<A, B>(func: () -> A): Task<A, B>
-function run_foreign(f: foreign (*void) -> (), arg: *void)
+function run<|A, B|>(func: function (): (A)): Task<|A, B|>
+function run_foreign(f: foreign function (*void): void, arg: foreign *void)
 function loop()
 function yield()
-function running(): Task<value, value>
+function running(): Task<|value, value|>
 function suspend(token: ResumeToken,
                  cancel_action: SuspendCancelAction?)
 function version(): string
@@ -178,13 +178,13 @@ chooses `value`. Prefer an explicit full pair when the Task crosses an API
 boundary:
 
 ```text
-local task = async.run<string, value>(function (): string
+local task = async.run<|string, value|>(function (): string
   return "done"
 end)
 ```
 
-Do not write a partial `async.run<string>(...)`. `async.running()` deliberately
-returns `Task<value, value>`, but it is a view of the same Task userdata and may
+Do not write a partial `async.run<|string|>(...)`. `async.running()` deliberately
+returns `Task<|value, value|>`, but it is a view of the same Task userdata and may
 be compared with a precisely typed view. The Runtime stores success and complex
 cancellation payloads through the all-`value` carrier; the exact `A`/`B` guard
 occurs only when a typed view projects that payload. Identity comparison,
@@ -226,82 +226,82 @@ Every named operand has an independent success/cancellation pair. Parameter
 order is interleaved `(A1, B1, A2, B2, ...)`:
 
 ```text
-function any_two<A1, B1, A2, B2>(
-    first: Task<A1, B1>, second: Task<A2, B2>):
-    AnyTwoResult<A1, A2>
-function any_three<A1, B1, A2, B2, A3, B3>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>):
-    AnyThreeResult<A1, A2, A3>
-function any_four<A1, B1, A2, B2, A3, B3, A4, B4>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>, fourth: Task<A4, B4>):
-    AnyFourResult<A1, A2, A3, A4>
-function any_five<A1, B1, A2, B2, A3, B3, A4, B4, A5, B5>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>, fourth: Task<A4, B4>,
-    fifth: Task<A5, B5>):
-    AnyFiveResult<A1, A2, A3, A4, A5>
+function any_two<|A1, B1, A2, B2|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
+    AnyTwoResult<|A1, A2|>
+function any_three<|A1, B1, A2, B2, A3, B3|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>):
+    AnyThreeResult<|A1, A2, A3|>
+function any_four<|A1, B1, A2, B2, A3, B3, A4, B4|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>, fourth: Task<|A4, B4|>):
+    AnyFourResult<|A1, A2, A3, A4|>
+function any_five<|A1, B1, A2, B2, A3, B3, A4, B4, A5, B5|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>, fourth: Task<|A4, B4|>,
+    fifth: Task<|A5, B5|>):
+    AnyFiveResult<|A1, A2, A3, A4, A5|>
 
-function race_two<A1, B1, A2, B2>(
-    first: Task<A1, B1>, second: Task<A2, B2>):
-    RaceTwoResult<A1, B1, A2, B2>
-function race_three<A1, B1, A2, B2, A3, B3>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>):
-    RaceThreeResult<A1, B1, A2, B2, A3, B3>
-function race_four<A1, B1, A2, B2, A3, B3, A4, B4>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>, fourth: Task<A4, B4>):
-    RaceFourResult<A1, B1, A2, B2, A3, B3, A4, B4>
-function race_five<A1, B1, A2, B2, A3, B3, A4, B4, A5, B5>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>, fourth: Task<A4, B4>,
-    fifth: Task<A5, B5>):
-    RaceFiveResult<A1, B1, A2, B2, A3, B3, A4, B4, A5, B5>
+function race_two<|A1, B1, A2, B2|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
+    RaceTwoResult<|A1, B1, A2, B2|>
+function race_three<|A1, B1, A2, B2, A3, B3|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>):
+    RaceThreeResult<|A1, B1, A2, B2, A3, B3|>
+function race_four<|A1, B1, A2, B2, A3, B3, A4, B4|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>, fourth: Task<|A4, B4|>):
+    RaceFourResult<|A1, B1, A2, B2, A3, B3, A4, B4|>
+function race_five<|A1, B1, A2, B2, A3, B3, A4, B4, A5, B5|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>, fourth: Task<|A4, B4|>,
+    fifth: Task<|A5, B5|>):
+    RaceFiveResult<|A1, B1, A2, B2, A3, B3, A4, B4, A5, B5|>
 
-function all_two<A1, B1, A2, B2>(
-    first: Task<A1, B1>, second: Task<A2, B2>): (A1, A2)
-function all_three<A1, B1, A2, B2, A3, B3>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>): (A1, A2, A3)
-function all_four<A1, B1, A2, B2, A3, B3, A4, B4>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>, fourth: Task<A4, B4>):
+function all_two<|A1, B1, A2, B2|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>): (A1, A2)
+function all_three<|A1, B1, A2, B2, A3, B3|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>): (A1, A2, A3)
+function all_four<|A1, B1, A2, B2, A3, B3, A4, B4|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>, fourth: Task<|A4, B4|>):
     (A1, A2, A3, A4)
-function all_five<A1, B1, A2, B2, A3, B3, A4, B4, A5, B5>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>, fourth: Task<A4, B4>,
-    fifth: Task<A5, B5>): (A1, A2, A3, A4, A5)
+function all_five<|A1, B1, A2, B2, A3, B3, A4, B4, A5, B5|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>, fourth: Task<|A4, B4|>,
+    fifth: Task<|A5, B5|>): (A1, A2, A3, A4, A5)
 
-function join<A, B>(task: Task<A, B>): TaskStatus<A, B>
-function join_two<A1, B1, A2, B2>(
-    first: Task<A1, B1>, second: Task<A2, B2>):
-    (TaskStatus<A1, B1>, TaskStatus<A2, B2>)
-function join_three<A1, B1, A2, B2, A3, B3>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>):
-    (TaskStatus<A1, B1>, TaskStatus<A2, B2>, TaskStatus<A3, B3>)
-function join_four<A1, B1, A2, B2, A3, B3, A4, B4>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>, fourth: Task<A4, B4>):
-    (TaskStatus<A1, B1>, TaskStatus<A2, B2>,
-     TaskStatus<A3, B3>, TaskStatus<A4, B4>)
-function join_five<A1, B1, A2, B2, A3, B3, A4, B4, A5, B5>(
-    first: Task<A1, B1>, second: Task<A2, B2>,
-    third: Task<A3, B3>, fourth: Task<A4, B4>,
-    fifth: Task<A5, B5>):
-    (TaskStatus<A1, B1>, TaskStatus<A2, B2>,
-     TaskStatus<A3, B3>, TaskStatus<A4, B4>, TaskStatus<A5, B5>)
+function join<|A, B|>(task: Task<|A, B|>): TaskStatus<|A, B|>
+function join_two<|A1, B1, A2, B2|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
+    (TaskStatus<|A1, B1|>, TaskStatus<|A2, B2|>)
+function join_three<|A1, B1, A2, B2, A3, B3|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>):
+    (TaskStatus<|A1, B1|>, TaskStatus<|A2, B2|>, TaskStatus<|A3, B3|>)
+function join_four<|A1, B1, A2, B2, A3, B3, A4, B4|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>, fourth: Task<|A4, B4|>):
+    (TaskStatus<|A1, B1|>, TaskStatus<|A2, B2|>,
+     TaskStatus<|A3, B3|>, TaskStatus<|A4, B4|>)
+function join_five<|A1, B1, A2, B2, A3, B3, A4, B4, A5, B5|>(
+    first: Task<|A1, B1|>, second: Task<|A2, B2|>,
+    third: Task<|A3, B3|>, fourth: Task<|A4, B4|>,
+    fifth: Task<|A5, B5|>):
+    (TaskStatus<|A1, B1|>, TaskStatus<|A2, B2|>,
+     TaskStatus<|A3, B3|>, TaskStatus<|A4, B4|>, TaskStatus<|A5, B5|>)
 ```
 
 The exact result/error owners follow one positional pattern:
 
 | Family | Owners | Variants |
 | --- | --- | --- |
-| `any_*` | `AnyTwoResult<A1,A2>` through `AnyFiveResult<A1,...,A5>` | `first: A1`, `second: A2`, then `third`, `fourth`, `fifth` as applicable, plus payload-free `none` |
-| `race_*` | `RaceTwoResult<A1,B1,A2,B2>` through `RaceFiveResult<...>` | positional variants carrying the corresponding `TaskStatus<Ai,Bi>`; no `none` |
-| `all_*` errors | `AllTwoError<A1,B1,A2,B2>` through `AllFiveError<...>` | positional variants carrying the corresponding `TaskStatus<Ai,Bi>`; no success variant |
+| `any_*` | `AnyTwoResult<\|A1, A2\|>` through `AnyFiveResult<\|A1,...,A5\|>` | `first(A1)`, `second(A2)`, then payload variants `third`, `fourth`, `fifth` as applicable, plus `none()` |
+| `race_*` | `RaceTwoResult<\|A1, B1, A2, B2\|>` through `RaceFiveResult<\|...\|>` | positional variants carrying the corresponding `TaskStatus<\|Ai, Bi\|>`; no `none` |
+| `all_*` errors | `AllTwoError<\|A1, B1, A2, B2\|>` through `AllFiveError<\|...\|>` | positional variants carrying the corresponding `TaskStatus<\|Ai, Bi\|>`; no success variant |
 
 Only `join` has a unary form. There is intentionally no unary `any`, `race`,
 or `all`, and no variadic or Array-taking form.
@@ -314,8 +314,8 @@ Channels are public Task-to-Task coordination built entirely on `running` and
 private token-bearing `suspend`/`resume`, not native Runtime queues:
 
 ```text
-function channel<T>(size: integer?):
-    ((T) -> (), () -> T, () -> ())
+function channel<|T|>(size: integer?):
+    (function (T): (), function (): (T), function (): ())
 
 record ChannelReader
 record ChannelWriter
@@ -347,17 +347,17 @@ local async = import "async"
 local timer = import "timer"
 
 function main(_args: {string}): integer
-  local worker = async.run<string, value>(function (): string
+  local worker = async.run<|string, value|>(function (): string
     timer.sleep(25)
     return "done"
   end)
 
   case async.join(worker)
-  when succeeded: result then
+  when succeeded(result) then
     if result == "done" then return 0 else return 2 end
-  when failed then
+  when failed() then
     return 1
-  when cancelled then
+  when cancelled() then
     return 3
   else
     raise "join returned a nonterminal status"
@@ -425,14 +425,14 @@ Prefer a `case` when the payload matters:
 ```text
 local terminal = async.join(task)
 case terminal
-when succeeded: result then
+when succeeded(result) then
   use_result(result)
-when failed: failure then
+when failed(failure) then
   report(failure.error, failure.traceback)
-when cancelled: reason then
+when cancelled(reason) then
   case reason
-  when simple: message then report_cancel(message)
-  when complex: payload then report_protocol_cancel(payload)
+  when simple(message) then report_cancel(message)
+  when complex(payload) then report_protocol_cancel(payload)
   end
 else
   raise "join returned a live status"
@@ -501,19 +501,19 @@ record Shutdown
   code: integer
 end
 
-local task = async.run<boolean, Shutdown>(function (): boolean
+local task = async.run<|boolean, Shutdown|>(function (): boolean
   timer.sleep(60000)
   return true
 end)
 
-task:cancel(async.CancellationReason<Shutdown>.complex(Shutdown.new(42)))
+task:cancel(async.CancellationReason<|Shutdown|>.complex(Shutdown.new(42)))
 local terminal = async.join(task)
 case terminal
-when cancelled: reason then
+when cancelled(reason) then
   case reason
-  when complex: detail then
+  when complex(detail) then
     handle_shutdown(detail.code)
-  when simple: message then
+  when simple(message) then
     handle_text_cancel(message)
   end
 else
@@ -549,26 +549,26 @@ transport, or TLS-busy state, so a deadline winner must cancel **and join** the
 read before tearing that shared state down:
 
 ```text
-local reading = async.run<string?, value>(function (): string?
+local reading = async.run<|string?, value|>(function (): string?
   return connection:read()
 end)
-local deadline = async.run<nil, value>(function (): nil
+local deadline = async.run<|nil, value|>(function (): nil
   timer.sleep(5000)
   return nil
 end)
 
 case async.any_two(reading, deadline)
-when first: data then
+when first(data) then
   -- Deadline owns only its timer. Request cancellation; no parser teardown
   -- waits on it.
   deadline:cancel(async.CancellationReason.simple("read completed"))
   consume(data)
-when second then
+when second() then
   -- Reading owns connection/parser activity. Retire it before teardown.
   reading:cancel(async.CancellationReason.simple("read timed out"))
   async.join(reading)
   teardown_read_state()
-when none then
+when none() then
   local read_status, deadline_status = async.join_two(reading, deadline)
   report_both(read_status, deadline_status)
 end
@@ -681,7 +681,7 @@ Evidence: `doc/language/async-io.md`,
 
 ```text
 function Task:add_terminal_listener(
-    listener: (TaskStatus<A, B>) -> ()): () -> ()
+    listener: function (TaskStatus<|A, B|>): ()): function (): ()
 ```
 
 Rules:
@@ -768,14 +768,14 @@ Example `race` inspection:
 
 ```text
 case async.race_two(first, second)
-when first: status then
+when first(status) then
   case status
-  when succeeded: value then consume_first(value)
-  when failed: failure then report(failure.error, failure.traceback)
-  when cancelled: reason then report_cancel(reason)
+  when succeeded(value) then consume_first(value)
+  when failed(failure) then report(failure.error, failure.traceback)
+  when cancelled(reason) then report_cancel(reason)
   else raise "race produced a live status"
   end
-when second: status then
+when second(status) then
   consume_second_status(status)
 end
 ```
@@ -790,8 +790,8 @@ catch
   if error is async.AllTwoError then
     local rejected = error as async.AllTwoError
     case rejected
-    when first: status then report_first(status)
-    when second: status then report_second(status)
+    when first(status) then report_first(status)
+    when second(status) then report_second(status)
     end
   else
     raise
@@ -867,16 +867,16 @@ Evidence: `titan/timer.titan`,
 
 ## Bounded channels
 
-`async.channel<T>(size?)` defaults to capacity 1; an explicit size must be at
+`async.channel<|T|>(size?)` defaults to capacity 1; an explicit size must be at
 least 1. It is a FIFO bounded circular buffer and can carry nil when `T` admits
 nil. State `T` explicitly or supply an expected callback triple; a bare
 unconstrained `channel()` closes to `value`.
 
 ```text
-local send, receive, close = async.channel<string>(2)
+local send, receive, close = async.channel<|string|>(2)
 defer close()
 
-local producer = async.run<nil, value>(function (): nil
+local producer = async.run<|nil, value|>(function (): nil
   send("first")
   send("second")
   return nil
@@ -905,7 +905,7 @@ unwind). Cancellation uses the stored channel token to inject its reason and
 unwinds; deferred cleanup removes the exact waiter so a new Task may occupy
 that side.
 
-`reader_writer_channel` wraps `channel<string>` in opaque Reader/Writer
+`reader_writer_channel` wraps `channel<|string|>` in opaque Reader/Writer
 facades. `read_until` is binary-safe across message boundaries; an empty
 delimiter raises. Reader close discards its own saved suffix and returns nil for
 new reads. Writer close preserves a suffix already transferred to the Reader,
@@ -1119,7 +1119,7 @@ The exact public `coroutine` surface is:
 record Coro
 end
 
-function create(func: (value) -> value, default_tag: value): Coro
+function create(func: function (value): (value), default_tag: value): Coro
 function Coro:resume(arg: value, tag: value): value
 function Coro:error(err: value, tag: value): value
 function Coro:status(): string
@@ -1181,7 +1181,7 @@ function test_resume_is_deferred(_context: test.Context)
   runtime_test.run(function ()
     local trace = ""
     local resume_token = async.ResumeToken.new("resume test")
-    local target = async.run<nil, value>(function (): nil
+    local target = async.run<|nil, value|>(function (): nil
       trace = trace .. "suspend>"
       async.suspend(resume_token)
       trace = trace .. "target"
@@ -1248,7 +1248,7 @@ Before accepting Task/application code, verify:
 - If it uses `run_foreign`, the function is C-only, every native argument owner
   survives completion, shared bytes are synchronized, and pool starvation is
   an accepted/documented tradeoff.
-- It uses precise `Task<A,B>` types and supplies both explicit type arguments or
+- It uses precise `Task<|A, B|>` types and supplies both explicit type arguments or
   neither.
 - It handles the six status variants without inventing `cancelling`.
 - It treats `cancel` as sticky first-reason request, not completion, and joins

@@ -45,7 +45,7 @@ Use `decode(text)` for dynamic JSON data: scalars, Titan `{value}` Arrays, and
 `{string: value}` Maps. Use `decode(text, descriptor)` to construct a requested
 schema, then recover its result at an ordinary typed sink. Options without a
 schema require the explicit placeholder `decode(text, nil, option, ...)`.
-Repeated options use the last occurrence. There is no `decode<T>`, public AST,
+Repeated options use the last occurrence. There is no `decode<|T|>`, public AST,
 automatic type-token inference, or custom codec registry.
 
 Do not infer failure from a nil result: decoding JSON null succeeds with nil.
@@ -119,7 +119,9 @@ Message.count(3)        -> {"tag":"count","value":3}
 Message.optional(nil)  -> {"tag":"optional","value":null}
 ```
 
-The tag is the public arm's name. Payloadless arms omit `value`; payload-bearing
+Source variants declare `idle()` and `person(Person)`; case arms spell
+`when idle() then` and `when person(value) then`. The JSON envelope format is
+unchanged. The tag is the public arm's name. Payloadless arms omit `value`; payload-bearing
 arms always include it. Extra envelope members are rejected even when
 `ignore_unknown_fields(true)` allows extras on record objects. A payload stays nested, so its object member names do not collide with the
 envelope. A Map payload can use both `"tag"` and `"value"` keys. Without a schema these
@@ -137,8 +139,8 @@ record Person
 end
 
 union Message
-  person: Person
-  idle
+  person(Person)
+  idle()
 end
 
 function main(args: {string}): integer
@@ -192,7 +194,7 @@ a typed projection; later typed reads still guard each nonnil element. Const
 results reject writes, and maybe-const targets produce mutable Arrays.
 
 Recursive nominal schemas resolve lazily. Generic arguments remain erased:
-`Box<Person>` and `Box<string>` share a descriptor, and erased `T` may look like
+`Box<|Person|>` and `Box<|string|>` share a descriptor, and erased `T` may look like
 declared `value`. Its output is dynamic JSON data. An outer nominal cast cannot
 prove those leaves; use an explicit application conversion when specialization
 matters. Do not introduce a specialization registry as an implementation repair.
