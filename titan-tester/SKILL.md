@@ -798,14 +798,18 @@ make rock-test \
 make test
 ```
 
-`make titan-stdlib-test-build` runs from `.titan-tests/`, invokes the active
-`titanc --test --no-uv-bootstrap` once with an absolute
-`spec/stdlib/titan` tree, builds its purpose-specific native fixtures, and
-cleans transient source-adjacent generated files afterward. The run target
-returns to the repository root because fixtures rely on that CWD. It supervises
-the aggregate in a separate process group with a default 120-second deadline,
-streams merged output through a pipe, and preserves exit status. Override
-`TITAN_TEST_TIMEOUT` only for a justified environment, not to hide a hang.
+`make titan-stdlib-test-build` compiles test/helper modules and shared test
+support through separate `titanc -c --test --incremental` targets, then links
+once with `--test --incremental --no-uv-bootstrap`. Every compiler invocation
+runs from `.titan-tests/` with the same absolute `spec/stdlib/titan` tree.
+Make builds native fixtures separately and retains generated outputs for
+incremental reuse; explicit `make clean` removes them. The run target returns
+to the repository root because fixtures rely on that CWD. It supervises the
+aggregate in a separate process group with a default 300-second deadline,
+including fresh child-fixture compilation with O3/Linux LTO. It streams merged
+output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
+override the budget for a justified environment; focused CI shutdown checks
+retain their explicit 15-second limit.
 
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
 `.titan-tests/test/tests` directly from the repository root with repeated
