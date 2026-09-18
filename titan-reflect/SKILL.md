@@ -45,10 +45,14 @@ the result. Integer and float variants preserve the actual Lua tag; an
 integral float is still `is_float`. A written `v is integer` test has broader
 conversion semantics and is unsuitable for implementing this classification.
 
-Container wrappers expose the original container through `.value`, using
+Container variants carry the original container in their named `value` part, using
 `{value}`, `const {value}`, or `{value: value}`. Inspection does not recover
 erased element arguments or clone the container. `ArrayTypeConstness` spells
-its variants `is_mutable`, `is_const`, and `is_maybe_const`.
+its variants `is_mutable`, `is_const`, and `is_maybe_const`. Build structural
+schemas directly with `Type.is_array(constness, element)` or
+`Type.is_map(key, value)`. Their case arms bind named parts `is_const` and
+`elem_descriptor`, or `key_descriptor` and `value_descriptor`; there are no
+ArrayValue/MapValue or ArrayType/MapType wrapper records.
 
 `RecordValue:get(i)` and `set(i, v)` use **1-based public descriptor ordinals**,
 matching the inspected wrapper's `.type.fields[i]`; `n_fields` counts public fields. The separate
@@ -62,11 +66,14 @@ fractional ones. Failed conversion leaves the field unchanged.
 wrapper used as its method receiver; `.wrapped` is the concrete record or
 union, useful for a separate `inspect`. There is no Interface setter.
 
-`UnionValue.tag` is a 0-based runtime tag and `.payload` is the correctly boxed
-payload, or nil for an empty variant. Public descriptor Arrays omit private
-variants but retain original tags: search `VariantType.tag`, not
-`variants[tag + 1]`. Inspection still exposes a private active variant's tag
-and payload; it does not expose its private descriptor.
+`UnionValue.tag` is a 0-based runtime tag. `n_parts` includes nil parts;
+`get(i)` boxes the 1-based part and checks `1..n_parts`. An empty variant has
+zero parts, while a nullable single part containing nil has one. Public
+`VariantType.parts` contains ordered `VariantPartType` records with `name`
+and `type`; unnamed source payloads have name `value`. Public descriptors
+omit private variants but retain original tags: search `VariantType.tag`,
+not `variants[tag + 1]`. Inspection still exposes a private active variant's
+tag, arity, and readable parts without publishing its private schema.
 
 ## Nominal lookup and generic erasure
 
@@ -117,17 +124,21 @@ callable constructs that variant. These calls retain ordinary dynamic callable
 checks and argument/result adjustment. Public record/union methods and statics
 are sorted by name; Interface methods retain declaration order.
 
-Titan, Lua, and Lua C function wrappers all retain callable `.value` fields of
-type `function (...: value): (...: value)`. Use `.value` for ordinary invocation.
-`TitanFunctionValue.lua_entry` and `LuaCFunctionValue.entry` are typed
-`foreign function (*lua_State): int` pointers; `native_entry` is a `foreign *void` address
-without a callable Titan signature. Raw entry invocation belongs at an audited
-FFI/Lua boundary, not in ordinary introspection examples.
+Titan, Lua, and Lua C function variants carry a callable `value` part of type
+`function (...: value): (...: value)`. Select parts with named case binders,
+for example `when is_titan_function{callable = value, signature = type}`.
+The `type` part requires an alias because it is a reserved word.
+`lua_entry` and `entry` are typed `foreign function (*lua_State): int`
+pointers; `native_entry` is a `foreign *void` address without a callable
+Titan signature. Raw invocation belongs at an audited FFI/Lua boundary.
 
-Owned C wrappers retain their owner in `.value` and expose a borrowed `payload`
-address plus byte `size`; counted Arrays also expose `count`. The raw pointer
-alone neither roots the owner nor owns an external resource. `is_raw_pointer`
-does not establish a pointee type, address validity, or lifetime.
+Owned C variants retain their owner in `value` and expose a borrowed `payload`
+address plus byte `size`; counted Arrays also expose `count`. Keep the owner
+reachable while using the pointer. `is_raw_pointer` establishes no pointee
+type, address validity, or lifetime. Pure foreign scalar/pointer/Array/function
+and typedef schemas likewise use named Type parts, while resolver owners,
+shared nominal/callable/owned schemas, and recursive C aggregate descriptors
+remain records. Consult the public inventory for exact part names.
 
 ## Maintaining and testing the implementation
 
@@ -142,8 +153,9 @@ traced declaring-module owner in private `FieldType` fields. The metatable
 publishes that owner under `TITAN_MT_MOD`. Keep access direct; do not recreate
 name lookup or inspect `__index` closure upvalues for the owner. Reads require
 normal compiler boxing; writes require the existing dynamic conversion plan
-and GC barrier. A union's `TITAN_MT_PAYLOAD` reader similarly boxes its actual
-variant payload, including private variants.
+and GC barrier. A union's `TITAN_MT_PAYLOAD` reader accepts a 1-based part index and boxes
+that actual variant's part, including private variants. Read the backing
+`Udata.uv` array directly; never use Lua's uservalue get/set API here.
 
 Public behavior belongs in the native `spec/stdlib/titan/reflect/` suite;
 generated-C, metadata-publication, and boundary-plan assertions belong in

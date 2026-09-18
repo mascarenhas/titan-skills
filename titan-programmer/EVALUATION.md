@@ -243,7 +243,7 @@ public `new` construction. Reject `decode<|T|>`, implicit sentinels, allocate-th
 set construction, and false-defaulting missing required boolean fields.
 
 Ask separately for a const integer Array descriptor. Require the actual
-`ArrayType.new(constness, element)` argument order, the canonical constness
+`Type.is_array(constness, element)` argument order, the canonical constness
 variant, and the documented construction-time Lua-writer policy for mutable
 results. A follow-up asking for `Box<|Person|>` reconstruction must acknowledge
 reflection's erased leaves instead of promising specialization validation.
@@ -423,3 +423,19 @@ tester peers. The unrelated Python JSON configuration control did not select
 Titan skills. Modified skill frontmatter, Markdown fences, and JSON-relative
 links passed structural validation. These are scoped J1/J2 and routing results,
 not a re-evaluation of every older cartridge case.
+
+
+## Named union payload exercise
+
+Ask a fresh agent to define a union variant with `id: integer`, `end: string`,
+and `note: string?`; construct it with reordered named arguments while omitting
+`note`; then match only `end` using a local alias. Ask it to explain why a
+second alias selecting `end` is invalid and why `id` can be omitted from the
+match but not from construction. Include an existing `some(integer)` variant
+and ask for its named constructor spelling.
+
+Score the result for `value` sugar, fixed arity, left-hand aliases, keyword
+part access, source-order evaluation, and distinct construction/matching
+omission rules. The produced complete module must parse and typecheck; the
+duplicate-selection negative example must fail parsing. This exercise targets
+ordinary language use, not userdata internals.

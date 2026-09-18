@@ -21,11 +21,13 @@ Runtime. Import `"json"` or `"titan.json"`; Lua requires `"titan.json"`.
 encode(subject: value, ...: EncodeOption): string
 decode(source: string, target: reflect.Type?, ...: DecodeOption): value
 
+EncodeOption.tag_field(name: string)
 EncodeOption.null_value(value)
 EncodeOption.max_depth(integer)
 EncodeOption.max_bytes(integer)
 EncodeOption.max_nodes(integer)
 
+DecodeOption.tag_field(name: string)
 DecodeOption.null_value(value)
 DecodeOption.max_depth(integer)
 DecodeOption.max_bytes(integer)
@@ -100,7 +102,7 @@ Sentinels apply to untyped decoding and `is_value` leaves. Explicit nil/Option
 targets still consume null as nil. Concrete Array/Map element schemas consume
 null as absence; a foreign sentinel must not enter `{integer}`. Required scalar,
 record-field, root, and nonnullable union-payload targets reject null. Missing
-nil-admitting record fields become nil and never become the sentinel: source
+nil-admitting record fields and union parts become nil and never become the sentinel: source
 absence and explicit null are different inputs.
 
 ## Records, unions, and exact schemas
@@ -111,21 +113,32 @@ Empty Arrays and empty Maps remain `[]` and `{}`. Integer Maps are not guessed
 to be Arrays; actual non-string keys fail. A typed Map target must admit string
 keys (`is_string` or `is_value`) even for an empty object.
 
-Unions use fixed adjacent-tag envelopes:
+Union objects contain a discriminator (default key `tag`) and each declared
+payload part by name:
 
 ```text
-Message.idle()          -> {"tag":"idle"}
-Message.count(3)        -> {"tag":"count","value":3}
-Message.optional(nil)  -> {"tag":"optional","value":null}
+-- Declarations: idle(), count(integer), point(x: integer, y: integer)
+Message.idle()       -> {"tag":"idle"}
+Message.count(3)     -> {"tag":"count","value":3}
+Message.point(2, 3)  -> {"tag":"point","x":2,"y":3}
 ```
 
-Source variants declare `idle()` and `person(Person)`; case arms spell
-`when idle() then` and `when person(value) then`. The JSON envelope format is
-unchanged. The tag is the public arm's name. Payloadless arms omit `value`; payload-bearing
-arms always include it. Extra envelope members are rejected even when
-`ignore_unknown_fields(true)` allows extras on record objects. A payload stays nested, so its object member names do not collide with the
-envelope. A Map payload can use both `"tag"` and `"value"` keys. Without a schema these
-objects remain Maps.
+A single unnamed payload is named `value`; a single explicitly named part uses
+that name too. Encode parts in declaration order. Decode keys in any order,
+use `VariantType.parts` names/types, and call `UnionValue:get(i)` with a 1-based
+part ordinal. Missing nil-admitting parts become nil independently of a null
+sentinel; other missing parts fail. Parts whose value is nil still encode as
+null. Extra envelope members are rejected even with
+`ignore_unknown_fields(true)`. Each record/Map part remains nested under its
+own key. Without a schema these objects remain Maps.
+
+Use matching `EncodeOption.tag_field("kind")` and
+`DecodeOption.tag_field("kind")` to change the discriminator for every nested
+union in a call. The selected discriminator must not collide with any declared
+part of the selected variant; collisions raise `invalid_union`. A part named
+`tag` is valid when another discriminator is selected. Escape discriminator
+keys as normal JSON strings and count the generated discriminator value in
+node budgets. There is no extra synthetic payload-object depth.
 
 Save this complete nominal composition as `json_model.titan`:
 
@@ -181,14 +194,14 @@ local json = import "json"
 local reflect = import "reflect"
 
 function read_numbers(source: string): const {integer}
-  local schema = reflect.Type.is_array(reflect.ArrayType.new(
-    reflect.ArrayTypeConstness.is_const(), reflect.Type.is_integer()))
+  local schema = reflect.Type.is_array(
+    reflect.ArrayTypeConstness.is_const(), reflect.Type.is_integer())
   return json.decode(source, schema)
 end
 ```
 
-`ArrayType.new` takes constness **before** its element descriptor; `MapType.new`
-takes key then value descriptors. Decoded mutable Arrays are created through
+`Type.is_array` takes constness **before** its element descriptor;
+`Type.is_map` takes key then value descriptors. Decoded mutable Arrays are created through
 `{value}` storage, preserving its construction-time Lua-writer policy even after
 a typed projection; later typed reads still guard each nonnil element. Const
 results reject writes, and maybe-const targets produce mutable Arrays.

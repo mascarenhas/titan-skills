@@ -513,8 +513,8 @@ end
 
 Explicit named expressions evaluate in written order, then map to formal
 positions. Omitted names receive nil and must accept it. Function values,
-lambdas, bound methods, variadic functions, and generated union variant
-constructors are positional-only. Bare braces always mean named-call syntax;
+lambdas, bound methods, and variadic functions are positional-only. Direct
+union variant constructors publish their payload part names and accept named calls. Bare braces always mean named-call syntax;
 to pass a constructor as one positional argument, keep parentheses:
 `consume({x = 1})`.
 
@@ -915,37 +915,69 @@ facade helper that merely re-spells method dispatch.
 
 ## Unions and `case`
 
-A union is a nominal closed set of tagged alternatives. Each variant has zero
-or one payload and gets a positional constructor:
+A union is a nominal closed set of tagged alternatives. A variant has a fixed
+list of named payload parts and gets a constructor with those names. The old
+single-type spelling `found(string)` means `found(value: string)`:
 
 ```titan
 union Lookup
   found(string)
+  moved(x: float, y: float, note: string?)
+  stopped(end: integer)
   missing()
+end
+
+function move(): Lookup
+  return Lookup.moved { y = 2, x = 1 } -- note receives nil
 end
 
 function describe_lookup(result: Lookup): string
   case result
   when found(text) then
     return "found " .. text
+  when moved{vertical = y; x} then
+    return x .. ", " .. vertical
+  when stopped{finish = end} then
+    return "stopped " .. finish
   when missing() then
     return "missing"
-  else
-    return "unknown"
   end
 end
 ```
 
-Construct with `Lookup.found("Titan")` or `Lookup.missing()`. A variant is not
-a type. Variant constructors are positional-only; when the payload is a record
-constructor, write `Message.move({x = 1.0, y = 2.0})` so the braces remain one
-positional argument.
+Choose payload parts for data that belongs only to the variant. Keep a record
+when it owns methods, mutable shared state, or a reusable domain type. A
+variant is not a type, and its parts are not ordinary instance fields.
+
+Construction and matching have different omission rules:
+
+- `Lookup.moved(1, 2)` passes parts in declaration order. Direct named calls
+  such as `Lookup.found{value = "Titan"}` use declared part names; explicit
+  expressions evaluate in written order. Omitted arguments receive nil and
+  must accept it through normal assignment conversion (`boolean` becomes false).
+- `when moved(first)` binds only the first part. Positional binders can omit
+  any suffix, including every part, and their names need not match declarations.
+- `when moved{vertical = y; x}` selects named parts in any order. The alias is
+  on the **left**; the part name is on the right. Unaliased `x` binds part `x`
+  to local `x`. Commas/semicolons are optional separators. A match may omit any
+  part regardless of its type. An unknown part is a type error; referencing
+  the same part twice is a syntax error even with different aliases.
+- Part names may be reserved words; local binder names may not. Always alias
+  a keyword part, as in `finish = end` above. Variant payloads cannot use a
+  `...: T` flextail, mix named and unnamed declarations, or duplicate part names.
+
+A record payload remains one part: for `move(Point)`, write
+`Movement.move({x = 1.0, y = 2.0})` or
+`Movement.move{value = {x = 1.0, y = 2.0}}`. Bare braces select named calls,
+not implicit unpacking of the record. A constructor saved in a function
+variable is called positionally.
 
 Each `when`/`else` body is a full independent block and may contain `defer` and
-its own `catch`. Case coverage is not required: no match and no `else` is a
-no-op. A `Union?` scrutinee is automatically forced before dispatch; nil
-raises and does not select `else`. Union equality is identity, not
-variant/payload structural equality.
+its own `catch`; all arm binders are visible in that catch. Case coverage is
+not required: no match and no `else` is a no-op. A `Union?` scrutinee is
+forced before dispatch; nil raises and does not select `else`. Union equality
+is identity, not structural equality. Use **`titan-reflect`** for dynamic part
+inspection and **`titan-json`** for the flat named-part JSON mapping.
 
 ## Interfaces are explicit nominal views
 
