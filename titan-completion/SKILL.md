@@ -37,6 +37,13 @@ the shared compiler permit because driver/type registries and parser state are
 process-local. Missing descriptors give an incomplete result; they do not
 justify reading a newer dependency or waiting for workspace hydration.
 
+`analysis_only` must reach the checker: return source-level checked terms with
+applied generic types, without runtime erasure. Keep declaration freezing,
+interface validation, detached owner snapshots and completion finalization in
+both modes. Ordinary compilation still lowers for the coder; analysis ASTs are
+not code-generation input. Test the actual constructor/call expression type,
+not only a declared module signature that survives erasure.
+
 Saved indexing alone publishes compact descriptors and scalar saved facts.
 Capture all modules from finalized selected static providers, including
 unimported siblings, while preserving embedded and actual selection precedence.
