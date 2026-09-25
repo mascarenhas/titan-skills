@@ -182,7 +182,7 @@ guess factories or expose private storage.
 When maintaining the constructor call, retain `arity` independently of the
 `{value}` argument Array and use `callable(...arguments[1, arity])` to preserve
 trailing/all-nil slots. Reflected public field getters take one-based public
-ordinals, not zero-based storage indices. Union runtime tags can have gaps
+ordinals, not zero-based logical field indices. Union runtime tags can have gaps
 from private arms: search `VariantType.tag`, never `variants[tag + 1]`. An active
 private arm is an encode error.
 

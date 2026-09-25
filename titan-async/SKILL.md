@@ -969,7 +969,7 @@ Evidence: `doc/language/standard-library-os.md`,
 
 ### One-shot ownership
 
-- Allocate the smallest record containing stable owned request storage and one
+- Allocate the smallest record containing embedded fixed native request storage and one
   exact callback closure. Let that closure capture the Task and values libuv
   still borrows; do not duplicate captures in “rooted” aliases.
 - Set request data and the Task's private `pending` owner before libuv can accept
@@ -996,11 +996,14 @@ Evidence: `doc/implementation/libuv-extension-guide.md` and
 
 ### Foreign worker ownership
 
-`Call.run_foreign` carries `WorkCall`, whose `owned WorkPointer[]` carrier has
-three slots: after-work owner, erased `WorkFunction`, and argument. Dispatch
-allocates an owned `uv_work_t`; `WorkOwner` retains that request, the carrier,
-and its ordinary loop-thread completion closure, and `Task.pending` roots the
-complete owner before `uv_queue_work` can accept it.
+`Call.run_foreign` carries a `WorkCall` holding the raw function and argument.
+Dispatch creates the final `WorkOwner` with embedded `uv_work_t`, a const
+trailing three-pointer carrier (after-work owner, function, argument), and its
+completion closure. Initialize the request/carrier only after this owner exists;
+`Task.pending` roots it before `uv_queue_work` can accept it. The ordinary
+completion closure explicitly pushes the owner on the Lua stack and restores
+the saved top after resumption, retaining request/tail bytes while resumed user
+code runs after `Task.pending` is cleared.
 
 The source `uv_work_cb` is intentionally unlike ordinary callbacks. It runs on
 a worker thread, reads only the function and argument carrier slots, and calls
@@ -1014,6 +1017,12 @@ callback owns terminal release even if Task cancellation is pending.
 
 Evidence: `titan/uv/work.titan`, `doc/implementation/libuv-runtime.md`, and
 `doc/implementation/libuv-extension-guide.md`.
+
+Use the compiler-owned `ffi.titan_record_field` bridge for current-module
+nominal fields in restricted callbacks. Native members and traced UV slots have
+independent layouts; logical field indices are not UV indices. Keep closure
+upvalue access on its separate established protocol. See the FFI cartridge and
+`doc/implementation/nominal-storage.md`.
 
 ### Persistent handle ownership
 

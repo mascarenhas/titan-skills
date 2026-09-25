@@ -1152,6 +1152,9 @@ not an invitation for application code to import private `uv`.
   their exact waiter and never receive a `ResumeToken`. `Task:resume(token)`
   remains for the exact explicit `async.suspend(token, ...)`, not a substitute
   callback path, general native-wait wake, or early-resume fence.
+- Initialize embedded native handles/requests only after allocating their final
+  nominal owner. Never copy initialized libuv/llhttp state. Private foreign
+  callbacks use compiler-owned nominal field access, not source-order UV slots.
 - One-shot owners retain their native request, exact callback, and borrowed
   Titan values until terminal callback. Persistent reads/listeners keep only
   natural buffered state and at most one waiter. Libuv already orders writes;

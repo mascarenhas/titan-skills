@@ -56,7 +56,7 @@ ArrayValue/MapValue or ArrayType/MapType wrapper records.
 
 `RecordValue:get(i)` and `set(i, v)` use **1-based public descriptor ordinals**,
 matching the inspected wrapper's `.type.fields[i]`; `n_fields` counts public fields. The separate
-`FieldType.index` is a 0-based storage index and can have gaps from local
+`FieldType.index` is a 0-based logical field index and can have gaps from local
 fields. Do not pass it to these methods. Both bounds are checked, const writes
 raise, and mutable writes use the declared field's normal Lua-boundary
 conversion. For example, integer fields accept integral floats but reject
@@ -153,9 +153,13 @@ traced declaring-module owner in private `FieldType` fields. The metatable
 publishes that owner under `TITAN_MT_MOD`. Keep access direct; do not recreate
 name lookup or inspect `__index` closure upvalues for the owner. Reads require
 normal compiler boxing; writes require the existing dynamic conversion plan
-and GC barrier. A union's `TITAN_MT_PAYLOAD` reader accepts a 1-based part index and boxes
-that actual variant's part, including private variants. Read the backing
-`Udata.uv` array directly; never use Lua's uservalue get/set API here.
+and GC barrier. A union's `TITAN_MT_PAYLOAD` reader accepts a positive 1-based part index and
+boxes that actual variant's part, including private variants. Index 0 queries
+the tag and -1 the arity; never infer either from uservalue slots/counts.
+Generated accessors own the native-payload/dense-UV mapping. Native wide C
+numbers may fail checked boxing only when observed; rejected writes preserve
+old state. Aggregate/array reads expose borrowed lightuserdata pointers, whose
+nominal owner must remain live; this does not add general aggregate boxing.
 
 Public behavior belongs in the native `spec/stdlib/titan/reflect/` suite;
 generated-C, metadata-publication, and boundary-plan assertions belong in

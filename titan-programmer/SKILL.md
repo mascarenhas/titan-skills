@@ -844,6 +844,17 @@ input position fails at its use. If holes are meaningful, use
 
 ## Records and private behavior
 
+Records and unions keep one nominal identity while storing native fields
+separately from traced values. Private fixed non-GC foreign aggregates/arrays
+can be embedded by copy; reading them borrows a pointer into the owner. Keep
+that owner live and distinguish shallow binding constness from explicit C
+pointee qualifiers. Direct fresh const-array/FAM constructor arguments can use
+storage in that same owner. Use the FFI cartridge for these cases and
+`doc/language/nominal-storage.md` for examples; do not infer field storage from
+Lua uservalue indices. Wide native C fields may fail only when an actual
+Lua/`value`/reflection observation needs checked boxing.
+
+
 A record is nominal, reference-like fixed data. Fields are declared inside the
 record; methods are top-level colon declarations:
 

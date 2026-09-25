@@ -303,12 +303,20 @@ slot performs the checked `size_t -> integer` adjustment. The C-mode comparison
 `raw.ready ~= 0` already produces a Titan `boolean`; there is no C-integer-to-
 boolean coercion. No public caller needs the header.
 
-A private record field or union payload may contain only a C value with a real
-Lua `TValue` representation: a checked C scalar, object or function pointer,
-exact `TValue`, Lua-internal `Udata *`, or `owned` storage. A direct C aggregate,
-array, or function cannot occupy such a slot. The same rule
-controls C types under `T?`. A pointer being boxable does **not** make its
-pointee type dynamically verifiable after it crosses through `value`.
+Private nominal fields/parts can embed complete fixed non-GC C structs, unions,
+and fixed arrays by copy. Reads borrow an interior object/element pointer;
+keep the nominal owner reachable for every use. Binding `const` is shallow:
+it prevents replacement, not writes through a mutable pointee. Explicit C
+qualifiers still apply. Incomplete objects, embedded FAMs and recursively
+GC-bearing aggregates are rejected; exact `TValue` and Lua `Udata *` themselves
+remain traced slots. Unsized `foreign T[]` fields/parts are uncounted pointers.
+Public foreign-type export restrictions remain in force.
+
+Native C numeric fields and optional values remain exact until a real
+Lua/`value`/reflection boundary requires checked boxing; reading a wide value
+there may fail without invalidating the nominal. General `T?` and aggregate
+boxing eligibility are separate from fixed nominal storage. A boxable pointer
+does not make its pointee dynamically verifiable.
 
 `foreign T.sizeof` and `foreign T.alignof`, including primitive foreign types,
 produce Titan `integer` after a checked conversion from the target's exact
@@ -669,7 +677,20 @@ For a complete non-GC-bearing struct or union:
 | `local x: foreign T = foreign T.new()` | automatic block-local `foreign T` |
 | `local x: owned *T = foreign T.new()` | GC-owned inline C object |
 | `local x: foreign *T = foreign T.new()` | pointer into a hidden frame-rooted owner |
-| call used anywhere other than a direct local initializer | `owned *T` |
+| other calls, except the direct nominal destinations below | `owned *T` |
+
+A directly nested fresh `.new`/`.new_array` argument to a synthesized record
+constructor or union variant can instead initialize final nominal storage.
+Fixed aggregate/array destinations copy or zero in place. A const pointer/array
+record field or immutable union part can own an aligned trailing array/FAM;
+`Record.new(foreign T.new_array(n))` then uses one userdata allocation. Keep the
+fresh expression at the direct call site; aliases, previously allocated owners,
+first-class constructors and mutable pointer fields retain ordinary behavior.
+Arguments and size failures occur in lexical order (including named arguments).
+Empty tails have distinct non-null addresses; borrowed views remain uncounted.
+Initialize native handles only after the final owner exists, never before a copy.
+See `doc/language/nominal-storage.md` for examples and
+`doc/implementation/nominal-storage.md` for lowering and review invariants.
 
 For a positive integer literal or eligible object-like integer macro count:
 
@@ -1044,6 +1065,20 @@ function-pointer calls do **not** get ordinary Titan FFI NULL/bounds checks.
 Arithmetic, casts, and shifts retain C undefined or implementation-defined
 behavior. The compiler still evaluates operands and arguments once,
 left-to-right.
+
+### Private nominal callback fields
+
+For compiler/runtime maintenance only, a restricted foreign function with a
+direct `foreign import "titan/ffi.h"` can use
+`ffi.titan_record_field(owner, "LocalRecord", "field")`. Literal names select
+a current-module record and its canonical field, including private fields.
+The compiler supplies the physical native/UV access: never hardcode a nominal
+`uv` index from source field order. Traced fields yield a by-value `foreign TValue`; raw fields yield exact C
+values, and aggregates/arrays yield borrowed pointers. Native optional fields
+are not supported by this private intrinsic. The owner is evaluated once, but the
+intrinsic neither checks its runtime type nor roots it. Preserve the native
+registration/root protocol. Foreign functions using it stay out of inline
+headers. Module, closure, Interface and coroutine UV protocols are separate.
 
 ## Callback design limits
 
@@ -1479,6 +1514,7 @@ Classify every native value before coding:
 | automatic `foreign T` / inferred fixed C array | current C block; no escape analysis |
 | pointer selected from direct local `.new()` | hidden owner rooted for current function frame only |
 | explicit `owned *T` / `owned T[]` | Titan full userdata reachable through ordinary GC roots; inline bytes only |
+| nominal embedded object/array or fresh tail | bytes belong to final nominal userdata; projections borrow and do not retain it |
 | pointer into an owner | borrowed; owner must remain reachable |
 | C malloc/OpenSSL/etc. pointer stored inside owner | still needs the library's explicit destructor; owner collection alone is insufficient |
 | Lua stack slot | root only while below current top in current state |
