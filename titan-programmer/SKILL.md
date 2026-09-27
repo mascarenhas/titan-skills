@@ -1146,6 +1146,43 @@ come first, contributor basenames follow deterministic numeric-byte order, and
 the main's optional initializer comes last. Do not use filename order as a
 hidden dependency mechanism.
 
+### Replacing compiled dependencies
+
+A separate shared provider is checked at load time against this consumer's
+used declarations, after the ABI check. Used function signatures include
+parameter names, erased parameter/result types, variadic input, and flexible
+results. Used variables preserve erased type and constness; module declarations
+may be reordered. Referenced records preserve the complete ordered public field
+shape; unions preserve ordered public variants and named payloads. Concrete
+methods/statics are checked only when used, including by implicit Interface
+conversion. A referenced Interface preserves its complete ordered fields and
+methods. Nominal aliases retain both their exposure and canonical owner.
+
+Private record fields may change for accessor-only consumers. Imported record
+literals count as `new` dependencies, so adding the first private field removes
+public construction and rejects old construction consumers. Private union
+variants may change unless the consumer relied on complete coverage for a
+non-fallthrough proof; invalidating that proof fails at load time. Ordinary
+unmatched cases still do nothing. An independently terminating `else` needs no
+closed-inventory assumption; an unreachable falling-through `else` does.
+
+Keep `mod.func()` as a direct native call and `mod.func` as the canonical
+function value. Separate shared dependencies resolve moved variable/closure
+slots through the selected logical provider. Within one Lua state, an already
+initialized module wins before any selected DSO filename is opened, including
+providers embedded in an executable, linked from an archive, or initialized
+through `package.loadlib`. Each new dynamic consumer checks its own requirements
+against that canonical provider. Source/archive dependencies linked into the same
+binary keep fixed native bindings and require that exact linked provider's state.
+Native pointers, callable-tag caches, and Interface arrays belong to per-state
+module payloads, so another Lua state cannot overwrite them.
+
+Replacing a file does not hot-reload an initialized module. Validate replacement
+files in a fresh process with the consumer unchanged; also exercise plugins
+against an already initialized host provider when that is the deployment model.
+Compiler cache validity and rebuilding affected consumers are separate decisions. See
+[`binary-compatibility.md`](../../../doc/language/binary-compatibility.md).
+
 ## Errors, `catch`, and `defer`
 
 Use options for ordinary absence and errors for exceptional failure or violated

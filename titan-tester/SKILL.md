@@ -920,10 +920,43 @@ invalidate shared Make artifacts. Set `helpers.verbose = true` only when the
 owning debugging workflow calls for retained generated C and printed commands.
 
 For incremental native-binding regressions, use separate consumers of one DSO:
-a direct import alias uses a handle, while an indirectly exposed nominal owner
-uses global lookup. Execute an owner method after unchanged warm reuse and
-separate object/final-link steps; also prove that incompatible provider changes
-and direct-versus-dynamic binding changes still reject cached objects.
+an explicit dynamic import and an indirectly exposed nominal owner exercise
+different provenance paths. Both reuse an initialized logical provider through
+its callback; a transitive owner must already exist. Execute an owner method
+after unchanged warm reuse and separate object/final-link steps; also prove
+that incompatible provider changes and direct-versus-dynamic binding changes
+still reject cached objects.
+
+For replacement-provider compatibility, compile a consumer against provider
+v1, save its binary, replace only the provider with v2, and load the unchanged
+consumer in a fresh process. Force the separate DSO path: the existing
+`helpers.build_so_chain` builds in-memory sources and asserts dynamic selection;
+keep both source files and matching archives unavailable. Compare the consumer
+bytes after replacement so rebuilding it cannot silently turn a compatibility
+regression into an ordinary compilation test. Keep direct source/archive and
+same-binary bypass cases distinct from dynamic replacement cases.
+
+Canonical-provider regressions need a different setup: initialize v1 first,
+then import a consumer whose selected filename names a different or unavailable
+image. Prove that native calls, moved variable/closure slots, and transitive
+owners all use v1 without opening another provider. Cover executable-embedded
+and `package.loadlib` origins when changing this protocol. Alternating calls
+between two Lua states with different providers detects shared mutable pointer,
+callable-tag, and Interface-array caches. A direct same-binary dependency must
+reject an initialized same-name module from another physical provider.
+
+Use semantic assertions for moved imported variable and canonical callable
+slots, including writes and function-value identity; direct native calls and
+first-class values are separate paths. Pair accepted unused/private changes
+with rejected used contracts. Include aliases/transitive owners, implicit
+Interface witnesses, record literals as public `new` dependencies, and selective
+union closed-inventory proofs. A private addition must reject a consumer whose
+return proof relied on complete coverage, while ordinary no-match cases and an
+independently terminating `else` preserve their behavior. Assert ABI failure
+precedes missing compatibility metadata, and assert entity-specific load errors
+without depending on complete serialized metadata text. The owning suite is
+`spec/coder/binary_compatibility_spec.lua`; pure projection and usage collection
+belong in their pure/checker counterparts.
 
 Parser/checker ASTs become decorated and sometimes self-referential. Parser
 specs compare only an expected subset. Do not set luassert's table depth to

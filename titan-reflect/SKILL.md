@@ -71,9 +71,12 @@ union, useful for a separate `inspect`. There is no Interface setter.
 zero parts, while a nullable single part containing nil has one. Public
 `VariantType.parts` contains ordered `VariantPartType` records with `name`
 and `type`; unnamed source payloads have name `value`. Public descriptors
-omit private variants but retain original tags: search `VariantType.tag`,
-not `variants[tag + 1]`. Inspection still exposes a private active variant's
-tag, arity, and readable parts without publishing its private schema.
+omit private variants. Public tags form a dense zero-based range before all
+private tags, even when local declarations are interleaved in source. Match
+`VariantType.tag` and account for a private active tag outside the public range;
+record field index gaps do not imply union tag gaps. Inspection still exposes a
+private active variant's tag, arity, and readable parts without publishing its
+private schema.
 
 ## Nominal lookup and generic erasure
 
@@ -163,7 +166,8 @@ nominal owner must remain live; this does not add general aggregate boxing.
 
 Public behavior belongs in the native `spec/stdlib/titan/reflect/` suite;
 generated-C, metadata-publication, and boundary-plan assertions belong in
-compiler Busted tests. Cover private gaps, const/bounds/type rejection,
+compiler Busted tests. Cover private record-field index gaps, dense public-first
+union tags and private active variants, const/bounds/type rejection,
 unchanged state after a rejected write, explicit named resolution, erased
 generic signatures, and callable results. To prove a write barrier, store a
 fresh collectable value through a helper that returns before collection and
