@@ -1122,8 +1122,8 @@ The marker is not part of the logical module name: this still imports
 `app.model`, looks for `app/model/model.titan` and then `app/model.titan`, and
 uses `app.model` in manifests and native protocols. It is stripped before
 standard-library shorthand expansion, so `import "uv.titan"` requests source
-for logical module `titan.uv`. A marked import never falls back to `.so` or
-`.a`; compilation fails if no matching source module exists.
+for logical module `titan.uv`. A marked import never falls back to `.so`, `.a`,
+or Windows `.dll` providers; compilation fails if no matching source module exists.
 
 Only that explicit, loader-proven source import exposes the producer's `local`
 declarations. The capability is **direct only**: another module's import does
@@ -1135,7 +1135,8 @@ dotted logical module name whose final component is `titan`, such as
 `import "app.titan.titan"` therefore strips once and rejects the forbidden
 logical name `app.titan`. The reservation is only for logical module keys:
 valid roots such as `app.titan.left` and `app.titan.right` may still derive the
-physical provider prefix `app.titan` (`app/titan.so` and `app/titan.a`).
+physical provider prefix `app.titan` (`app/titan.so` and `app/titan.a` on Linux
+and macOS, or `app/titan.dll` on Windows).
 
 A folder module is still one logical module. For `pkg.name`, the main is
 `pkg/name/name.titan`; every immediate sibling `.titan` file is a contributor.
@@ -1182,6 +1183,16 @@ files in a fresh process with the consumer unchanged; also exercise plugins
 against an already initialized host provider when that is the deployment model.
 Compiler cache validity and rebuilding affected consumers are separate decisions. See
 [`binary-compatibility.md`](../../../doc/language/binary-compatibility.md).
+
+Native bootstrap code can use a newly generated logical module's
+`const char *<mangled>_abi_value(void)` query without Lua, allocation, or module
+initialization. Its immutable ABI string belongs to the provider; do not free
+it or unload the image while using it. Call it with its C signature, never
+through `package.loadlib` or `titan._loadlib`. The Windows loader requires this
+query and checks it before calling Lua metadata entries or the initializer;
+existing Unix ABI-2 providers may omit it. The existing Lua-callable `_abi`
+entry, Unix loading behavior, compiled-code ABI `2`, and language-server API
+`1` remain unchanged.
 
 ## Errors, `catch`, and `defer`
 
@@ -1420,9 +1431,12 @@ while the iterator owns it.
 
 `io.print(...: value)` converts with `string.tostring`, joins with tabs, appends
 a newline, and performs one `os.stdout` write. `io.popen(command)` intentionally
-runs `/bin/sh -c`, gives writable stdin plus one readable stream merging stdout
-and stderr, and must be drained before waiting when output can fill a pipe. Use
-`os.spawn` for direct executable/argv control or separate stdout/stderr.
+runs `/bin/sh -c` on Linux and macOS or the system `cmd.exe /d /s /c` on
+Windows; commands use that shell's syntax. It gives writable stdin plus one
+readable byte stream merging stdout and stderr, and must be drained before
+waiting when output can fill a pipe. Use `os.spawn` for direct executable/argv
+control or separate stdout/stderr. Close and Task cancellation do not guarantee
+descendant termination.
 These operations may suspend; load **`titan-async`** for scheduling and process
 ownership.
 
@@ -1568,7 +1582,9 @@ Async/process APIs include `wait_signal`, graceful `exit`, `spawn`,
 `Process:wait/kill/is_running`, and `InputStream`/`OutputStream` operations.
 `spawn(file, args, ...: SpawnOption)` executes `file` directly; args omit
 `argv[0]`. By default it captures all three child descriptors. Options choose
-capture, parent inheritance, or merged output. Parent-facing `process.stdin`
+capture, parent inheritance, or merged output. `with_env(name, contents)` returns
+a `SpawnOption` that overrides one variable only in the child; all others are
+inherited, and the parent environment remains unchanged. Parent-facing `process.stdin`
 is an `OutputStream?`; stdout/stderr are `InputStream?`. Drain captured output
 concurrently with input and wait when pipe capacity can matter. Closing a
 process watcher does not kill or reap its child. Load **Titan async** for these
@@ -1603,7 +1619,7 @@ function main(args: {string}): integer
 end
 ```
 
-Compile and run:
+Compile and run on Linux or macOS:
 
 ```sh
 (cd scratch && titanc check && ./check)
@@ -1613,13 +1629,23 @@ The exact exported `main(args: {string}): integer` makes a standalone
 executable. `args[1]` is the first user argument; there is no index 0 entry.
 Any other `main` signature is an ordinary library function.
 
-Without an exact `main`, a single root builds paired shared/static providers
-and a Lua shim:
+Without an exact `main`, a single root on Linux or macOS builds paired
+shared/static providers and a Lua shim:
 
 ```sh
 (cd scratch && titanc calc)
 (cd scratch && lua -e 'assert(require("calc").twice(21) == 42)')
 ```
+
+Experimental Windows library builds emit DLL providers and Lua shims, with no paired
+Titan archive; `--static` and selected Titan archive providers are unsupported.
+Compilation is serial even when `--jobs` is larger than one. The `check` program
+above produces `bin/check.exe` and `lib/titan/0.6/check.dll`; `--launcher-name`
+changes only the launcher basename. Windows uses the matched controlled Lua DLL
+and its SDK, not an ordinary stock Windows Lua build. Keep that Lua DLL beside
+the Lua interpreter, compiler frontend, and application launcher EXEs. Follow
+the [Windows build guide](../../../doc/implementation/windows-build.md) for
+toolchain, layout, native dependencies, and experimental limitations.
 
 Use the matched installed `lua`. A dotted module maps dots to directories;
 `titanc app.check` finds folder `app/check/check.titan` before flat
@@ -1628,7 +1654,8 @@ include:
 
 ```text
 -j N / --jobs N       bound generated-C object compilation
---static              prefer Titan .a dependencies; not system linker -static
+--static              Linux/macOS: prefer Titan .a dependencies; not linker -static
+--launcher-name NAME  Windows standalone/test EXE basename
 --test                build a native Titan test executable
 --no-uv-bootstrap     explicit standalone/test Runtime ownership mode
 -v                    show safely quoted native tool commands
