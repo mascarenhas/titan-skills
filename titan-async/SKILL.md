@@ -1125,22 +1125,35 @@ pinned libuv contract instead of generalizing another operation's workaround.
 The exact public `coroutine` surface is:
 
 ```text
-record Coro
+record Coroutine
 end
 
-function create(func: function (value): (value), default_tag: value): Coro
-function Coro:resume(arg: value, tag: value): value
-function Coro:error(err: value, tag: value): value
-function Coro:status(): string
+function create(func: function (value): (value), default_tag: value): Coroutine
+function running(): Coroutine?
+function Coroutine:resume(arg: value, tag: value): value
+function Coroutine:error(err: value, tag: value): value
+function Coroutine:status(): string
 function yield(arg: value, tag: value): value
 function is_yieldable(tag: value): boolean
 ```
 
-`Coro` fields and constructor are **not public**; use `coroutine.create`.
+`Coroutine` fields and constructor are **not public**; use `coroutine.create`.
 Ordinary fixed-call adjustment makes the second argument to `create`, `resume`,
 and `error` omittable by nil-fill. Nil means “no explicit tag”; resume/error then
 use the stored default, and raise if neither is nonnil. `coroutine.yield` and
 `is_yieldable` require an explicit nonnil tag and do not use a default.
+
+`coroutine.running()` returns the currently executing Titan `Coroutine`, or
+nil when none is executing. It returns the exact record produced by `create`,
+so handle identity and ordinary methods are preserved. Nested resumes select
+the innermost coroutine; yield, return, and uncaught errors restore the caller's
+active coroutine or nil. Restoring a tagged skipped stack makes its innermost
+coroutine current again.
+
+Lua callers use `require "titan.coroutine"`; Lua's own `coroutine.running()`
+observes Lua threads separately. `async.running()` returns the current Task
+and raises outside a Task. Use Task APIs for scheduling and async I/O, and
+`coroutine.running()` for low-level coroutine identity.
 
 Tags use raw equality. A tagged yield finds the nearest active resumer with the
 same tag; skipped inner coroutines become `stacked` until the suspended matching
