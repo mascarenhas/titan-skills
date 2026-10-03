@@ -81,7 +81,7 @@ local record NullToken
 end
 
 function main(args: {string}): integer
-  local token = NullToken.new()
+  local token = NullToken()
   local values: {value} = json.decode("[1,null,null]", nil,
     json.DecodeOption.null_value(token))
   if #values ~= 3 then return 1 end
@@ -157,10 +157,10 @@ union Message
 end
 
 function main(args: {string}): integer
-  local original = Message.person(Person.new("Ada", nil))
+  local original = Message.person(Person("Ada", nil))
   local text = json.encode(original)
   local schema = reflect.Type.is_named(
-    reflect.NamedType.new("json_model.Message"))
+    reflect.NamedType("json_model.Message"))
   local decoded: Message = json.decode(text, schema)
   if json.encode(decoded) ~= text then return 1 end
   return 0
@@ -171,13 +171,17 @@ The nominal name includes the actual module name. That module must already be
 initialized; JSON does not import it. Unknown names raise `unknown_type` rather
 than silently adopting `NamedType:resolve`'s `is_value` fallback.
 
-Automatic record decoding finds the public synthesized static `new`, validates
-all named arguments, then invokes it once. Missing required booleans are errors,
-not false defaults. Const fields are initialized by this constructor; do not
-allocate a record and try to fill it with reflected setters. A local record or
-a record containing any local field has no public `new`: encoding its public
-view can work, but automatic decoding raises `constructor_unavailable`. Do not
-guess factories or expose private storage.
+Automatic record decoding finds public static `new`, requires fixed parameters
+and exactly one result of the requested record type, validates named arguments,
+then invokes it once. Compatible custom overrides run normally; JSON uses their
+parameter names and types rather than guessing from fields. Variadic parameters,
+flexible results, optional results, and other result shapes raise
+`constructor_unavailable` before invocation. Missing required booleans are errors,
+not false defaults. Const fields are initialized by the constructor; do not
+allocate a record and fill it with reflected setters. Local records cannot
+publish a public constructor. A record containing local fields needs a compatible
+public override for automatic decoding; encoding its public view can still work.
+Do not guess factories or expose private storage.
 
 When maintaining the constructor call, retain `arity` independently of the
 `{value}` argument Array and use `callable(...arguments[1, arity])` to preserve

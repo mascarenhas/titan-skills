@@ -161,11 +161,11 @@ function parse_assignment(subject: string): (Assignment?, ParseError?)
     if failure_position ~= nil then
       position = failure_position as integer
     end
-    return nil, ParseError.new(label, position)
+    return nil, ParseError(label, position)
   end
 
   local fields = captured as {value: value}
-  return Assignment.new(
+  return Assignment(
     fields["name"] as string,
     fields["contents"] as string), nil
 end

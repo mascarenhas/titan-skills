@@ -980,7 +980,7 @@ Use semantic assertions for moved imported variable and canonical callable
 slots, including writes and function-value identity; direct native calls and
 first-class values are separate paths. Pair accepted unused/private changes
 with rejected used contracts. Include aliases/transitive owners, implicit
-Interface witnesses, record literals as public `new` dependencies, and selective
+Interface witnesses, record literals as raw-construction capability dependencies, and selective
 union closed-inventory proofs. A private addition must reject a consumer whose
 return proof relied on complete coverage, while ordinary no-match cases and an
 independently terminating `else` preserve their behavior. Assert ABI failure

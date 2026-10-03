@@ -511,6 +511,15 @@ function bounded_example(): integer
 end
 ```
 
+Use named calls when positional arguments are ambiguous, including record
+constructors with many parameters, repeated same-typed values, adjacent boolean
+flags, or runs of `0`, `nil`, and empty containers. Read the declaration and use
+its actual parameter names; an overridden `new` may have parameters unrelated
+to the record's fields. Keep short, self-explanatory calls positional, such as
+`Point(x, y)` or `Error(message)`. When converting a call, preserve the written
+evaluation order and expression-list adjustment: a final call or spread that
+supplies several parameters cannot simply become one named entry.
+
 Explicit named expressions evaluate in written order, then map to formal
 positions. Omitted names receive nil and must accept it. Function values,
 lambdas, bound methods, and variadic functions are positional-only. Direct
@@ -870,19 +879,61 @@ function Point:move(dx: float, dy: float)
 end
 
 function Point.origin(): Point
-  return Point.new(0.0, 0.0)
+  return Point(0.0, 0.0)
 end
 ```
 
-`Point.new` is synthesized with fields in declaration order. It supports
-ordinary call adjustment and declaration-based named calls. A record
-constructor expression needs a context naming the record:
+Prefer calling the record: `Point(...)` and `Point{...}` select `Point.new`
+with its ordinary visibility, argument adjustment, and complete result list.
+`Label "text"` also selects `Label.new "text"`. Imported record names and
+aliases behave the same way. Keep `.new` to take the function as a value or
+supply its own explicit generic arguments. A bare record namespace is still
+not a first-class Titan value. Choose `Record { parameter = value, ... }`
+for ambiguous constructor arguments using the named-call guidance above.
+
+By default `new` is synthesized with fields in declaration order. It is private
+for a local record or a record with private fields. A context-typed constructor
+expression allocates the raw record:
 
 ```text
-local a = Point.new(1.0, 2.0)
-local b = Point.new { y = 2.0, x = 1.0 }
+local a = Point(1.0, 2.0)
+local b = Point { y = 2.0, x = 1.0 }
 local c: Point = { x = 1.0, y = 2.0 }
 ```
+
+Override construction with an ordinary `[local] function Record.new(...)`:
+
+```titan
+record Counter
+  local amount: integer
+end
+
+function Counter.new(initial: integer?): Counter
+  local amount = initial or 0
+  if amount < 0 then raise "negative initial count" end
+  return { amount = amount }
+end
+```
+
+The override replaces the generated function completely. Build raw storage
+with `{ ... }` inside the defining module; calling `Counter(...)` or
+`Counter.new(...)` inside the override recurses. Once `new` is overridden,
+context-typed record literals are forbidden outside that module, even through
+an explicit `.titan` import and even if all fields and `new` are public.
+Importers must call the visible constructor. A public override may initialize
+private fields; a local override stays private even for an all-public record.
+
+An override may have arbitrary parameters and results, including no results,
+multiple results, or variadic/flexible tails. `Record(...)` has exactly that
+call contract; returning the record itself is not required. Overrides are
+ordinary computed calls and cannot be constant module-variable initializers.
+`Box<|integer|>(x)` binds owner arguments; if `new` has its own generic binders,
+use `.new<|U|>` when explicit member arguments are needed, retaining the existing
+both-explicit-or-both-inferred rule.
+
+Lua receives a namespace table with `__call` only when `new` is public; its
+call forwards to the `new` member without a namespace receiver and preserves
+all results. Lua brace calls still pass one table and are not named calls.
 
 A field may be declared `const` after an optional `local`:
 
@@ -1160,8 +1211,14 @@ conversion. A referenced Interface preserves its complete ordered fields and
 methods. Nominal aliases retain both their exposure and canonical owner.
 
 Private record fields may change for accessor-only consumers. Imported record
-literals count as `new` dependencies, so adding the first private field removes
-public construction and rejects old construction consumers. Private union
+literals require the provider's raw-construction capability, so adding private
+fields or overriding `new` rejects those literal consumers even when the new
+callable signature is unchanged. Ordinary constructor calls require only the
+public `new` signature, except when fresh native storage is fused into the
+record: that optimization also requires raw-construction capability to preserve
+ownership. Providers built before this capability need rebuilding for newly
+compiled literal consumers; older consumers do not distinguish
+same-signature overrides from ordinary compatible `new` replacements. Private union
 variants may change unless the consumer relied on complete coverage for a
 non-fallthrough proof; invalidating that proof fails at load time. Ordinary
 unmatched cases still do nothing. An independently terminating `else` needs no

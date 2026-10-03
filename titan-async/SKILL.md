@@ -459,7 +459,7 @@ A `case` is clearer for that shape.
 `"succeeded"`, `"failed"`, or `"cancelled"` and does not project a generic
 payload.
 
-If a value escapes a Task, terminal state is `failed(Error.new(value,
+If a value escapes a Task, terminal state is `failed(Error(value,
 traceback))`. `async.OperationError` remains the exact `error` value inside the
 wrapper. The Runtime reports the uncaught failure and traceback immediately;
 later `join`, `race`, or `all` observation does not suppress that report.
@@ -506,7 +506,7 @@ local task = async.run<|boolean, Shutdown|>(function (): boolean
   return true
 end)
 
-task:cancel(async.CancellationReason<|Shutdown|>.complex(Shutdown.new(42)))
+task:cancel(async.CancellationReason<|Shutdown|>.complex(Shutdown(42)))
 local terminal = async.join(task)
 case terminal
 when cancelled(reason) then
@@ -637,7 +637,7 @@ local record Gate
 end
 
 local function gate(): Gate
-  return Gate.new(false, nil, async.ResumeToken.new("Gate.wait"))
+  return Gate(false, nil, async.ResumeToken("Gate.wait"))
 end
 
 local function Gate:wait()
@@ -1202,7 +1202,7 @@ local timer = import "timer"
 function test_resume_is_deferred(_context: test.Context)
   runtime_test.run(function ()
     local trace = ""
-    local resume_token = async.ResumeToken.new("resume test")
+    local resume_token = async.ResumeToken("resume test")
     local target = async.run<|nil, value|>(function (): nil
       trace = trace .. "suspend>"
       async.suspend(resume_token)

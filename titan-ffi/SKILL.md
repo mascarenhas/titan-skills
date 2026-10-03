@@ -294,7 +294,7 @@ function inspect(name: string): Info?
   -- C storage. Passing the mutable local to `widget_info *` takes its address.
   local raw = foreign widget_info.new()
   if ffi.widget_get_info(handle, raw) ~= 0 then return nil end
-  return Info.new(raw.bytes, raw.ready ~= 0)
+  return Info(raw.bytes, raw.ready ~= 0)
 end
 ```
 
@@ -683,7 +683,7 @@ A directly nested fresh `.new`/`.new_array` argument to a synthesized record
 constructor or union variant can instead initialize final nominal storage.
 Fixed aggregate/array destinations copy or zero in place. A const pointer/array
 record field or immutable union part can own an aligned trailing array/FAM;
-`Record.new(foreign T.new_array(n))` then uses one userdata allocation. Keep the
+`Record(foreign T.new_array(n))` then uses one userdata allocation. Keep the
 fresh expression at the direct call site; aliases, previously allocated owners,
 first-class constructors and mutable pointer fields retain ordinary behavior.
 Arguments and size failures occur in lexical order (including named arguments).

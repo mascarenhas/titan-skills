@@ -157,8 +157,8 @@ function Server:accept(): Connection
 function Server:close()
 ```
 
-`ssl.Error.new` is the ordinary generated constructor for this public-field
-record; applications normally receive an Error from a failed TLS operation
+`ssl.Error(...)` calls the ordinary generated `ssl.Error.new` constructor for
+this public-field record; applications normally receive an Error from a failed TLS operation
 rather than manufacturing one.
 
 There is no insecure flag, CA-directory argument, client-certificate/mTLS
@@ -280,7 +280,8 @@ function Server:serve()
 function Server:close()
 ```
 
-`Header.new` is public because Header has only public fields; passing an Array
+`Header(...)` calls the public generated constructor because Header has only
+public fields; passing an Array
 through `headers(initial)` validates and copies those records. `Headers`,
 `Response`, and `Server` are opaque. `ClientResponse` and `Request` expose the
 listed public fields but also own private transport/parser state, so neither has
