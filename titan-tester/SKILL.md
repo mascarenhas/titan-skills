@@ -586,7 +586,8 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 ## 8. Repository-native test ownership and layout
 
 The aggregate currently has 25 explicit logical roots in
-`Makefile:TITAN_STDLIB_TEST_ROOTS`:
+`spec/support/stdlib_test_modules.mk:TITAN_STDLIB_TEST_ROOTS`, shared by Linux,
+macOS, and native Windows:
 
 ```text
 test.tests
@@ -656,8 +657,8 @@ native owner. The compiled parent may:
 2. register removal immediately (`defer` if the whole use is one block, or
    Runtime cleanup when asynchronous removal must complete);
 3. compile or copy one focused fixture from `spec/fixtures/stdlib/titan/`;
-4. launch it with the narrow host command boundary, preferably C99 `system`
-   when only status/result-file communication is needed;
+4. launch it with `support.command` and an argv vector, using its compile,
+   program-path, environment, input/capture, and cleanup helpers;
 5. read the explicit result and assert it in Titan.
 
 Do not move the behavior to Busted simply because Busted can spawn a process.
@@ -669,8 +670,30 @@ endpoints. The Linux fixture installs its narrow seccomp filter only inside
 the exec'd child, denies selected metadata calls only for descriptors 0–2,
 and leaves duplicate descriptors and I/O usable. Do not install that filter
 in the aggregate runner or replace production libuv calls with interposition.
-Keep a portable ordinary-socket companion; skip only the denial-specific
-cases when the native filter fixture is unavailable.
+Keep portable pipe, file, and TTY companions. Unix socket metadata/hint cases
+are `platform:` skips on Windows; the Linux seccomp denial cases are separate
+from them. Do not skip portable inherited-stdio behavior with those assertions.
+
+### Shared platform coverage
+
+Compile every inventory root and native fixture on all supported platforms.
+A runtime skip cannot repair a missing POSIX header, wrong Windows handle width,
+or unlinked native dependency. Fold portable assertions into the common owner;
+do not introduce a Windows owner or a platform case allowlist.
+
+Repository skips need a concrete reason with one prefix: `platform: ` for
+another OS's semantics, `capability: ` for a probed environment limitation,
+`unsupported: ` for a production API limitation, or `portability: ` for an
+unfinished fixture. The last category deliberately fails the complete gate.
+Keep skips at the smallest independent assertion, including a subtest for
+unavailable native symbolic frames while the surrounding behavior still runs.
+This is a repository gate policy, not a restriction on public `test.skip`.
+
+The shared output auditor rejects empty selections, duplicate/incomplete results,
+unclassified skips, and missing owners in unfiltered runs. Retain named reasons
+and selected/passed/skipped/failed counts as validation evidence. Windows FS,
+SQLite, and local watcher tests must run on local NTFS; shared-folder behavior
+cannot replace them. Record the tested macOS architecture explicitly.
 
 ### Treat shared build products as read-only
 
@@ -810,6 +833,14 @@ including fresh child-fixture compilation with O3/Linux LTO. It streams merged
 output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
 retain their explicit 15-second limit.
+
+Native Windows exposes the same leaf names through `make -f Makefile.windows`
+with `PREFIX` selecting the validated SDK and `TITAN_TEST_BUILD_DIR` selecting a
+marked disposable local NTFS workspace. It copies the SDK, builds every root
+serially, then runs with the existing Job Object supervisor and concurrent pipe
+draining. Keep the full Windows exit status. `TITAN_FILTER` selects only runtime
+cases, and the complete gate uses no filter. See
+[Windows commands](../../../doc/implementation/windows-build.md#shared-native-standard-library-tests).
 
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
 `.titan-tests/test/tests` directly from the repository root with repeated
