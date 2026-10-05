@@ -1722,6 +1722,15 @@ include:
 --pretty-print         opt in to clang-format for generated C/headers
 ```
 
+`--tree` redirects source lookup, not ordinary generated C/object output:
+those files remain beside the selected source. Different working directories
+alone cannot isolate builds that share sources. Stage separate source copies
+for application/test modes or other configurations that must not overwrite
+each other's objects; let the build system own their invalidation. For a
+standalone delivery claim, check a relocated executable with the compiler and
+Titan provider unavailable. `--static` is a preference and can still select a
+DSO, so successful compilation alone does not prove provider independence.
+
 The compiler typechecks all requested roots and transitive dependencies before
 emitting C. Explicit command-line roots are selected from source; ordinary
 dependencies prefer compiled providers, then source, but expose only their

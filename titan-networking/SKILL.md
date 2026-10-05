@@ -293,6 +293,7 @@ function Response:headers(): Headers
 function Response:send_headers()
 function Response:write(data: string)
 function Response:close()
+function Response:abort()
 function Response:upgrade(request_value: Request, protocol: string,
                           supplied_headers: Headers?): io.ReaderWriterCloser
 function Response:reject_upgrade(request_value: Request, status: integer,
@@ -929,6 +930,13 @@ For HTTPS with a pinned/test trust bundle, pass it as the third `get` argument:
   body-capable response becomes chunked. `close()` emits the terminal chunk and
   is idempotent. Normal handler return invokes close again, so explicit close is
   safe but not required for an ordinary completed response.
+- `abort()` ends the live exchange and retires its captured TCP/TLS transport
+  without finishing framing or draining the request. Use it for a failed
+  committed stream or to interrupt accepted body/output I/O; catch the pending
+  operation's failure before joining its owner. It is cancellation-insensitive
+  and idempotent. Completed exchanges and transferred upgrades are no-ops, so a
+  retained response cannot close a later keep-alive exchange. Final headers
+  become immutable when their write starts, including when that write fails.
 - HEAD and status 204/205/304 suppress bodies with the documented
   Content-Length restrictions. Do not write a body merely because the handler
   received a Writer-shaped object.

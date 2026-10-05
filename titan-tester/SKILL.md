@@ -737,6 +737,16 @@ module output rule). Test mode emits a standalone only—no provider pair or Lua
 shim—and gives adjacent synthetic artifacts reserved
 `__test_support`, `__test_runner`, and `__test_entrypoint` stems.
 
+Keep application and test configuration objects separate. Ordinary generated
+C/object files stay beside their source even when `--tree` and the invocation
+working directory differ; stage distinct source copies when builds could
+otherwise overwrite shared objects. The source-owned canonical `titan.test`
+can overlap the combined standard archive and make a `--static` test build use
+matching DSO dependencies. If the installed provider is outside the runtime
+search path, set `TITAN_PATH_0_6` to its `lib/titan/0.6` directory. Assess an
+application's standalone deployment with a separate application build and
+relocated process test, rather than inferring it from the test binary.
+
 ### Generated runner options and statuses
 
 ```text
