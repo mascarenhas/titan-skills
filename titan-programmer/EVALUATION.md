@@ -126,8 +126,9 @@ explanations of:
   only through that direct import;
 - flat and folder lookup remaining `app/cache.titan` and
   `app/cache/cache.titan`, with no binary fallback on a source miss;
-- marker stripping before standard shorthand, so `uv.titan` means logical
-  `titan.uv`;
+- marker stripping before standard shorthand, so `string.titan` means logical
+  `titan.string`; consumers of public UV still must not use a source import
+  to escape its boundary;
 - the capability not passing transitively and binary/Lua views remaining
   public-only; and
 - rejection of dotted logical names ending in component `titan`, including the
@@ -185,7 +186,7 @@ events. Its drain also leaves an already-copied notification for a registration
 retired by the current batch to the next `poll`. Require the direct owner/state
 flow and explicit statements that:
 
-- callbacks cannot interleave with currently running Titan code;
+- unrelated loop callbacks cannot preempt ordinary Titan statements; explicitly synchronous public calls such as `uv.walk` and the documented Windows TTY read path can invoke callbacks before that call returns;
 - Titan yields only at real async suspension, explicit yield, or coroutine
   transfer;
 - operation continuation is distinct from public deferred `Task:resume`;
@@ -281,7 +282,7 @@ set for these queries:
 5. bind a C header;
 6. compile a Relabel parser;
 7. test an async HTTP server;
-8. review private `titan.uv` callback rooting;
+8. review public `titan.uv` callback rooting and a generic async adapter;
 9. dynamically load a Lua plugin from Titan;
 10. use only `titan.string` regex;
 11. change a URL PEG grammar;

@@ -1,6 +1,6 @@
 ---
 name: titan-programmer
-description: Write, review, compile, and debug ordinary Titan modules and programs. Covers the Titan language, automatic conversions, expression-list and spread adjustment, core data modeling, errors and cleanup, modules, titanc, and the core string/math/iteration/io/fs/os libraries. Load a narrower Titan skill as well for tests, async internals, networking, FFI/Lua escape hatches, or PEG parsers.
+description: Mandatory base skill before writing, editing, or reviewing any .titan source, including tests and specialized library code; load it alongside every applicable Titan peer skill. Write, review, compile, and debug ordinary Titan modules and programs. Covers the Titan language, automatic conversions, expression-list and spread adjustment, core data modeling, errors and cleanup, modules, titanc, and the core string/math/iteration/io/fs/os libraries. Load a narrower Titan skill as well for tests, async internals, networking, FFI/Lua escape hatches, or PEG parsers.
 ---
 
 # Titan programmer: the Titan basics cartridge
@@ -1172,8 +1172,9 @@ local model = import "app.model.titan"
 The marker is not part of the logical module name: this still imports
 `app.model`, looks for `app/model/model.titan` and then `app/model.titan`, and
 uses `app.model` in manifests and native protocols. It is stripped before
-standard-library shorthand expansion, so `import "uv.titan"` requests source
-for logical module `titan.uv`. A marked import never falls back to `.so`, `.a`,
+standard-library shorthand expansion, so `import "string.titan"` requests
+source for logical module `titan.string`. Public library clients still use
+ordinary compiled imports; in particular `uv.titan` is not an adapter escape hatch. A marked import never falls back to `.so`, `.a`,
 or Windows `.dll` providers; compilation fails if no matching source module exists.
 
 Only that explicit, loader-proven source import exposes the producer's `local`
@@ -1747,11 +1748,12 @@ to the language rules:
 - **Put private record behavior on the record.** Prefer
   `local function Owner:operation(...)` to a free helper whose first argument
   is `Owner`.
-- **Use the real owner and existing helper.** A collaborating source module may
-  explicitly `import "uv.titan"` and directly call the source-private `uv`
-  owner/helper granted by that import.
-  Do not add a public-looking alias, forwarding wrapper, duplicate check, or
-  second state field merely to avoid that direct flow.
+- **Use the real owner and public composition boundary.** `titan.uv` is a
+  public callback API and the sole owner of libuv FFI. Consumers use ordinary
+  `import "uv"` plus generic `async` await/subscription primitives. Do not
+  import `uv.titan`, native libuv headers/types/helpers, or private Runtime
+  state from another module. Do not add forwarding aliases, duplicate checks,
+  or extra state fields merely to avoid the existing direct flow.
 - **Honor the supported trust/concurrency model.** Do not harden one imagined
   race when the API requires callers to serialize all mutations. Partial
   rechecks imply guarantees the rest of the object does not provide.
@@ -1769,17 +1771,18 @@ to the language rules:
   transform(in[index])`, and return it. Do not make a mapper mutate a caller's
   output Array when one-to-one construction is the semantics.
 - **Do not defend against impossible async preemption.** Titan Task/libuv code
-  is cooperative on one Runtime coroutine. Titan code relinquishes control
-  only by yielding through the runtime protocol; no libuv callback fires while
-  Titan code is currently running on that main loop thread. Load **Titan
-  async** before reasoning about callback order.
+  is cooperative. Unrelated loop events cannot preempt ordinary Titan
+  statements. Explicit low-level calls with synchronous callbacks, such as
+  `uv.walk` and Windows TTY read startup, follow their documented timing;
+  they are direct calls rather than preemption. Load **Titan async** before
+  reasoning about callback order.
 - **Keep foreign worker code C-only.** `async.run_foreign` is the one explicit
   worker-pool escape from main-loop Titan execution: the worker performs only
   its C `f(arg)`, never touches Titan/Lua state, and retains native ownership
   through the loop-thread after-work callback.
 - **Cleanup remains owned until terminal native completion.** Cancellation
   does not license dropping a callback owner or double-closing a libuv handle.
-  Native callback resumption stays token-free, while explicit
+  One-shot callbacks settle their exact await capability, while explicit
   `Task:resume(token)` may wake only the matching `async.suspend(token, ...)`;
   do not paper over an early-resume bug with consumer-side generations.
 

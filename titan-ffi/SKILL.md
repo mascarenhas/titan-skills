@@ -529,7 +529,9 @@ Do not use `value` as an untyped pointer registry.
 
 C libraries often cast between related opaque object pointers. Titan does not
 model that as inheritance. A destination pointer type must be explicit, and the
-configured C compiler validates that exact directional cast:
+configured C compiler validates that exact directional cast. The following
+example belongs only inside the `titan.uv` implementation; clients use public
+`uv.tcp_t:as_handle_t()` and `uv.close` instead:
 
 ```titan
 foreign import "uv.h"
@@ -944,7 +946,8 @@ may still work. Its C carrier remains through C operators until a real Titan
 boundary converts it. Only an enumerator-to-its-own-enum adjustment is implicit.
 `__int128` is not a supported carrier.
 
-Use imported names rather than copying platform constants:
+Use imported names rather than copying platform constants. This libuv example
+is internal to `titan.uv`; other modules use public `uv.ECANCELED`:
 
 ```titan
 foreign import "uv.h"
@@ -959,6 +962,20 @@ that illustrative typedef, keep its exact imported type. Do not manufacture a
 Titan enum alias from guessed values. Enum tags themselves are not published as
 tag-only source aliases; use a real header typedef when a value type must be
 named.
+
+## The public libuv boundary
+
+Only `titan.uv` imports libuv through FFI, including native types, callback
+declarations, helper headers, and transitive header dependencies. Application
+and standard-library adapters use ordinary `import "uv"` and, when needed,
+generic public `async` await/subscription APIs. Do not use `uv.titan` to escape
+this boundary. Unrelated C APIs retain their own FFI contracts.
+
+Public loop-thread UV callbacks are ordinary Titan functions and may capture
+values. The UV binding owns the native bridge; the rule below that ordinary
+Titan closures cannot be passed to C does not prohibit those public callbacks.
+UV callbacks that execute on foreign threads remain explicitly C-only and may
+not enter Lua/Titan. See the UV manual and the `titan-async` cartridge.
 
 # Source-defined foreign functions and callbacks
 
@@ -1109,7 +1126,7 @@ touches a `lua_State`, Titan GC object, or generated Titan entry must run under
 the owning runtime/thread protocol. Do not call into Lua/Titan from an arbitrary
 native worker thread.
 
-Titan's standard filesystem/uv/HTTP/coroutine callbacks use private
+Titan's internal UV/HTTP/coroutine callback bridges use private
 `titan/ffi.h` bridges to recover generated `CClosure`, `Udata`, and native-entry
 internals before calling exact compiler-generated entries. This compiler/runtime-
 private callback set is separate from ordinary trusted modules that use narrow

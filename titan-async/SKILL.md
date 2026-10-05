@@ -1,12 +1,12 @@
 ---
 name: titan-async
-description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or private titan.uv callback and ownership code.
+description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or public titan.uv callbacks, generic await/subscriptions, and native ownership code.
 ---
 
 # Titan async
 
 Use this skill for Titan Task code, Task-aware standard-library code, and reviews
-of the private libuv continuation layer. Titan is not Go, JavaScript, Lua with
+of the public callback-based libuv layer and its async adapters. Titan is not Go, JavaScript, Lua with
 annotations, or a preemptive threaded runtime. Read the project-local
 `titan-programmer` skill first for general Titan syntax, types, options,
 `defer`, `catch`, tests, and build commands; this cartridge supplies the async
@@ -17,11 +17,15 @@ mental model and current API in one place.
 Titan async is **cooperative, single-loop continuation execution**:
 
 - `async.Task` is implemented with `titan.coroutine` and a private tagged yield.
-- Only top-level `async.loop()` or the generated standalone bootstrap calls
-  `uv_run`, on the Lua main thread.
+- Async owns its loop: top-level `async.loop()` or the generated standalone
+  bootstrap drives it on the Lua main thread. Callback-only code may own a
+  separate `uv.loop_t` and call `uv.run` without any Tasks. Never drive a loop
+  recursively, including a different loop from a callback.
 - A Task runs synchronously until it yields an async operation, returns, or
-  raises. While that Titan continuation is running, libuv cannot invoke another
-  callback and another Task cannot preempt it.
+  raises. Libuv does not preempt that continuation with unrelated loop events,
+  and another Task cannot preempt it. Explicit low-level calls with synchronous
+  callbacks, such as `uv.walk` and Windows TTY read startup, follow their stated
+  callback timing; they are not event-loop preemption.
 - Once libuv enters an operation callback, that callback may resume its one
   suspended continuation directly. The Task can run through immediate outcomes
   until it submits the next callback-bearing operation, returns, or raises;
@@ -54,51 +58,43 @@ multi-shot source needs exactly the buffering/waiter state promised by its
 public semantics.
 
 Evidence: `doc/language/async-io.md`,
-`doc/implementation/libuv-runtime.md`, `titan/uv/task.titan`, and issue #82.
+`doc/implementation/libuv-runtime.md`, `titan/async.titan`, and issue #82.
 
-## Import the public layer, not `uv`
+## Choose the public layer
 
-Application Titan code normally uses:
+Applications normally import `async`, `timer`, `fs`, `net`, `io`, `os`, `ssl`,
+or `http`. Library authors and callback-only programs may also use:
 
 ```titan
+local uv = import "uv"
 local async = import "async"
-local timer = import "timer"
 ```
 
-The parser expands these to `titan.async` and `titan.timer`. Lua hosts use
-`require "titan.async"` and `require "titan.timer"`.
+These are ordinary compiled imports of `titan.uv` and `titan.async`. Only the
+implementation of `titan.uv` imports `uv.h`, libuv native types, or native libuv
+helpers, including transitive header dependencies. Do not use `uv.titan` to
+reach private declarations. Unrelated OpenSSL, SQLite, llhttp, and platform FFI
+remain separate boundaries.
 
-**Public application modules:** `async`, `timer`, `fs`, `net`, `io`, `os`, and
-the higher-level `ssl` and `http` modules.
+`uv` exposes explicit libuv status, cleanup, ownership, and ordinary Titan
+callback values; it does not create Tasks or convert statuses to exceptions.
+Use [the public uv manual](../../../doc/language/standard-library-uv.md) and
+its family tables for exact signatures, parameter roles, callback cardinality,
+borrowed memory, cleanup, and platform support. Titan uses its pinned, patched
+bundled libuv 1.52.1. System libuv is not a supported build mode. OpenSSL retains
+its separate preferred-system and explicit-bundled modes.
 
-**Public but low-level:** `coroutine`. It is a control-transfer primitive for
-scheduler authors, not a scheduler and not the normal way to wait for I/O.
-
-**Not public:** `titan.uv`/`import "uv"`, `Runtime`, `Call`, `UV_TAG`,
-`run_internal`, `running_task`, `await`, `resume_task_from_callback`,
-`resume_condition_waiter_from_callback`, `handle_roots`, `close_handle`, and
-all raw libuv request/handle owner records. They are source-private
-collaboration machinery. Do not use them in application examples or expose
-them from a public API.
-
-Evidence: `doc/language/async-io.md` and
-`doc/implementation/libuv-runtime.md`.
+`coroutine` is also public and low-level. It transfers control; it is not a
+scheduler. Runtime records, generic operation state, `ASYNC_TAG`, driver
+helpers, and UV's native callback bridges remain private.
 
 ## Exact public `async` surface
 
-The facade exports constructor-preserving aliases. Although the alias
-statements do not repeat binders, their owners remain generic and their public
-constructors/methods remain available through `async`:
-
-```text
-type Error = uv.Error
-type OperationError = uv.OperationError
-type CancellationReason = uv.CancellationReason
-type TaskStatus = uv.TaskStatus
-type Task = uv.Task
-type ResumeToken = uv.ResumeToken
-type SuspendCancelAction = function (): ()
-```
+`async` declares and owns `Error`, `OperationError`, `CancellationReason`,
+`TaskStatus`, `Task`, and `ResumeToken`. These are not aliases to `uv` types.
+Their existing names, constructors, and generic parameters remain available
+through `async`; rebuild compiled consumers after this prerelease owner change.
+`SuspendCancelAction` is the function type `function (): ()`.
 
 The underlying public data is:
 
@@ -162,6 +158,9 @@ function run_foreign(f: foreign function (*void): void, arg: foreign *void)
 function loop()
 function yield()
 function running(): Task<|value, value|>
+function current_loop(): uv.loop_t
+function is_closing(): boolean
+function request_exit(code: integer)
 function suspend(token: ResumeToken,
                  cancel_action: SuspendCancelAction?)
 function version(): string
@@ -191,8 +190,140 @@ occurs only when a typed view projects that payload. Identity comparison,
 `status():as_string()`, and tag-only status inspection do not project it.
 `async.version()` returns libuv's version string.
 
-Evidence: `titan/async.titan`, `titan/uv/task.titan`, and
+Evidence: `titan/async.titan`, `titan/async.titan`, and
 `doc/language/async-io.md`.
+
+### Generic operations: registration, completion, and cleanup
+
+```text
+union Result<|T, E|>
+  success(T)
+  error(E)
+end
+union CancellableResult<|T, E|>
+  success(T)
+  error(E)
+  cancelled(CancellationReason<|value|>)
+end
+
+function await<|T, E|>(op: function (
+  function (T): (), function (E): (), function (value, string): ()): ()):
+  Result<|T, E|>
+function await_cleanup<|T, E|>(op: function (
+  function (T): (), function (E): (), function (value, string): ()): ()):
+  Result<|T, E|>
+function await_cancellable<|T, E|>(op: function (
+  function (T): (), function (E): (), function (value, string): ()):
+  (uv.req_t?)): CancellableResult<|T, E|>
+```
+
+All three require a running Task. The registration arguments are `resolve`,
+`reject`, and `fatal`. Registration runs synchronously without a current Task;
+it must not yield. Inline resolve/reject is allowed, but the Task continues only
+after registration returns. Immediate completion chains use bounded stack.
+Exactly one settlement is allowed; duplicate or stale settlements raise.
+
+Allocate callbacks, request views, actions, and anything else that may fail
+before native acceptance. Registration owns rollback until it returns. A
+rejected native submission has no promised callback; settle rejection inline.
+An accepted request and its borrowed arguments survive until the promised
+callback, even after cancellation. Copy callback-only results and perform
+required native cleanup before settlement; a continuation can immediately
+reuse the request or release domain state.
+
+Ordinary `await` skips registration when cancellation is already pending and
+raises its nominal reason. After acceptance it waits for completion before
+injecting cancellation. `await_cancellable` returns `cancelled(reason)` instead;
+its registration returns the exact accepted `uv.req_t` or returns nil after
+inline settlement. Nil without settlement is an error. Cancellation requests
+`uv.cancel` for a supported request and still waits for the terminal callback;
+a successful cancel request is not completion. High-level adapters translate
+the tagged result into their established cancellation behavior.
+
+`await_cleanup` permits registration and completion despite pending cancellation
+or Runtime shutdown. Use it for ownership retirement, not ordinary new work.
+Cancellation remains sticky and still determines the Task's final status. A
+parent already unwinding from cancellation cannot rely on ordinary `join` to
+drain a child; await its terminal listener under `await_cleanup`, with an
+idempotent listener remover registered in `defer`.
+
+The third capability is for a consumed terminal callback that fails before it
+can settle normally. Its catch calls `fatal(error, traceback)` and then `raise`
+so the public UV boundary retains the original loop failure. It marks exactly
+that operation consumed, allows lexical cleanup to finish, and preserves the
+first Runtime failure. It must run outside a Task. A late capability cannot
+complete a successor operation; it reports the Runtime failure instead. Never
+use `fatal` for a callback belonging to a still-pending accepted native request,
+or translate unexpected callback/conversion failures into ordinary `reject`.
+
+`current_loop()` and `is_closing()` require an active Runtime but not a running
+Task, so registration and loop callbacks may use them. Neither creates a
+Runtime, yields, nor checks Task cancellation. A domain method whose established
+contract requires a Task must separately call `running()`. `request_exit(code)`
+is the Task-aware exit path used by `os.exit`; cleanup completes before exit.
+
+### Persistent sources: subscriptions own delivery, domains own resources
+
+`CoalescingSubscription<|T, E|>` retains the latest unread value;
+`BufferedSubscription<|T, E|>` retains every event in order. Their `.new`
+constructor takes a producer called once with these capabilities:
+
+```text
+publish: function (T): boolean
+fail: function (E): boolean
+finish: function (): boolean
+```
+
+The producer returns `SubscriptionActions<|T|>` with `stop: function (): ()`
+and `close: function (function (): (SubscriptionBatch<|T|>)): ()`. Prebuild
+actions before accepting resources. A partially failed producer must roll back
+its own accepted resources. A false `publish` means ownership was not accepted;
+the producer must dispose of any resource in that event. If publication raises,
+the producer also retains ownership. Do not leak an accepted socket after a
+closed subscription rejects it.
+
+Coalescing publication can replace an unread value without a destructor. Its
+payload must therefore be safely discardable. Use BufferedSubscription for
+accepted sockets, descriptors, or other values requiring explicit disposal.
+
+Both expose `next`, `has_waiter`, `stop`, and `close`. `next()` returns
+`SubscriptionResult<|T, E|>`: `item(T)`, `error(E)`, `ended()`, or `closed()`.
+Errors/end are terminal and follow buffered items; recoverable errors belong
+inside `T`. Nil and false are real payloads, never absence sentinels.
+
+Buffered sources additionally expose `next_batch()` returning
+`SubscriptionBatchResult<|T, E|>` with `batch(SubscriptionBatch<|T|>)`,
+`error(E)`, `ended()`, or `closed()`. A batch has explicit `count` and
+one-based `get(index)`; never use Array length or truthiness for nullable data.
+`drain_pending()` synchronously transfers the complete unread batch.
+`drain_if(predicate)` transfers the complete batch if any item matches, otherwise
+nil. `wake_batch()` wakes only a blocked batch reader; it can produce an empty
+batch for a domain-specific stop condition. These three are producer/domain
+control operations, not a second reader queue.
+
+The `drain_if` predicate must not yield or mutate the subscription. Domain code
+must not drain the only outcome promised to an already-notified `next()` reader
+and leave it live but empty. Stop/close supplies a terminal outcome; batch readers
+may deliberately receive an empty batch through the separate batch contract.
+
+There is one reader reservation across `next` and `next_batch`. A queued wake
+keeps it reserved until delivery; cancellation detaches it synchronously before
+the canceled Task unwinds. `has_waiter()` queries this exact reservation. Do not
+mirror it with a domain boolean cleared only in `defer`, which would prevent
+immediate cancel-then-replacement. An old wait's scope cleanup cannot detach its
+successor. Wait cancellation leaves the producer alive and queued items intact.
+
+`stop()` is synchronous and idempotent: stop production, retain queued events,
+then expose the terminal outcome. `close()` requires a Task for its first call,
+blocks ordinary delivery immediately, invokes stop and producer cleanup, and
+discards remaining events. Repeated close initiates no second cleanup, including
+while the first is suspended. Producer cleanup may use `await_cleanup`; its
+supplied drain callback transfers unread resource-bearing events for disposal
+before domain handles are closed. One subscription need not own one handle.
+
+Evidence: `titan/async.titan`, `doc/language/async-io.md`, and the native async
+subscription/await tests. For domain admission checks, preserve established
+error and cancellation precedence before querying a shared reservation.
 
 ### Foreign blocking work is a narrow C-only boundary
 
@@ -576,7 +707,9 @@ end
 
 Do not turn this asymmetry into a blanket “always join every loser” or “never
 join deadlines” rule. Trace the resource ownership of the particular operation.
-The production HTTP timeout follows this exact asymmetry.
+The production HTTP timeout follows this asymmetry and shields the reader
+terminal drain on every exit, including cancellation of the parent. Ordinary
+join in the sketch assumes the parent has no pending cancellation.
 
 Evidence: `doc/language/async-io.md` and
 `doc/implementation/libuv-runtime.md`.
@@ -616,8 +749,8 @@ wake bit.
 Keep tokens private to the coordination abstraction. Share one record among all
 paths that own a single condition (for example one per channel), or create one
 fresh record per combinator invocation. Do not use a token as a general native-
-wait capability: operation and persistent-source callbacks keep their private,
-tokenless continuation helpers.
+wait capability: one-shot callbacks settle their exact await capability,
+while persistent sources publish through their subscription.
 
 The optional suspend cancellation action is for idempotently detaching the
 **exact** waiter. It runs synchronously only on cancellation, before the wake is
@@ -671,7 +804,7 @@ Cancellation unwinds instead, and the defer removes the waiter. A resettable
 level condition is different: recheck it after an authorized wake when other
 token-authorized code can legitimately make it false again before delivery.
 This is **not** an invitation to fence native one-shot operations: accepted
-native operations resume through their source-private tokenless callback path.
+native operations settle their exact public await capability.
 
 Evidence: `doc/language/async-io.md`,
 `doc/implementation/libuv-runtime.md`, `titan/async.titan`, and
@@ -857,9 +990,10 @@ is a final safety cleanup, not a reason to omit explicit close.
 
 The public API promises callback-deferred waiting but no exact libuv phase or
 number of loop iterations. Do not base application logic on timer phase order.
-Privately, `ticker_callback` publishes its fired state and uses tokenless
-`resume_task_from_callback` for an installed waiter. `ResumeToken` remains
-exclusive to explicit `suspend`/`Task:resume(token)` coordination.
+The public UV timer callback publishes to a CoalescingSubscription; its exact
+reader reservation is queried for the domain's duplicate-wait diagnostic.
+`ResumeToken` remains the explicit `suspend`/`Task:resume(token)` capability;
+native one-shot adapters settle their own await capabilities.
 
 Evidence: `titan/timer.titan`,
 `doc/language/standard-library-timer.md`, and
@@ -914,211 +1048,91 @@ but the next underlying channel receive observes close.
 Evidence: `doc/language/async-io.md`, `titan/async.titan`, and
 `spec/stdlib/titan/async/tests/channel_test.titan`.
 
-## [PRIVATE IMPLEMENTATION] Native callback and ownership rules
+## Public UV adapters and native binding ownership
 
-The rest of this section applies only when maintaining standard-library source
-that directly collaborates with `titan.uv`. None of the named helpers or
-records is public application API.
+Use ordinary `import "uv"` and `import "async"` for adapters. There is no
+operation-specific Call union, dispatch method, Task pending-owner field, or
+private callback-resume API to extend. Classify the native contract first:
 
-### Classify before adding state
-
-| Native shape | Private continuation shape | Owner |
+| Native shape | Composition | Owner |
 | --- | --- | --- |
-| synchronous call, no retained callback | no `Call` variant | automatic/local state unless the contract retains a pointer |
-| one-shot request that suspends a Task | one submission `Call` variant | one request owner, normally rooted by the Task's private `pending` field |
-| one-shot callback on a new handle | usually one submission variant plus close | one rooted handle owner transferred through `uv_close` |
-| explicit worker-pool call | one `run_foreign` variant | one request owner retaining raw carrier and completion callback until after-work |
-| persistent multi-shot source | wait/consume and close variants | one rooted handle owner with natural buffered/terminal state and at most one waiter |
+| synchronous, no retained callback | direct public UV call | caller-owned input/result |
+| one-shot request | `await` or `await_cancellable` | UV request plus adapter captures until completion |
+| ownership retirement | `await_cleanup` | close/cleanup callback |
+| worker-pool call | `uv.queue_work` or `async.run_foreign` | C-only carrier until after-work |
+| persistent source | coalescing or buffered subscription | domain resource plus generic delivery state |
 
-Do not rebuild a control hierarchy, operation registry, event-kind dispatcher,
-scheduler queue, Task generation, or generic native waiter around a direct
-libuv contract.
+Public loop-thread callbacks are ordinary Titan callable values, including Lua
+functions admitted by the normal callable boundary. Only UV's internal exact
+foreign bridges know native storage and compiler callback layout. Never treat a
+public callback as a known CClosure or expose the internal bridge ABI.
 
-The source-private path is:
+### Binding invariants
 
-```text
-public async/fs/net/os/timer/io method
-  -> private titan.uv convenience function
-  -> await(Call.variant(payload)) only when the Task must suspend
-  -> payload:dispatch(Task)
-  -> direct uv_* submission
-  -> exact source-defined foreign callback
-  -> exact ordinary Titan callback handler
-  -> publish/buffer result or resume the exact continuation
-```
+These rules apply when maintaining `titan/uv/`, not when writing an adapter:
 
-Use the existing direct owner/helper. Do not add a facade alias or forwarding
-C wrapper around a public `uv_*` function.
+- Initialize embedded native state only in its final concrete owner. Generic
+  `handle_t`, `stream_t`, and `req_t` views preserve that owner's identity and
+  lifetime; they do not copy native structs or rewire native `.data`.
+- Native `.data` belongs to the binding. Public userdata lives in a separate
+  traced `value` slot. Per-loop roots retain handles through close callbacks
+  and accepted requests through completion. Root before acceptance and remove
+  a rejected submission's root when its native contract promises no callback.
+- A callback frame keeps the concrete owner alive until the actual native
+  callback returns, even after clearing its pending registration and resuming
+  user code. Extract/copy borrowed outputs, retire required native storage, and
+  settle only after the promised native result is safe to consume.
+- A request callback can reuse its request after the old registration is
+  cleared. No late cancellation may target the successor request. Never add
+  generations, token registries, event-kind dispatch, or duplicate owners to
+  approximate this exact capability boundary.
+- Loop callbacks run on the owning Lua main state. C worker/thread callbacks
+  never enter Lua/Titan or recover a GC owner. They access only their typed
+  native function/argument carrier; after-work on the loop thread owns delivery.
+- Binding callbacks catch ordinary conversion/user-callback errors, remember
+  the first caught error and traceback (preserving `false`; Lua 5.5 normalizes
+  a raised `nil` to `"<no error object>"` before catch), stop driving, and return
+  normally to libuv. `uv.run`/`uv.walk` rethrow afterward. Ownership remains
+  valid for explicit cleanup. The selected boundary does not promise recovery
+  from fatal VM stack exhaustion or out-of-memory failures.
+- `handle:is_initialized()` is false before initialization and after the close
+  callback retires it; it stays true during closing. `uv.is_closing(handle)`
+  is valid only in that initialized interval. Guard repeated domain close as
+  `not handle:is_initialized() or uv.is_closing(handle)`; do not duplicate
+  closing state. `uv.walk` discovers native live handles at shutdown.
 
-Evidence: `doc/implementation/libuv-extension-guide.md`.
+### Domain adapters
 
-### Parent standard-stream classification
+Use one callback per native protocol, ordinary await settlement for one-shot
+work, and subscription publication for persistent events. Construct required
+closures/views before accepting work. Preserve status codes, existing domain
+operation names, Task requirements, cross-Runtime checks, fast paths, and
+cancellation/error precedence. Synchronous resource constructors must not turn
+into cancellation boundaries merely to query shutdown; use `is_closing()`.
 
-Preserve known libuv TTY/pipe classifications and the per-Runtime wrapper over
-a close-on-exec duplicate. An unknown descriptor needs explicit `fstat` socket
-evidence and independent family/type probes, with each failed call's `errno`
-saved immediately. Only `EPERM`/`EACCES`-denied metadata may use the launcher's
-strict `TITAN_STDIO_PIPE_FDS` list of `0`, `1`, and `2`; observed non-Unix or
-non-stream metadata always rejects. Never treat arbitrary unknown handles,
-regular files, or known TCP/UDP handles as pipes. Keep the
-`stdio.parent.kind` operation and fd/probe diagnostic, and preserve actual
-errors such as `EBADF`.
+Callbacks copy transient data, publish, and return. Filesystem watcher callbacks
+queue raw notifications; the draining Task performs asynchronous `lstat` and
+maps them. If classification retires a registration and new events reference
+it, take the complete follow-on batch in callback order. Do not filter or
+reorder other registrations' events. Keep exactly one raw event to one public
+event and put recoverable mapping errors in the event payload.
 
-Evidence: `doc/language/standard-library-os.md`,
-`doc/implementation/libuv-runtime.md`, and `titan/uv/process.titan`.
+Parent stdio classification belongs to `os`, using public UV operations plus
+unrelated platform FFI. Preserve known TTY/pipe classifications, close-on-exec
+duplicates, independent socket family/type evidence, immediately captured
+errno, and the exact `stdio.parent.kind` diagnostics. Only denied metadata may
+use the launcher's strict `TITAN_STDIO_PIPE_FDS` fallback; observed incompatible
+metadata still rejects. See the OS manual and implementation chapter.
 
-### One-shot ownership
-
-- Allocate the smallest record containing embedded fixed native request storage and one
-  exact callback closure. Let that closure capture the Task and values libuv
-  still borrows; do not duplicate captures in “rooted” aliases.
-- Set request data and the Task's private `pending` owner before libuv can accept
-  the request.
-- A documented negative submission result means no callback will arrive: clear
-  the request root, run request-specific cleanup, and return an immediate error.
-  Do not recursively resume the Task and do not call `uv_run`.
-- An accepted submission returns from dispatch immediately. Its callback is now
-  authoritative.
-- In the callback, copy borrowed result memory, extract scalars, call required
-  request cleanup exactly once, release libuv-owned results, and dispose of an
-  abandoned produced resource **before** resuming user code.
-- Then ordinary operation callbacks use source-private
-  `resume_task_from_callback(task, failed, payload)`. This is not
-  `Task:resume(token)`; the latter is only for the explicit `suspend` that
-  stored that exact token. Native callback continuation remains token-free.
-- Catch callback conversion/continuation errors at the boundary so only that
-  Task retires and the foreign callback returns normally to libuv.
-- Cancellation never releases accepted request storage early and does not add
-  a fictitious `uv_cancel` path.
-
-Evidence: `doc/implementation/libuv-extension-guide.md` and
-`titan/uv/file.titan`/`titan/uv/tcp.titan`.
-
-### Foreign worker ownership
-
-`Call.run_foreign` carries a `WorkCall` holding the raw function and argument.
-Dispatch creates the final `WorkOwner` with embedded `uv_work_t`, a const
-trailing three-pointer carrier (after-work owner, function, argument), and its
-completion closure. Initialize the request/carrier only after this owner exists;
-`Task.pending` roots it before `uv_queue_work` can accept it. The ordinary
-completion closure explicitly pushes the owner on the Lua stack and restores
-the saved top after resumption, retaining request/tail bytes while resumed user
-code runs after `Task.pending` is cleared.
-
-The source `uv_work_cb` is intentionally unlike ordinary callbacks. It runs on
-a worker thread, reads only the function and argument carrier slots, and calls
-`f(arg)`. It must never recover the after-work owner or enter any Titan/Lua
-helper. The source `uv_after_work_cb` runs on the loop thread, recovers the
-owner, and invokes the protected `complete_work` path. Only submission status
-zero is accepted; a nonzero status is the no-callback case and clears the
-pending root synchronously. An
-accepted submission is never cancelled with `uv_cancel`; the after-work
-callback owns terminal release even if Task cancellation is pending.
-
-Evidence: `titan/uv/work.titan`, `doc/implementation/libuv-runtime.md`, and
-`doc/implementation/libuv-extension-guide.md`.
-
-Use the compiler-owned `ffi.titan_record_field` bridge for current-module
-nominal fields in restricted callbacks. Native members and traced UV slots have
-independent layouts; logical field indices are not UV indices. Keep closure
-upvalue access on its separate established protocol. See the FFI cartridge and
-`doc/implementation/nominal-storage.md`.
-
-### Persistent handle ownership
-
-- The owner is the complete callback owner: stable native handle, exact callback
-  closures, Runtime/root slot, at most one waiter, and only the buffered or
-  terminal state promised by the API. `Runtime.handle_roots` roots this complete
-  record, not merely raw native storage.
-- Root before successful `uv_*_init` can link the handle into the loop. On
-  verified init rejection, unroot; after successful init, even a later start
-  rejection must asynchronously close.
-- A callback copies/publishes its natural result and clears/takes its waiter
-  before delivery. An ordinary completed native operation uses the private
-  callback-resume path. A source-private condition callback first publishes the
-  condition and may use `resume_condition_waiter_from_callback`; if a correct-
-  token public explicit-resume timer is already pending, that timer remains the
-  sole continuation. The callback helper itself remains tokenless.
-- With no waiter, store only the public-semantics state: one fired bit/latest
-  value when coalescing is promised, a dense buffer when every value is
-  promised, or sticky EOF/error for a terminal stream.
-- Cancelling a wait detaches only that waiter and wakes that Task on its own
-  deferred path; it does not close a shared handle.
-- Explicit close stops where required, clears discarded buffered state, settles
-  a waiter on a callback turn, and transfers lifetime to the shared close path.
-  Do not add a close-waiter queue.
-- `uv_is_closing` is authoritative. Never mirror it with another close flag or
-  call `uv_close` twice. `uv_walk`, not `handle_roots`, discovers final live
-  handles. The root Array is never traversed as a resource registry.
+Native cancellation is optional and operation-specific. Ordinary await retains
+accepted work through its callback; cancellable await requests cancellation
+without pretending it has completed. Explicit handle close is separate from
+wait cancellation. Libuv orders accepted writes; do not add another write queue.
+Subscription buffers are justified by promised event semantics, not scheduling.
 
 Evidence: `doc/implementation/libuv-extension-guide.md`,
-`doc/implementation/libuv-runtime.md`, and `titan/uv/runtime.titan`.
-
-### Callback production must stay small
-
-A raw loop-thread native callback copies or converts data that is valid only
-during the callback, publishes one natural event/result, wakes its exact
-continuation, and returns. It must not do synchronous filesystem work or other
-potentially blocking classification. The `run_foreign` worker callback is the
-separate C-only exception described above; it cannot publish or resume at all.
-
-The current filesystem watcher is the model:
-
-1. `fs_watcher_event_cb` recovers the complete `WatchRegistration` owner.
-2. Its Titan handler copies nullable filename bytes and appends exactly one raw
-   `WatcherNotification`.
-3. It wakes the poller through the tokenless condition-callback helper and
-   returns. Each blocking poll's fresh private `"fs.watcher"` token belongs
-   only to that one explicit suspension and its facade-owned wake path. The
-   callback-buffered notification or last-registration removal establishes the
-   postcondition before delivery, so the poll does not defensively resuspend.
-4. When the Task drains notifications, it asynchronously calls `lstat`, maps
-   each raw notification to exactly one public event, and closes a retired
-   registration as needed.
-5. Because classification can yield, callbacks append to a fresh Array. If a
-   mapped event retires a registration and the fresh Array contains that
-   retired owner, the drain takes the complete fresh batch in callback order
-   and repeats. A live-owner-only fresh batch remains buffered for the next
-   `poll`.
-
-There is no alias index, Runtime generation, raw-batch rollback, or duplicate
-close state. Stop removes registration ownership; close then retires the native
-handle. Taking a complete follow-on batch preserves cross-registration order;
-it does not filter, merge, discard, or duplicate notifications. An
-`OperationError` in one mapping becomes one error event rather than rolling
-back the batch.
-
-The same split applies to `fs.realpath`: each call creates a fresh private
-`"fs.realpath"` token and suspends exactly once. The suspension's cancellation
-closure retains that token, while the accepted request's sole callback
-publishes completion through the tokenless callback helper.
-
-Evidence: `titan/fs.titan` and `doc/implementation/filesystem-library.md`.
-
-### Do not invent defensive epicycles
-
-Reject these unless a documented public/native contract requires them:
-
-- reentrant `async.loop`/`uv_run`;
-- a scheduler ready queue, Runtime join protocol, Task polling loop, phase
-  bridge, or generic public Waiter;
-- generation counters or operation IDs meant only to defend against a callback
-  resuming the wrong continuation;
-- a parallel handle registry or traversal of `handle_roots`;
-- a second active-Task counter beside `task_roots`;
-- close flags that duplicate `uv_is_closing`;
-- Task-side queues duplicating libuv's accepted write order;
-- a common control wrapper around operation-specific owners;
-- a callback event-kind parameter when an exact callback protocol suffices;
-- a finalizer racing an outstanding native request;
-- synchronous filesystem classification inside a libuv callback;
-- source-transformer/fault hooks that rebuild a production provider merely to
-  repeat an already-owned generic lifetime proof.
-
-When the public contract really does promise every distinct event, buffer those
-events directly. When it promises coalescing, use one bit/latest value. When a
-new native API has an unusual partial-init or borrowing rule, verify that exact
-pinned libuv contract instead of generalizing another operation's workaround.
+`doc/implementation/libuv-runtime.md`, `titan/uv/`, `titan/async.titan`, and
+the consumer implementations in `fs`, `net`, `os`, and `timer`.
 
 ## Raw Titan coroutines are a separate low-level API
 
@@ -1175,7 +1189,7 @@ end
 ```
 
 This is not Lua's coroutine library and not `async.yield()`. Do not try to
-obtain or yield Titan async's private `UV_TAG`. Tagged nesting lets the Runtime's
+obtain or yield Titan async's private `ASYNC_TAG`. Tagged nesting lets the Runtime's
 private async yield cross nested Titan coroutines correctly, but application
 code should still use Task APIs for scheduling and I/O.
 
@@ -1261,7 +1275,8 @@ Evidence: `doc/language/standard-library-test.md`,
 
 Before accepting Task/application code, verify:
 
-- It imports public `async`/`timer`/high-level modules, not `uv`.
+- It selects public high-level modules or explicit public `uv` callbacks;
+  no adapter imports libuv FFI or uses `uv.titan` to reach private state.
 - It assumes cooperative execution, not preemption, and explicitly yields a
   CPU-heavy loop.
 - It does not call `async.loop` from a Task or callback.
@@ -1296,7 +1311,7 @@ Before accepting Task/application code, verify:
 - Runtime-bound test cleanup finishes inside `support.runtime`, not later in a
   test context cleanup.
 
-Before accepting private libuv code, also verify:
+Before accepting a UV binding change or public adapter, also verify:
 
 - The native operation is classified as synchronous, one-shot, or persistent.
 - A complete callback owner is rooted for exactly the native lifetime.
@@ -1304,9 +1319,10 @@ Before accepting private libuv code, also verify:
 - Rejection and accepted-callback paths follow the pinned native contract.
 - The callback copies/releases before resuming, catches before returning to C,
   and never calls `uv_run`.
-- An ordinary completion uses the private callback continuation helper;
-  it remains tokenless, while `Task:resume(token)` is reserved for the matching
-  explicit suspension.
+- A one-shot completion settles its exact await capability after native
+  cleanup; persistent delivery uses the selected subscription.
+- Inline registration completion is deferred until registration returns; a
+  terminal callback failure uses its fatal capability and preserves the trace.
 - Cancellation does not drop accepted work early or synchronously enter another
   Task.
 - A worker callback reads only its raw function/argument carrier, never enters
@@ -1385,13 +1401,13 @@ resume, or make the cancellation action perform async work.
 
 ### 5. Native one-shot callback
 
-**Prompt:** Add a source-private libuv request whose callback returns a borrowed
-buffer.
+**Prompt:** Adapt a public UV one-shot request whose callback returns a borrowed
+buffer into a Task operation.
 
-**Pass:** One exact request owner; root before accepted submission; distinguish
-negative/no-callback from accepted/callback; copy the borrowed result and clean
-native storage exactly once before private `resume_task_from_callback`; retain
-accepted ownership through cancellation; return normally to libuv.
+**Pass:** Ordinary compiled UV import plus generic await; distinguish native
+rejection from acceptance; copy the result and clean native storage before
+resolve/reject. Keep accepted ownership through cancellation. On consumed
+callback failure, call fatal with the original error/trace and re-raise.
 
 **Fail:** Call public `Task:resume(token)`, invent a token for native completion,
 call `uv_run`, clear the owner on logical cancellation, rely on a finalizer, or
@@ -1503,7 +1519,7 @@ Runtime handle until context cleanup after `async.loop` returned.
 `coroutine.yield(value, tag)` is a separate stackful tagged control-transfer API,
 Lua's coroutine library is different again, and async's tag is private.
 
-**Fail:** Call Lua's coroutine API, invent a public `UV_TAG`, or claim raw
+**Fail:** Call Lua's coroutine API, invent a public `ASYNC_TAG`, or claim raw
 coroutine creation schedules a Task.
 
 ### 14. Foreign worker boundary
@@ -1531,9 +1547,8 @@ thread.
 - Public low-level coroutine contract: `doc/language/coroutines.md`.
 - Public sources/signatures: `titan/async.titan`, `titan/timer.titan`, and
   `titan/coroutine.titan`.
-- Private Runtime/Task sources: `titan/uv/runtime.titan`,
-  `titan/uv/task.titan`, `titan/uv/work.titan`, and the other
-  `titan/uv/*.titan` contributors.
+- Runtime/Task and generic operation sources: `titan/async.titan`.
+- Public callback binding: `titan/uv/` and `doc/language/standard-library-uv.md`.
 - Private Runtime design: `doc/implementation/libuv-runtime.md`.
 - Native extension recipes: `doc/implementation/libuv-extension-guide.md`.
 - Coroutine mechanics: `doc/implementation/coroutines.md`.

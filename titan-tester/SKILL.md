@@ -548,15 +548,17 @@ finish every Task/handle before `async.loop()` returns.
 
 Titan Tasks are `titan.coroutine` coroutines driven by one libuv Runtime on the
 Lua main thread. A running Titan continuation proceeds synchronously until it
-returns, raises, or yields a private `UV_TAG` operation. No libuv callback can
+returns, raises, or yields a private async operation. No libuv callback can
 preempt two ordinary Titan statements, because the same main Runtime coroutine
-must return control to `uv_run` before another callback fires. Worker-pool work
+must return control to `uv_run` before another unrelated loop event fires.
+Explicit callback-producing calls such as `uv.walk` and Windows TTY read startup
+obey their documented synchronous timing; tests must distinguish those direct
+calls from event-loop preemption. Worker-pool work
 may happen elsewhere, but Titan-visible completion runs on the loop thread.
 
 Therefore:
 
-- do not invent races in which a callback mutates Titan state while Titan code
-  is still running without a yield;
+- do not invent unrelated loop-event preemption while Titan code is running;
 - do not add locks, generations, or timing sleeps to defend against impossible
   interleavings;
 - orchestrate a real suspension point and assert Task status or observable
@@ -585,7 +587,7 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 
 ## 8. Repository-native test ownership and layout
 
-The aggregate currently has 25 explicit logical roots in
+The aggregate currently has 26 explicit logical roots in
 `spec/support/stdlib_test_modules.mk:TITAN_STDLIB_TEST_ROOTS`, shared by Linux,
 macOS, and native Windows:
 
@@ -602,6 +604,7 @@ string.format_pack_test
 string.regex_test
 async.tests
 uv.task_tests
+uv.public_tests
 io.tests
 fs.tests
 timer.tests
@@ -795,7 +798,7 @@ compiling any requested root.
 The leaf commands are:
 
 ```sh
-# Build all 25 roots once under .titan-tests; does not run them.
+# Build all 26 roots once under .titan-tests; does not run them.
 make titan-stdlib-test-build
 
 # Run the existing aggregate from the repository root.
@@ -828,9 +831,9 @@ runs from `.titan-tests/` with the same absolute `spec/stdlib/titan` tree.
 Make builds native fixtures separately and retains generated outputs for
 incremental reuse; explicit `make clean` removes them. The run target returns
 to the repository root because fixtures rely on that CWD. It supervises the
-aggregate in a separate process group with a default 300-second deadline,
-including fresh child-fixture compilation with O3/Linux LTO. It streams merged
-output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
+aggregate in a separate process group with a default 600-second deadline for
+all 26 roots, including repeated fresh child-fixture compilation with O3/Linux
+LTO. It streams merged output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
 retain their explicit 15-second limit.
 
@@ -845,7 +848,7 @@ cases, and the complete gate uses no filter. See
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
 `.titan-tests/test/tests` directly from the repository root with repeated
 `-f`, or use one carefully designed Lua pattern. The filter does not change the
-25-root compile.
+26-root compile.
 
 `BUSTED_FILTER` never filters Titan cases, and `TITAN_FILTER` never filters
 Busted. The LuaRocks command adapter also recognizes explicit
@@ -1501,7 +1504,7 @@ make rock-test \
 ```
 
 Must say `TITAN_FILTER` is a runtime Lua pattern, filters one domain only, and
-does not reduce the 25-root build. Do not accept regex-only escaping or a claim
+does not reduce the 26-root build. Do not accept regex-only escaping or a claim
 that `make rock-test` rebuilds/reinstalls the rock.
 
 ## Eval 17 — API surface discrimination
@@ -1571,3 +1574,25 @@ assert the wrong ownership model, clean up after a dead Runtime, or encode an
 impossible callback schedule. The strongest evals combine static inspection,
 focused execution, and a short written explanation of the selected layer and
 lifetime.
+
+## Public UV and generic async boundary tests
+
+Use ordinary compiled `uv`/`async` imports for public callback and adapter
+behavior. Never import `uv.titan`, inspect private Task/Runtime state, or bring
+libuv native headers into a consumer fixture. C-only worker fixtures may expose
+their own opaque native data without a transitive libuv dependency.
+
+Check rejection versus accepted completion, callback-only operation without
+Tasks, ordinary callable callbacks, forced GC while native work owns borrowed
+values, request reuse, exact cancellation reasons, and cleanup after callback
+failure. Generic await tests distinguish inline registration settlement from
+deferred callbacks, cleanup waits from ordinary cancellation, and stale fatal
+capabilities from a successor wait. Subscription tests include nil/false data,
+queued wake reservation, immediate cancel-then-replacement before old unwind,
+terminal ordering, and disposal of unread resource-bearing events.
+
+Do not weaken existing public behavior assertions to fit a migration. In
+particular HTTP timer-only loser cancellation must preserve buffered-request
+ordering while state-owning reader cleanup is shielded on every parent exit.
+Use exact frozen input/provider evidence when a private build tests an evolving
+source tree; a passing old provider is not evidence for later edits.

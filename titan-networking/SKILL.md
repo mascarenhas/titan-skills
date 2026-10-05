@@ -1,6 +1,6 @@
 ---
 name: titan-networking
-description: Write, review, and test Titan TCP, TLS, HTTP/1.1, and URL code with the exact net, ssl, http, url, io, async, and timer contracts. Use for clients, servers, byte streams, certificate verification, HTTP framing, URL normalization, network cancellation, or network-resource cleanup. API-provided network timeouts are covered here; add titan-async when directly designing Task, timer, cancellation, or Runtime mechanics.
+description: Write, review, and test Titan TCP, TLS, HTTP/1.1, and URL code with the exact net, ssl, http, url, io, async, and timer contracts. Use for clients, servers, byte streams, certificate verification, HTTP framing, URL normalization, network cancellation, or network-resource cleanup. API-provided network timeouts are covered here; add titan-async for asynchronous networking behavior tests or when directly designing Task, timer, cancellation, or Runtime mechanics.
 ---
 
 # Titan networking
@@ -14,11 +14,12 @@ thread-per-connection API.
 
 This cartridge is self-contained for the public networking surface, including
 an API's own timeout/deadline contract. Read `titan-programmer` first for every
-`.titan` change, and load every applicable peer: `titan-async` when directly
+`.titan` change, and load every applicable peer: `titan-async` for asynchronous networking behavior tests or when directly
 designing Task/timer/cancellation or Runtime ownership, `titan-tester` for native
 behavior tests, `titan-pegs` when changing the URL grammar, and `titan-ffi` when
-changing the standard library's native boundary. Normal applications must not
-import private `uv` or OpenSSL/llhttp C headers.
+changing the standard library's native boundary. Normal applications use these high-level APIs. Low-level adapters may import
+public `uv`; only `titan.uv` may import libuv headers/types/helpers. Keep
+OpenSSL and llhttp FFI inside their established library boundaries.
 
 ## Evidence labels used here
 
@@ -59,15 +60,19 @@ to use private names in application code.
 
 ## The runtime model that makes the APIs make sense
 
-1. There is one non-reentrant libuv loop on the Lua main thread. Only top-level
-   `async.loop()` or the generated standalone bootstrap calls `uv_run`.
+1. Async owns one non-reentrant libuv loop on the Lua main thread. Top-level
+   `async.loop()` or the generated standalone bootstrap drives that loop.
+   Callback-only public UV clients may drive their own explicit loops with
+   `uv.run`, following the same main-thread and non-reentry restrictions.
 2. A Task runs synchronously until it returns, raises, or invokes an operation
-   that yields to the runtime. **No libuv callback can fire while Titan code is
-   running.** There is no preemption between two ordinary Titan statements.
+   that yields to the runtime. Libuv does not preempt ordinary Titan statements.
+   Explicit low-level calls that invoke synchronous callbacks (such as
+   `uv.walk`, or Windows TTY read startup) follow their documented contract;
+   do not confuse that direct call with unrelated event-loop preemption.
 3. `async.run` schedules a new Task and returns before its function starts. It
    does not run the function inline.
 4. Operation callbacks resume the Task waiting for that exact operation through
-   a source-private tokenless continuation. Public `Task:resume(token)` is only
+   its public generic await settlement or subscription delivery. Public `Task:resume(token)` is only
    for the exact explicit `async.suspend(token, ...)` that stored the same
    nominal token; it is never a general native-wait wake and is not how
    application code completes reads, accepts, writes, DNS, TLS, or HTTP.
@@ -348,8 +353,7 @@ rules do not become uniform merely because method shapes match.
 ### Networking-relevant Task/timer subset
 
 This is not the complete `async` API; it is the subset needed to understand the
-patterns in this skill. The source-private `uv` provider owns these public data
-shapes:
+patterns in this skill. The `async` module owns these public data shapes:
 
 ```text
 record ResumeToken
@@ -381,21 +385,14 @@ end
 record Task<|A, B|>  -- opaque
 ```
 
-The application facade re-exports those owners with constructor-preserving
-aliases; its wrappers and the methods exposed through those aliases form this
-surface:
+These nominal types and their constructors are declared by `async` itself.
+Its networking-relevant functions form this surface:
 
 ```text
 local async = import "async"
 local timer = import "timer"
 
--- Shown unqualified as inside the async facade; callers use async.*.
-type Error = uv.Error
-type OperationError = uv.OperationError
-type CancellationReason = uv.CancellationReason
-type TaskStatus = uv.TaskStatus
-type Task = uv.Task
-type ResumeToken = uv.ResumeToken
+-- Shown unqualified as inside async; callers use async.*.
 type SuspendCancelAction = function(): ()
 
 function run<|A, B|>(func: function (): (A)): Task<|A, B|>
@@ -950,7 +947,10 @@ loser still own?"
 - A timer-only loser owns no parser/socket state. Cancel it; ordinary success
   can proceed while its timer close callback finishes.
 - A read/request loser owns an operation on shared parser/connection/TLS state.
-  Cancel it and `async.join` it before releasing or reusing that state.
+  Cancel it and wait for terminal cleanup before releasing or reusing that
+  state. Ordinary `async.join` suffices while the caller is uncancelled;
+  canceled-parent cleanup needs `await_cleanup` plus a terminal listener and
+  an idempotent listener remover. See the async cartridge for that contract.
 - Every cancelled accepted request retains its request owner until the promised
   callback. Retain only values the native API still borrows: a write keeps its
   exact immutable bytes through `write_cb`, while libuv copies DNS text during
@@ -970,6 +970,11 @@ loser still own?"
   report.
 
 **REPOSITORY-VERIFIED — ownership pattern from the async manual:**
+
+This normal-winner sketch assumes the observing parent is not canceled. It
+shows loser ownership policy, not cleanup on every parent exit. A reusable
+resource-owning wrapper must install lexical cleanup with a shielded terminal
+drain before starting the race, as the HTTP implementation does.
 
 ```text
 local reading = async.run<|string?, value|>(function (): string?
@@ -1139,34 +1144,32 @@ titanc --test --tree . app.network_tests
 
 ## Implementation-only guardrails
 
-Apply this section only when reviewing/changing Titan's standard library. It is
-not an invitation for application code to import private `uv`.
+Apply this section when reviewing/changing Titan's standard library or a
+low-level networking adapter.
 
-- `net` is the public facade over private `titan.uv`. SSL performs transport
-  and path work through public `net`/`fs`, composes the public async/string/GC
-  helpers it needs, and confines OpenSSL to its narrow FFI boundary. HTTP
-  composes public `net`/`ssl`/`url`/`io`/`async`/`timer`/`string`/`math`
-  and confines llhttp to its synchronous callback boundary. Neither reaches
-  through to private `uv`; preserve that layer. A missing high-level capability
-  is a design question, not permission to reach a native handle.
-- Native operation callbacks use the direct `resume_task_from_callback` path for
-  their exact waiter and never receive a `ResumeToken`. `Task:resume(token)`
-  remains for the exact explicit `async.suspend(token, ...)`, not a substitute
-  callback path, general native-wait wake, or early-resume fence.
-- Initialize embedded native handles/requests only after allocating their final
-  nominal owner. Never copy initialized libuv/llhttp state. Private foreign
-  callbacks use compiler-owned nominal field access, not source-order UV slots.
-- One-shot owners retain their native request, exact callback, and borrowed
-  Titan values until terminal callback. Persistent reads/listeners keep only
-  natural buffered state and at most one waiter. Libuv already orders writes;
-  do not add an operation queue.
-- `Runtime.handle_roots` roots the **complete callback owner**, not merely raw
-  storage. It is never traversed. Runtime shutdown discovers handles with
-  `uv_walk`. `uv_is_closing`/the existing `close_handle` path is authoritative;
-  do not add parallel close flags or call `uv_close` twice.
-- A native alloc callback cannot unwind. Preserve an allocation failure for its
-  required paired read callback; do not invent a fallback status or perform
-  synchronous filesystem work in any libuv callback.
+- `net` composes public `uv` and generic `async` operations. SSL performs
+  transport/path work through `net`/`fs` and confines OpenSSL to its FFI
+  boundary. HTTP composes public `net`/`ssl`/`url`/`io`/`async`/`timer` and
+  confines llhttp to its synchronous parser bridge. No consumer imports
+  libuv FFI, including via a transitive native header or `uv.titan` import.
+- One-shot callbacks settle their exact await capability after copying
+  borrowed results and retiring required native storage. Unexpected consumed
+  callback failures report `fatal(error, traceback)` and re-raise. Public
+  `Task:resume(token)` remains specific to matching explicit suspension.
+- UV owns stable native storage, concrete-owner views, native roots, and
+  ordinary public callable dispatch. Domain modules own their semantic state
+  and borrowed-input captures; accepted work remains alive until completion.
+  A read/listener uses a buffered subscription, not a private Task waiter.
+- `has_waiter()` is the exact subscription reservation, including queued wakes;
+  cancellation detaches it synchronously. Do not mirror it with a boolean that
+  clears only after unwind. Preserve pre-cancellation/error precedence before
+  rejecting a duplicate domain reader or acceptor.
+- UV's `is_closing` is authoritative while a handle is initialized; combine it
+  with `handle:is_initialized()` to recognize retired owners. Runtime shutdown
+  uses public `uv.walk`. Do not duplicate the native resource graph or close bit.
+- A native alloc callback cannot unwind. UV preserves allocation failure for
+  the paired read callback. Domains must not block or perform filesystem
+  classification in a loop callback. Libuv orders accepted writes directly.
 - The loop is cooperative. Do not add Runtime generations, scheduler queues,
   phase fences, snapshot rollback, or defensive locks for impossible callback
   interleavings.
@@ -1175,7 +1178,8 @@ not an invitation for application code to import private `uv`.
   checks. Keep one raw event to one public event/state transition.
 - TLS's one busy bit is deliberate state-machine serialization. HTTP's idle
   timeout uses high-level `async.race_two`: reader-win cancels timer-only work;
-  deadline-win cancels and joins the state-owning reader. Do not add a native
+  deadline-win cancels and drains the state-owning reader. The reader drain
+  uses cancellation-insensitive await on every parent exit. Do not add a native
   HTTP timeout path.
 - HTTP's folder contributors are one module. Its only native boundary is the
   synchronous llhttp callback bridge; it has no network callback or Task API.
@@ -1192,15 +1196,16 @@ Authority:
 
 Reject code or advice that does any of the following:
 
-- calls `.titan` files with `lua`, uses `await`, promises, goroutines, OS threads,
-  or callback registration instead of Titan's direct Task calls;
+- calls `.titan` files with `lua`, invents an `await` keyword, promises, or
+  goroutines, or replaces a high-level direct Task API with guessed callback
+  methods. Low-level adapters may use public `async.await` and UV callbacks;
 - calls `async.loop()` from `main` under automatic bootstrap, from a handler, or
   from another Task;
 - calls `Task:resume(token)` to finish a socket/TLS/HTTP operation, invents a
-  native-completion token, or adds a fence for a callback supposedly firing
-  while Titan statements are running;
-- imports `uv` from application code, unwraps a private handle, uses LuaSocket,
-  or guesses `dial`, `bind`, `settimeout`, `setoption`, `peername`, `sockname`,
+  native-completion token, or adds a fence for an unrelated loop callback
+  supposedly preempting ordinary Titan statements;
+- imports private UV state, unwraps a private high-level handle, uses LuaSocket,
+  or guesses high-level `dial`, `bind`, `settimeout`, `setoption`, `peername`, `sockname`,
   `read_all`, `readline`, `send`, or `recv` methods;
 - assumes port zero can be discovered, that `Server:close` joins accepted
   clients, or that Runtime handle roots are an application resource registry;
@@ -1229,7 +1234,7 @@ Reject code or advice that does any of the following:
   fields without a valid `is`/`as` projection;
 - adds unnecessary `do/end` around an entire function just to use `defer` or a
   function-level `catch`; or
-- tests the public networking API through Lua/Busted, private uv state,
+- tests the public networking API through Lua/Busted, private UV state,
   generated-C inspection, fixed unowned ports, or an insecure TLS bypass when a
   native Titan public-behavior test belongs in the owning module.
 
@@ -1275,7 +1280,7 @@ concurrently and closes each connection. Explain shutdown."
 Connection; immediate deferred close; `read_until("\n", true)`; no chunk/message
 assumption; recognizes `Server:close` stops accept but does not join handlers;
 no `async.loop` inside a Task. **Fail:** Go/LuaSocket calls, port getter,
-reader queue, `Task:resume(token)`, or private `uv`.
+reader queue, `Task:resume(token)`, or private UV state.
 
 ### Eval 2 — URL validator review
 
