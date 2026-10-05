@@ -94,7 +94,7 @@ one final root initializer:
 
 ```titan
 local fs = import "fs"
-local strings = import "string"
+local string = import "string"
 local math = import "math"
 
 local default_marks = 3
@@ -106,7 +106,7 @@ end
 
 local function Greeting:render(): string
   return "Hello, " .. self.name ..
-         strings.rep("!", self.marks)
+         string.rep("!", self.marks)
 end
 
 function write_greeting(path: string, name: string)
@@ -498,7 +498,7 @@ A fixed positional call is adjusted to the declaration:
 - `...: T` is only for a callee that semantically consumes every trailing `T`.
 
 This makes an optional fixed parameter a normal `T?` parameter, not a special
-default syntax. `strings.rep("x", 3)` works because its third parameter is
+default syntax. `string.rep("x", 3)` works because its third parameter is
 `string?` and receives nil. Do not add a variadic tail merely to ignore extras.
 
 Named calls use bare braces and are available only while the callee is a direct
@@ -841,12 +841,12 @@ output Array into a “mapper”, invent an append protocol, or split one obviou
 state transition across wrappers:
 
 ```titan
-local strings = import "string"
+local string = import "string"
 
 local function uppercase_all(input: {string}): {string}
   local output: {string} = {}
   for index = 1, #input do
-    output[index] = strings.upper(input[index])
+    output[index] = string.upper(input[index])
   end
   return output
 end
@@ -1317,13 +1317,27 @@ outer loop.
 
 ## Core standard library
 
+Prefer a standard-library operation when its documented semantics match the
+work. These summaries are not exhaustive: before writing a delimiter scanner,
+pattern matcher/substituter, or another common helper absent from the inventory,
+check the owning `doc/language/standard-library-*.md` chapter linked below.
+Keep application policy such as empty-field filtering, size limits, or stricter
+validation around the existing operation. Retain custom code when its required
+semantics differ; name that difference rather than inferring an API is absent
+from this cartridge alone.
+
 ### `string`: bytes, conversion, building, packing, regex
 
-Use a descriptive import alias to distinguish the module from the scalar type:
+Use the canonical module name:
 
 ```titan
-local strings = import "string"
+local string = import "string"
 ```
+
+The import binding `string` does not conflict with the primitive `string` type
+in annotations. Primitive type words are contextual identifiers and retain their
+meaning in type positions. Choose another import name only for an actual term
+naming conflict or a name that adds meaning, not to avoid the type spelling.
 
 All positions and lengths are **bytes**, generally one-based. Embedded NUL is
 ordinary data except where a documented C-style format forbids it. Important
@@ -1352,14 +1366,20 @@ uses Lua index normalization. `lower`/`upper` are bytewise C-locale operations,
 not Unicode case folding. `tostring` deliberately uses Lua conversion and can
 invoke `__tostring`; ordinary typed `string` parameters never coerce numbers.
 
+`format` supports Lua 5.5 conversion flags, widths, and precisions. `%d` formats
+an integer in decimal; `%x`/`%X` use lowercase/uppercase hexadecimal. For a known
+byte in `0..255`, `string.format("%02x", byte)` produces exactly two lowercase
+hex digits, including a leading zero. Numeric conversions check their operands;
+numeric strings are not accepted as numbers. `%s` uses `string.tostring`.
+
 Use the synchronous linear-time writer instead of repeatedly concatenating a
 growing result or inventing a chunk-array helper:
 
 ```titan
-local strings = import "string"
+local string = import "string"
 
 local function join_lines(lines: {string}): string
-  local output = strings.writer()
+  local output = string.writer()
   for index = 1, #lines do
     output:write(lines[index])
     output:write("\n")
@@ -1368,7 +1388,7 @@ local function join_lines(lines: {string}): string
 end
 ```
 
-`strings.reader(contents)` and `strings.writer()` provide synchronous
+`string.reader(contents)` and `string.writer()` provide synchronous
 in-memory Reader/Writer records with idempotent `close`. `pack`, `packsize`,
 and `unpack` implement Lua 5.5 binary formats with typed checked dynamic
 operands.
@@ -1376,10 +1396,10 @@ operands.
 Compiled regexes are byte-oriented and separate from Lua string patterns:
 
 ```titan
-local strings = import "string"
+local string = import "string"
 
 local function first_word(subject: string): string?
-  local words = strings.compile_regex("[A-Za-z_][A-Za-z0-9_]*")
+  local words = string.compile_regex("[A-Za-z_][A-Za-z0-9_]*")
   local found? = words:match(subject)
   if not found then return nil end
   return found:whole()
@@ -1390,6 +1410,52 @@ end
 yields nonnil `RegexMatch` records; `Regex:gsub` takes exactly a
 `function (string): (string)` callback receiving the whole match. Load **Titan PEGs**
 when implementing a real grammar or structured parser.
+
+For ordinary searches, validation, iteration, splitting, and replacement, the
+source-expression conveniences use a private weak regex-compilation cache:
+
+```text
+function match(subject: string, expression: string,
+               init: integer?): RegexMatch?
+function gmatch(subject: string, expression: string,
+                init: integer?): function (): (RegexMatch?)
+function matches(subject: string, pattern: string):
+    function (): (string?, ...: string?)
+function split(subject: string, delimiter: string?): function (): (string?)
+function gsub(subject: string, expression: string,
+              replacement: function (string): (string),
+              maximum: integer?): (string, integer)
+```
+
+`match` returns a typed match or nil; use `^` and `$` for whole-string validation.
+`matches` projects whole matches or capture tuples; an unmatched first capture
+terminates a generic `for`, so use `gmatch` when that capture can be optional.
+`gsub` passes the whole match to its replacement function, not capture arguments.
+
+Use `split` rather than a custom delimiter-search loop when the contracts match:
+
+```titan
+local string = import "string"
+
+function nonempty_comma_fields(subject: string): {string}
+  local fields: {string} = {}
+  for field in string.split(subject, ",") do
+    if field ~= "" then fields[#fields + 1] = field end
+  end
+  return fields
+end
+```
+
+A supplied delimiter is a **regex**, not a literal search string. Comma, slash,
+and ampersand are literal regex bytes; a literal dot needs `"\\."` in Titan
+source. Captures in the delimiter are ignored. Leading, adjacent, and trailing
+delimiters yield empty fields; an empty subject with a supplied delimiter yields
+one empty field. An empty string is a real item and only nil ends the iterator.
+The example skips empty fields as caller policy and does not trim
+whitespace. With nil or omitted delimiter, `string.split(subject)` iterates
+individual bytes and yields nothing for an empty subject. Zero-width delimiters
+make byte progress rather than looping forever. A custom literal splitter for
+arbitrary delimiters cannot be replaced blindly with regex splitting.
 
 ### `math`: typed numerical operations
 

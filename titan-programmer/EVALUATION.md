@@ -168,6 +168,43 @@ A fresh cartridge-only evaluator passed this case on 2026-08-28: it recovered
 the complete subject, range, placement, finite/open, capacity, and C-vararg
 separation rules without consulting another authority.
 
+### P6 — standard string operations (`titan-programmer` only)
+
+Ask for a complete module with a string import and `string`-typed parameters,
+return values, and Array elements. It should collect comma-delimited fields in
+wire order, optionally omit empty fields without trimming whitespace, split a
+literal dot, iterate a compact byte string, and format bytes as lowercase
+two-digit hexadecimal text. Require:
+
+- the canonical `local string = import "string"` binding without an invented
+  conflict with primitive type annotations;
+- `string.split` generic-for iteration rather than a manual find/sub scanner;
+- preserved leading, adjacent, and trailing empty fields, including an empty
+  subject with a supplied delimiter, and explicit caller policy for omission;
+- regex delimiter semantics and an escaped literal dot, without an invented
+  literal-split or regex-escape API;
+- nil/omitted delimiter byte iteration, including NUL/high-bit bytes and no
+  iterations for an empty subject;
+- `string.format("%02x", byte)` rather than a private digit-lookup encoder for
+  known byte values, preserving `00`, `0f`, and `ff`; and
+- no invented `Regex:split`, Lua-pattern semantics, implicit whitespace
+  trimming, or assumption that an empty field terminates iteration.
+
+Also ask whether replacing a bounded stream reader or a strict URI component
+decoder with a superficially similar convenience is always idiomatic. Require
+checking the documented size-limit, decoding, and ownership semantics first;
+the existence of a convenience alone does not justify changing those contracts.
+
+Score from the generated code and compile/run the complete example against
+current authority independently. Do not use a wording-only check as evidence.
+
+A fresh cartridge-only evaluator passed this case on 2026-10-05. Its complete
+program independently compiled and ran against the installed Linux Titan SDK,
+covering canonical import/type coexistence, preserved and omitted empty fields,
+whitespace, escaped-dot splitting, binary byte iteration, and `00`/`0f`/`ff`
+formatting. It retained the semantic differences for bounded reads and strict
+URI decoding rather than inventing matching convenience APIs.
+
 ### T1 — native tests (`titan-programmer` + `titan-tester`)
 
 Replace a Busted wrapper around twenty Titan behavior rows with discoverable
