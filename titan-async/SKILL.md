@@ -104,6 +104,7 @@ record Error
   error: value
   traceback: string
 end
+function Error:raise()
 
 record OperationError
   code: integer
@@ -734,7 +735,7 @@ Evidence: `doc/language/async-io.md`,
 Combinators never cancel unfinished operands. After a winner, clean up each
 loser according to what it owns. A timer-only deadline does not own connection
 state, so its close may safely finish after detachment. A read Task owns parser,
-transport, or TLS-busy state, so a deadline winner must cancel **and join** the
+transport, or active TLS engine state, so a deadline winner must cancel **and join** the
 read before tearing that shared state down:
 
 ```text
@@ -1620,3 +1621,14 @@ thread.
   `spec/stdlib/titan/timer/`, `spec/stdlib/titan/uv/task_tests/`,
   `spec/stdlib/titan/uv/runtime_tests.titan`, and
   `spec/stdlib/titan/coroutine/`.
+
+### Supervised failure propagation
+
+An internal operation worker may catch its error/trace and return an
+`async.Error` carrier so it does not emit an uncaught internal Task diagnostic.
+After resource retirement, call `failure:raise()` to raise the original value
+with its saved trace. Do not wrap the catch-visible nominal failure or replace
+its operation frames with the supervisor's cleanup location. This method does
+not cancel Tasks. For blocked accepted writes, the independently runnable owner
+must initiate transport abort before cancellation-insensitive child drainage;
+plain observer cancellation followed by join may otherwise remain blocked.

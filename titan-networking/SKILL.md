@@ -45,6 +45,7 @@ Do not infer an API from a sketch. The API inventories below are the boundary.
 | TLS/trust/certificates | [`doc/language/standard-library-ssl.md`](../../../doc/language/standard-library-ssl.md) | [`titan/ssl.titan`](../../../titan/ssl.titan), [`spec/stdlib/titan/ssl/tests.titan`](../../../spec/stdlib/titan/ssl/tests.titan), [`doc/implementation/ssl-library.md`](../../../doc/implementation/ssl-library.md) |
 | HTTP client/server | [`doc/language/standard-library-http.md`](../../../doc/language/standard-library-http.md) | [`titan/http/`](../../../titan/http), [`spec/stdlib/titan/http/tests/`](../../../spec/stdlib/titan/http/tests), [`doc/implementation/http-library.md`](../../../doc/implementation/http-library.md) |
 | URL validation/normalization | [`doc/language/standard-library-url.md`](../../../doc/language/standard-library-url.md) | [`titan/url.titan`](../../../titan/url.titan), [`spec/stdlib/titan/url/tests.titan`](../../../spec/stdlib/titan/url/tests.titan), [`doc/implementation/url-library.md`](../../../doc/implementation/url-library.md) |
+| WebSocket sessions | [`titan-websocket/SKILL.md`](../titan-websocket/SKILL.md) | [`doc/language/standard-library-websocket.md`](../../../doc/language/standard-library-websocket.md), [`titan/websocket/`](../../../titan/websocket) |
 | Stream abstraction | [`doc/language/standard-library-io.md`](../../../doc/language/standard-library-io.md) | [`titan/io.titan`](../../../titan/io.titan), [`doc/language/interfaces.md`](../../../doc/language/interfaces.md) |
 | Tasks, deadlines, cancellation | [`doc/language/async-io.md`](../../../doc/language/async-io.md) | [`doc/implementation/libuv-runtime.md`](../../../doc/implementation/libuv-runtime.md), [`titan/async.titan`](../../../titan/async.titan) |
 | Cleanup/error/option spelling | [`doc/style-guide.md`](../../../doc/style-guide.md), [`doc/language/defer.md`](../../../doc/language/defer.md), [`doc/language/error-handling.md`](../../../doc/language/error-handling.md), [`doc/language/option-types.md`](../../../doc/language/option-types.md) | Adjacent code and tests |
@@ -104,9 +105,12 @@ be correct across those boundaries.
 ```text
 local net = import "net"
 
-record Connection       -- opaque; no public constructor or handle
+record Connection       -- opaque; public fresh-endpoint constructor
 record Server           -- opaque; no public constructor or handle
 
+function resolve(host: string, port: integer): {uv.sockaddr_t}
+function Connection.new(): Connection
+function Connection:connect_address(address: uv.sockaddr_t)
 function connect(host: string, port: integer): Connection
 function listen(host: string, port: integer,
                 backlog: integer?): Server
@@ -121,6 +125,14 @@ function Connection:close()
 function Server:accept(): Connection
 function Server:close()
 ```
+
+`resolve` returns owned IPv4/IPv6 TCP addresses in resolver order, retaining
+no native addrinfo. Use one returned address with a fresh `net.Connection()`,
+immediately defer `close`, then `connect_address(address)`. This performs no
+second DNS query and makes the TCP abort owner available while dialing. Before
+connect succeeds, only dialing and close are valid. Repeat/concurrent attempts
+fail; after a failed attempt close the endpoint. DNS cancellation requests
+native cancellation and drains its real callback, which can outlast a deadline.
 
 This is the complete current TCP surface. There is no UDP, Unix-domain socket,
 socket-option, local/peer-address, selected-ephemeral-port, read-size,
@@ -143,6 +155,8 @@ function Error.new(code: integer, name: string,
 record Connection       -- opaque
 record Server           -- opaque
 
+function client(transport: net.Connection, host: string,
+                ca_file: string?): Connection
 function connect(host: string, port: integer,
                  ca_file: string?): Connection
 function listen(host: string, port: integer,
@@ -150,6 +164,7 @@ function listen(host: string, port: integer,
                 private_key_file: string?,
                 backlog: integer?): Server
 
+function Connection:abort()
 function Connection:handshake()
 function Connection:read(): string?
 function Connection:read_until(delimiter: string,
@@ -168,7 +183,10 @@ rather than manufacturing one.
 
 There is no insecure flag, CA-directory argument, client-certificate/mTLS
 surface, ALPN selector, cipher/session/key-log control, raw `net.Connection`
-accessor, or simultaneous-read/write mode.
+accessor. One reader and one writer may progress concurrently after shared
+lazy-handshake admission. Duplicate operations in one direction fail; explicit
+handshake/shutdown/graceful close remain exclusive. Use `abort()` to interrupt
+active operations without waiting for peer TLS progress.
 
 ### URLs: `url`
 
@@ -244,6 +262,10 @@ function request(method: string, source_url: string,
                  ca_file: string?): ClientResponse
 function get(source_url: string, supplied_headers: Headers?,
              ca_file: string?): ClientResponse
+function request_upgrade_on(connection: io.ReaderWriterCloser,
+                            abort: function(): (), source_url: string,
+                            protocol: string, supplied_headers: Headers?): ClientResponse
+function ClientResponse:take_upgrade(): io.ReaderWriterCloser
 function ClientResponse:read(): string?
 function ClientResponse:read_until(delimiter: string,
                                    chop: boolean?): string?
@@ -271,6 +293,10 @@ function Response:headers(): Headers
 function Response:send_headers()
 function Response:write(data: string)
 function Response:close()
+function Response:upgrade(request_value: Request, protocol: string,
+                          supplied_headers: Headers?): io.ReaderWriterCloser
+function Response:reject_upgrade(request_value: Request, status: integer,
+                                 supplied_headers: Headers?)
 
 record Server
 function listen(host: string, handler: Handler,
@@ -281,6 +307,7 @@ function listen_tls(host: string, certificate_file: string,
                     port: integer?, backlog: integer?,
                     idle_timeout: integer?): Server
 function Server:idle_timeout(timeout: integer?): integer
+function Server:header_limit(limit: integer?): integer
 function Server:serve()
 function Server:close()
 ```
@@ -296,7 +323,11 @@ a public generated constructor. Use `headers`, `request`/`get`, and
 This is an HTTP/1.1-only, one-request client and serial keep-alive server. There
 is no `Router`, request builder, streaming request-body Writer, response `body`
 field, redirect policy, decompressor, cookie jar, proxy mode, connection pool,
-WebSocket/Upgrade, HTTP/2, endpoint getter, or generic middleware API.
+HTTP/2, endpoint getter, or generic middleware API. Validated HTTP upgrades
+transfer a prefix-preserving stream exactly once. Use the dedicated
+[`titan-websocket`](../titan-websocket/SKILL.md) cartridge for the WebSocket
+protocol built on those upgrade seams. Raw incoming headers default to 64 KiB;
+`header_limit` reads/updates the positive limit for subsequent exchanges.
 
 ### The stream Interfaces used by networking
 
@@ -677,7 +708,7 @@ make `net.Server:close()` promise to join clients—it does not.
   certificate-free, or malformed PEM is rejected. There is no CA-directory
   parameter.
 
-### TLS servers and serialized connections
+### TLS servers and duplex connections
 
 - `ssl.listen` reads one PEM chain and an unencrypted key through high-level
   `fs`. The first certificate is the leaf and later certificates are sent as
@@ -687,20 +718,26 @@ make `net.Server:close()` promise to join clients—it does not.
   `handshake()` there when handshake failure should be explicit. Otherwise the
   first read/write drives it. Never perform the handshake serially in the main
   accept loop if a stalled peer must not block later accepts.
-- One `ssl.Connection` admits exactly one active operation across handshake,
-  read, write, shutdown, and close. Do not run a reader Task and writer Task on
-  the same TLS connection. The single OpenSSL state machine may need both
-  network directions for any nominal operation.
+- One `ssl.Connection` admits one reader and one writer concurrently. A shared
+  handshake gates both, one feeder owns encrypted input, and synchronous
+  engine attempts submit ciphertext in order before yielding. Same-direction
+  duplicates fail without terminalizing the incumbent. Handshake, shutdown,
+  and graceful close are exclusive.
+- `ssl.client(transport, host, ca_file?)` validates nonempty/NUL-free identity
+  before adopting TCP. After adoption, trust/configuration failure retires TCP.
+  Trust loading may suspend; returning the lazy engine does not handshake.
+  Preserve the original hostname when adopting a numerically dialed transport.
 - Cancelling a TLS operation terminalizes the TLS engine and best-effort closes
   its TCP transport. The Connection is not reusable afterward.
 - `shutdown()` emits `close_notify`, drains it, and half-closes TCP output while
   leaving the read side available. Authenticated peer `close_notify` becomes
   nil EOF. FIN/RST without it becomes `ssl.Error` named
   `TLS_TRUNCATED_EOF`.
-- `close()` best-effort performs TLS shutdown when possible, frees the engine,
-  and closes TCP. It is idempotent after terminal close. Do not concurrently
-  call close while another TLS operation owns the busy state; cancel and join
-  that operation instead.
+- `close()` best-effort performs exclusive TLS shutdown and closes TCP. It is
+  idempotent after retirement. `abort()` works independently during pending
+  read/write/handshake: stop admission, initiate TCP close before child-scope
+  drains, then free the engine once. It is cancellation-insensitive and never
+  joins application Tasks. Concurrent abort calls share retirement.
 - Closing an `ssl.Server` stops only the listener/context reference. Already
   accepted Connections retain their TLS state and remain independently owned.
 
@@ -732,16 +769,18 @@ loopback connections. It does not disable verification; see
 
 ## URLs: validate once and use the right field
 
-The URL module accepts only absolute HTTP/HTTPS URLs with a nonempty authority.
+The URL module accepts absolute HTTP/HTTPS/WS/WSS URLs with a nonempty authority.
 It deliberately rejects user information and fragments. It accepts registered
 names, IPv4, bracketed IPv6, and bracketed IPvFuture; explicit ports are
-`1..65535`. It performs no DNS or I/O.
+`1..65535`. It performs no DNS or I/O. Ordinary HTTP clients admit only HTTP/HTTPS after
+parsing. The WebSocket client preserves the original hostname/authority and
+translates only its normalized scheme for the HTTP opening.
 
 Normalization is byte-oriented:
 
 - `scheme` and registered-name hosts are lowercase;
 - `host` is the unbracketed connection/TLS-identity spelling;
-- `port` is explicit or the effective 80/443 default;
+- `port` is explicit or the effective 80 for HTTP/WS and 443 for HTTPS/WSS;
 - empty path becomes `/`;
 - `query` distinguishes absent nil from present empty `""`;
 - `target` is normalized origin-form path plus optional query;
@@ -893,8 +932,11 @@ For HTTPS with a pinned/test trust bundle, pass it as the third `get` argument:
 - HEAD and status 204/205/304 suppress bodies with the documented
   Content-Length restrictions. Do not write a body merely because the handler
   received a Writer-shaped object.
-- A singleton `Expect: 100-continue` is acknowledged before handler entry.
-  Unsupported/repeated expectations receive 417 without invoking the handler.
+- For ordinary requests, singleton `Expect: 100-continue` is acknowledged
+  before handler entry; unsupported/repeated expectations receive 417.
+  Upgrade-indicated requests with Expect receive bounded bodyless 400 before
+  the handler, with no interim output or body drain. Completely parsed upgrade
+  attempts with invalid Host, request URL, or unsupported HTTP version also receive 400.
 
 **REPOSITORY-VERIFIED — manual HTTP server**
 ([`doc/language/standard-library-http.md`](../../../doc/language/standard-library-http.md)):
@@ -935,10 +977,10 @@ connection, not an in-flight header read.
 When headers win, the timer-only Task can be cancelled and finish in the
 background. When the deadline wins, the reader Task must be cancelled **and
 joined before parser/connection/TLS state is released**. On HTTPS this
-cancellation terminalizes the serialized SSL read, so the peer sees
-`TLS_TRUNCATED_EOF`, not graceful `close_notify`. There is no public primitive
-for interrupting a busy SSL read and then gracefully shutting it down. Do not
-reach into `uv` to fake one.
+cancellation terminalizes the SSL read and any sibling write, so the peer sees
+`TLS_TRUNCATED_EOF`, not graceful `close_notify`. Use `ssl.abort()` when interruption must initiate transport retirement before
+waiting for an accepted native write; interruption does not emit graceful TLS
+shutdown. Do not reach into private transport fields.
 
 ## Deadlines, cancellation, and cleanup
 
@@ -1003,9 +1045,9 @@ end
 ```
 
 This is a lifecycle example, not a universal timeout helper. Tailor failure
-propagation and loser cleanup to the resource. In particular, do not close a
-busy `ssl.Connection` concurrently with its read; cancel and join that read,
-which terminalizes the connection itself.
+propagation and loser cleanup to the resource. Accepted writes may require
+transport abort before draining their callbacks; `ssl.abort()` provides that
+ordering. A pending read cancellation terminalizes its TLS connection.
 
 ## Error taxonomy and catch discipline
 
@@ -1103,7 +1145,9 @@ lets the loop continue. The `as` is justified because catch-local `error` is
 TLS/HTTPS tests must use a local CA and certificate whose DNS/IP identity
 matches the host. Pass the CA explicitly. Do not add an insecure client path
 for tests. Exercise clean `close_notify` separately from truncation, and do not
-run concurrent operations on one TLS Connection.
+start duplicate readers/writers or overlap exclusive handshake/shutdown/graceful
+close with active I/O. Deliberately test one reader plus one writer progressing
+concurrently and independent abort while accepted output is blocked.
 
 ### What to assert
 
@@ -1179,7 +1223,9 @@ low-level networking adapter.
 - Put private record behavior on a `local` method when it belongs to that owner;
   prefer existing direct helpers/owners over forwarding facades or duplicated
   checks. Keep one raw event to one public event/state transition.
-- TLS's one busy bit is deliberate state-machine serialization. HTTP's idle
+- TLS uses synchronous engine serialization with direction-specific operation
+  owners, a shared input feeder, ordered ciphertext submission, and independent
+  abort before draining accepted work. HTTP's idle
   timeout uses high-level `async.race_two`: reader-win cancels timer-only work;
   deadline-win cancels and drains the state-owning reader. The reader drain
   uses cancellation-insensitive await on every parent exit. Do not add a native
@@ -1218,7 +1264,8 @@ Reject code or advice that does any of the following:
   releases parser/TLS state before cancelling and joining its owning Task;
 - wraps every close in a guessed cancellation shield, invents close flags, or
   retries `uv_close` rather than using the concrete idempotent close;
-- performs simultaneous read/write/close operations on one `ssl.Connection`;
+- duplicates a TLS direction, races graceful close with active I/O, or waits
+  for a blocked accepted write before initiating abort;
 - disables certificate or hostname verification, treats default trust as the
   native OS store, appends an explicit CA file to defaults, or invents mTLS/
   ALPN/cipher options;
@@ -1229,7 +1276,7 @@ Reject code or advice that does any of the following:
   to raise;
 - expects `http.get` to follow redirects/decompress/reuse connections, supplies
   a streaming request body, mutates `Response:headers()` as a live view, or
-  invents a Router/middleware/proxy/WebSocket/HTTP2 API;
+  invents a Router/middleware/proxy/HTTP2 API;
 - uses HTTP idle timeout as a handler/body/write timeout or expects HTTPS timeout
   cancellation to send graceful `close_notify`;
 - casts a checked `Url?`, `string?`, Connection?, Server?, or response option
@@ -1252,7 +1299,8 @@ Before proposing networking code, answer all of these:
    spawned Task given immediate terminal ownership?
 4. Is a nil read treated as EOF and an empty string as data?
 5. Does framing span arbitrary chunks, and is untrusted accumulation bounded?
-6. Are plain TCP's single-reader rule and TLS's single-operation rule preserved?
+6. Are plain TCP's single-reader and TLS's one-reader/one-writer rules preserved,
+   with handshake/shutdown/graceful close kept exclusive?
 7. On cancellation, which exact owner still needs a callback or join before
    state can be reused/released?
 8. Are TLS chain and hostname verification still mandatory, with explicit CA
@@ -1292,7 +1340,8 @@ nil check, and uses `Url.host` as Host for IPv6."
 
 **Pass:** replaces splitting with the nonthrowing tuple; uses direct option
 method/field consumption; branches on `url.Error.kind`; uses host/port for
-connection and authority/`host_header()` for Host; notes absolute HTTP(S)-only,
+connection and authority/`host_header()` for Host; notes absolute HTTP(S)/WS(S) input with ordinary HTTP entrypoints restricted
+to HTTP(S),
 no fragments/userinfo. **Fail:** says parse raises, keeps the option cast, or
 uses unbracketed IPv6 Host.
 
@@ -1304,7 +1353,7 @@ CA and reject non-2xx status."
 **Pass:** `http.get(url, ..., ca_file)` or `ssl.connect(..., ca_file)`; immediate
 response/connection close; streams and bounds body; does not disable identity
 verification; does not expect redirects/decompression. **Fail:** `verify=false`,
-CA-directory invention, response `.body`, or concurrent TLS operations.
+CA-directory invention, response `.body`, or duplicate same-direction TLS operations/exclusive close during active I/O.
 
 ### Eval 4 — TLS accept-loop stall
 
@@ -1312,9 +1361,9 @@ CA-directory invention, response `.body`, or concurrent TLS operations.
 client; one peer never sends ClientHello. Fix it."
 
 **Pass:** knows SSL accept is TCP-only/lazy; starts a per-connection Task and
-handshakes there; preserves one-operation serialization and cleanup. **Fail:**
-changes `ssl.Server:accept` signature, imports uv, adds a thread, or permits
-simultaneous read/write on the same TLS state machine.
+handshakes there; preserves synchronous engine serialization and cleanup.
+**Fail:** changes `ssl.Server:accept` signature, imports private uv state, adds
+a thread, or overlaps two readers/two writers on the same TLS connection.
 
 ### Eval 5 — HTTP handler and framing
 
@@ -1336,7 +1385,8 @@ connection and drops both Task variables when the timer wins. Review it."
 state-owning read before release; accepted native request storage remains until
 callback; plain net waiter versus SSL terminal cancellation are distinguished;
 no manual `Task:resume(token)` or fence. **Fail:** treats cancel as join, drops
-owners, or calls close concurrently on a busy TLS operation.
+owners, races graceful close with active TLS I/O, or drains blocked accepted
+writes before initiating abort.
 
 ### Eval 7 — HTTP idle-timeout scope
 

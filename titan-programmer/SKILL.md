@@ -28,6 +28,8 @@ work crosses one of these boundaries:
   callbacks, callback-to-Task resumption, and async standard-library internals.
 - **`titan-networking`** — `net`, `ssl`, `url`, and `http` APIs and
   protocols.
+- **[`titan-websocket`](../titan-websocket/SKILL.md)** — WebSocket clients, HTTP upgrades,
+  message framing, origin/subprotocol policy, Ping/Close, and session cleanup.
 - **`titan-ffi`** — C `foreign import`, C operators and ownership, foreign
   callbacks, the Lua C API, and the `titan.lua` dynamic escape hatch.
 - **`titan-pegs`** — `titan.peg`, relabel grammars, combinators, and parser error
@@ -1132,7 +1134,7 @@ cannot be re-exported. Circular imports are compile-time errors.
 Canonical short imports are:
 
 ```text
-coroutine uv async timer io fs net ssl url http os peg string test lua gc math iteration reflect sqlite3 json
+coroutine uv async timer io fs net ssl url http websocket os peg string test lua gc math iteration reflect sqlite3 json
 ```
 
 They mean the corresponding `titan.*` logical modules.

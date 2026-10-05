@@ -151,7 +151,7 @@ contributors share one namespace, and contributor filenames do not appear in
 case names.
 
 Do not give a test owner a bare name rewritten by standard-import shorthand:
-`coroutine`, `uv`, `async`, `timer`, `io`, `fs`, `net`, `ssl`, `url`, `http`,
+`coroutine`, `uv`, `async`, `timer`, `io`, `fs`, `net`, `ssl`, `url`, `http`, `websocket`,
 `os`, `peg`, `string`, `test`, `lua`, `math`, `gc`, `iteration`, or `reflect`.
 A bare Lua-library name can also collide at
 the native opener boundary; `math` is the canonical example. Prefer
@@ -587,7 +587,7 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 
 ## 8. Repository-native test ownership and layout
 
-The aggregate currently has 26 explicit logical roots in
+The aggregate currently has 27 explicit logical roots in
 `spec/support/stdlib_test_modules.mk:TITAN_STDLIB_TEST_ROOTS`, shared by Linux,
 macOS, and native Windows:
 
@@ -611,6 +611,7 @@ timer.tests
 net.tests
 ssl.tests
 http.tests
+websocket.tests
 url.tests
 os.tests
 os.process_tests
@@ -798,7 +799,7 @@ compiling any requested root.
 The leaf commands are:
 
 ```sh
-# Build all 26 roots once under .titan-tests; does not run them.
+# Build all 27 roots once under .titan-tests; does not run them.
 make titan-stdlib-test-build
 
 # Run the existing aggregate from the repository root.
@@ -832,7 +833,7 @@ Make builds native fixtures separately and retains generated outputs for
 incremental reuse; explicit `make clean` removes them. The run target returns
 to the repository root because fixtures rely on that CWD. It supervises the
 aggregate in a separate process group with a default 600-second deadline for
-all 26 roots, including repeated fresh child-fixture compilation with O3/Linux
+all 27 roots, including repeated fresh child-fixture compilation with O3/Linux
 LTO. It streams merged output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
 retain their explicit 15-second limit.
@@ -848,7 +849,7 @@ cases, and the complete gate uses no filter. See
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
 `.titan-tests/test/tests` directly from the repository root with repeated
 `-f`, or use one carefully designed Lua pattern. The filter does not change the
-26-root compile.
+27-root compile.
 
 `BUSTED_FILTER` never filters Titan cases, and `TITAN_FILTER` never filters
 Busted. The LuaRocks command adapter also recognizes explicit
@@ -1504,7 +1505,7 @@ make rock-test \
 ```
 
 Must say `TITAN_FILTER` is a runtime Lua pattern, filters one domain only, and
-does not reduce the 26-root build. Do not accept regex-only escaping or a claim
+does not reduce the 27-root build. Do not accept regex-only escaping or a claim
 that `make rock-test` rebuilds/reinstalls the rock.
 
 ## Eval 17 — API surface discrimination
