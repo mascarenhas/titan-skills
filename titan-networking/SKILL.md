@@ -575,7 +575,10 @@ size limit for untrusted input rather than collecting without bound.
   with no waiter. There is no high-water mark. Do not leave a peer producing
   indefinitely while the application does not drain. Buffered chunks are
   returned before a stored read error; after they drain, that error remains
-  sticky until close.
+  sticky until close. Returned chunks are immutable copies. Private TCP receive
+  scratch retains at most 64 KiB per active reader; this bound does not limit
+  queued application bytes. A Connection retained after raw Runtime teardown
+  can retain that scratch until explicit close, a closed read, or collection.
 - A listener likewise retains already accepted clients when no Task is waiting;
   there is no application buffer cap beyond the native listen backlog.
 - There may be at most one suspended reader on a Connection and one suspended
