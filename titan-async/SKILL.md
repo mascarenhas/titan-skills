@@ -82,7 +82,7 @@ callback values; it does not create Tasks or convert statuses to exceptions.
 Use [the public uv manual](../../../doc/language/standard-library-uv.md) and
 its family tables for exact signatures, parameter roles, callback cardinality,
 borrowed memory, cleanup, and platform support. Titan uses its pinned, patched
-bundled libuv 1.52.1. System libuv is not a supported build mode. OpenSSL retains
+bundled libuv 1.53.0. System libuv is not a supported build mode. OpenSSL retains
 its separate preferred-system and explicit-bundled modes.
 
 `coroutine` is also public and low-level. It transfers control; it is not a
