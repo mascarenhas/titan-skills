@@ -22,6 +22,9 @@ reconstruct Titan from memories of Lua, Go, TypeScript, or C.
 This is the primary cartridge. Add the relevant specialist cartridge when the
 work crosses one of these boundaries:
 
+- **[`titan-application`](../titan-application/SKILL.md)** — starting an application
+  repository, source/test build layout, initial ignore rules, and executable
+  delivery checks.
 - **`titan-tester`** — native `titan.test` modules, `titanc --test`, subtests,
   cleanup, filtering, and repository test-layer ownership.
 - **`titan-async`** — Tasks, cancellation, Runtime ownership, timers, libuv
