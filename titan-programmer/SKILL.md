@@ -1942,6 +1942,27 @@ as executable evidence, then update both manuals with the code. Changes to this
 skill tree should rerun the lightweight cartridge and routing matrix in
 [`EVALUATION.md`](EVALUATION.md).
 
+## Native production source coverage
+
+For opt-in executable-line coverage, use `titanc --coverage DIRECTORY` with
+repeated `--coverage-module NAME` for the complete production inventory, including
+modules no test currently imports. Selected names require source; omit test
+owners/helpers and `titan.test`, and split mixed test/production modules. The mode
+owns separate C/object/header/image/notes paths, uses GCC 14+ with matching gcov,
+and performs a real attribution probe before compilation. Clang and Windows
+CLANG64 fail clearly for this initial backend. Keep source directives enabled.
+
+Use the installed host `titan-coverage seal`, `run`, and `report` commands after
+building. Each run needs a fresh directory; wait for all children to exit, retain
+run receipts/counters, and preserve failing or incomplete collection. Reporting
+uses pinned gcovr 8.4 and covers Titan executable lines only, not generated-C
+branch/function percentages. Staged builds use `--coverage-root` and repeated
+`--coverage-source-map STAGE=TRACKED`; compiled/tracked bytes must agree. Changed
+coverage settings require a fresh directory; `--incremental` and `-c --test`
+retain isolated receipt-checked objects. See
+[`native coverage`](../../../doc/language/native-coverage.md) for commands and
+[`implementation`](../../../doc/implementation/native-coverage.md) for ownership.
+
 ## Before finishing
 
 - Recheck exports versus `local`, module-variable constant/order rules, and

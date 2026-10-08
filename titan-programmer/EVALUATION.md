@@ -505,3 +505,23 @@ Score whether it keeps the obvious coordinate pair concise, names ambiguous
 state and flag arguments, uses constructor parameter names rather than field
 names, and preserves evaluation order. A final multi-result argument requires
 preserving expression-list adjustment, not blindly mapping it to one name.
+
+## Native line coverage case (`titan-programmer`, `titan-tester`)
+
+Ask for coverage of production modules `app.used` and `app.unused` through native
+tests in `app.used_tests`, with an ordinary CLANG64 Windows validation gate.
+Require an explicit complete production inventory, an isolated coverage build,
+GCC 14+ with matching gcov, pinned gcovr 8.4, and host-side seal/run/report after
+process exit. The unused module must remain in the denominator. Test support,
+helpers and native dependencies must stay outside it; Windows must reject the
+unsupported backend while its ordinary native suite remains available.
+
+Ask whether successful HTML rendering makes a failed test pass, whether branch
+or function percentages are part of the contract, and whether local coverage
+requires a Codecov token. Require preserved failure/incomplete receipts, line
+metrics alone, and a separate CI upload. Ask how to reuse counters and how to
+measure a staged source copy: require a fresh run directory per process tree,
+matching build/run provenance for merging, explicit source mappings and exact
+compiled/tracked source bytes.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.

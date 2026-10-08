@@ -911,6 +911,31 @@ TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   --filter='filters descendants'
 ```
 
+### Opt-in native production coverage
+
+Coverage keeps the ordinary test runner and owning test layers. Compile with
+`--coverage DIRECTORY` and explicit repeated `--coverage-module NAME` production
+scope, excluding test owners, helper modules, private test support and the runner.
+Discovery does not classify helpers; the declared inventory must. Mixed
+production/test owners reject, and wholly untested production modules retain
+zero-count executable notes. GCC 14+ and matching gcov are required; Windows
+CLANG64 rejects this initial backend before artifact generation.
+
+Host-side `titan-coverage seal/run/report` operates after build probes and process
+exit. Use one fresh run directory per shard/process tree, join children before
+reporting, and merge only matching source/tool/build provenance. Failed tests
+remain failed; crashes, timeouts and absent expected counters are incomplete.
+Pinned gcovr 8.4 emits Titan line-only LCOV/HTML/Cobertura. A line hit does not
+prove every expression or behavior ran. Keep ordinary optimized/platform gates.
+
+The Titan repository's `titan-native-coverage-build`, `-run`, and `-report` targets
+source-link every production stdlib module into the existing aggregate, with
+native dependencies/test helpers uninstrumented. Run unfiltered for a baseline;
+inspect uncovered lines to add useful cases in the native owner, never a Busted
+stdlib wrapper. See
+[`native coverage`](../../../doc/language/native-coverage.md) for prerequisites,
+path mappings, counters, and report commands.
+
 ## 11. When Busted is the right layer, use its existing scaffolding
 
 Do not recreate parser/checker/coder setup locally. Shared helpers live in
