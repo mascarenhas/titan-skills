@@ -928,6 +928,31 @@ remain failed; crashes, timeouts and absent expected counters are incomplete.
 Pinned gcovr 8.4 emits Titan line-only LCOV/HTML/Cobertura. A line hit does not
 prove every expression or behavior ran. Keep ordinary optimized/platform gates.
 
+A complete project example, with tools installed in a private Python environment:
+
+```sh
+python3 -m venv /tmp/titan-coverage-tools
+/tmp/titan-coverage-tools/bin/pip install gcovr==8.4
+export CC=gcc-14 GCOV=gcov-14
+titanc --test --coverage /tmp/app-coverage/build \
+  --coverage-module app.used --coverage-module app.unused app.used_tests
+titan-coverage seal --manifest /tmp/app-coverage/build/build.json \
+  --cc "$CC" --gcov "$GCOV"
+titan-coverage run --manifest /tmp/app-coverage/build/build.json \
+  --run /tmp/app-coverage/run-1 --timeout 120 -- \
+  /tmp/app-coverage/build/bin/app/used_tests
+titan-coverage report --manifest /tmp/app-coverage/build/build.json \
+  --run /tmp/app-coverage/run-1 --output /tmp/app-coverage/report-1 \
+  --gcovr /tmp/titan-coverage-tools/bin/gcovr
+```
+
+The installed host command lives alongside `titanc`; a checkout may invoke
+`python3 titan-coverage`. Reports include `coverage.html`, `coverage.info`,
+`coverage.xml`, normalized lines and raw evidence. Local coverage requires no
+Codecov credentials or network access once tools are installed; CI uploads
+separately. Staged sources use `--coverage-root ROOT` and repeated
+`--coverage-source-map STAGE=TRACKED`; compiled and tracked bytes must match.
+
 The Titan repository's `titan-native-coverage-build`, `-run`, and `-report` targets
 source-link every production stdlib module into the existing aggregate, with
 native dependencies/test helpers uninstrumented. Run unfiltered for a baseline;

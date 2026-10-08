@@ -1955,7 +1955,8 @@ CLANG64 fail clearly for this initial backend. Keep source directives enabled.
 Use the installed host `titan-coverage seal`, `run`, and `report` commands after
 building. Each run needs a fresh directory; wait for all children to exit, retain
 run receipts/counters, and preserve failing or incomplete collection. Reporting
-uses pinned gcovr 8.4 and covers Titan executable lines only, not generated-C
+uses pinned gcovr 8.4; local coverage needs no Codecov credentials and CI uploads
+separately. It covers Titan executable lines only, not generated-C
 branch/function percentages. Staged builds use `--coverage-root` and repeated
 `--coverage-source-map STAGE=TRACKED`; compiled/tracked bytes must agree. Changed
 coverage settings require a fresh directory; `--incremental` and `-c --test`
