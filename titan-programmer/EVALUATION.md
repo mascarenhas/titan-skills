@@ -509,19 +509,31 @@ preserving expression-list adjustment, not blindly mapping it to one name.
 ## Native line coverage case (`titan-programmer`, `titan-tester`)
 
 Ask for coverage of production modules `app.used` and `app.unused` through native
-tests in `app.used_tests`, with an ordinary CLANG64 Windows validation gate.
+tests in `app.used_tests`, with both an ordinary CLANG64 Windows validation gate
+and an explicit opt-in native Windows coverage workflow.
 Require an explicit complete production inventory, an isolated coverage build,
-GCC 14+ with matching gcov, pinned gcovr 8.4, and host-side seal/run/report after
-process exit. The unused module must remain in the denominator. Test support,
-helpers and native dependencies must stay outside it; Windows must reject the
-unsupported backend while its ordinary native suite remains available.
+GCC 14+ with matching gcov for the default POSIX backend, pinned gcovr 8.4, and
+host-side seal/run/report. The unused module must remain in the denominator.
+Test support, helpers and native dependencies must stay outside it. Windows
+must reject the default GCC backend while retaining its ordinary native suite;
+its explicit coverage workflow requires `--coverage-backend llvm-gcov`, matching
+Clang/LLVM 22.1.8, `--coverage-gcov 'llvm-cov gcov'`, and a direct native x64 Python
+selected with `--coverage-python COMMAND`. Require rejection of MSYS Python and
+Windows venv redirectors, rather than an implicit backend or Python substitution.
+For the repository workflow, require the coverage leaf targets through
+`make -f Makefile.win`, a fresh local NTFS workspace copied from the prepared SDK,
+measurement of the actual provider DLL, and retention of the ordinary test
+consumer's EXE launcher in the sealed inventory.
 
 Ask whether successful HTML rendering makes a failed test pass, whether branch
 or function percentages are part of the contract, and whether local coverage
 requires a Codecov token. Require preserved failure/incomplete receipts, line
-metrics alone, and a separate CI upload. Ask how to reuse counters and how to
-measure a staged source copy: require a fresh run directory per process tree,
-matching build/run provenance for merging, explicit source mappings and exact
-compiled/tracked source bytes.
+metrics alone, and a separate CI upload. Complete collection requires natural
+leader exit and confirmed emptiness of the owned POSIX process group or Windows
+Job Object; an unjoined descendant makes even a zero-exit leader incomplete.
+Crashes, timeouts, interrupts and absent expected counters remain incomplete.
+Ask how to reuse counters and how to measure a staged source copy: require a
+fresh run directory per process tree, matching build/run provenance for merging,
+explicit source mappings and exact compiled/tracked source bytes.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
