@@ -848,7 +848,7 @@ LTO. It streams merged output through a pipe and preserves exit status. `TITAN_T
 override the budget for a justified environment; focused CI shutdown checks
 retain their explicit 15-second limit.
 
-Native Windows exposes the same leaf names through `make -f Makefile.windows`
+Native Windows exposes the same leaf names through `make -f Makefile.win`
 with `PREFIX` selecting the validated SDK and `TITAN_TEST_BUILD_DIR` selecting a
 marked disposable local NTFS workspace. It copies the SDK, builds every root
 serially, then runs with the existing Job Object supervisor and concurrent pipe
@@ -918,13 +918,19 @@ Coverage keeps the ordinary test runner and owning test layers. Compile with
 scope, excluding test owners, helper modules, private test support and the runner.
 Discovery does not classify helpers; the declared inventory must. Mixed
 production/test owners reject, and wholly untested production modules retain
-zero-count executable notes. GCC 14+ and matching gcov are required; Windows
-CLANG64 rejects this initial backend before artifact generation.
+zero-count executable notes. The default backend requires GCC 14+ and matching
+gcov. Native Windows CLANG64/UCRT requires explicit `--coverage-backend llvm-gcov`,
+matching Clang/LLVM 22.1.8, `--coverage-gcov 'llvm-cov gcov'`, and a direct native
+x64 Python selected with `--coverage-python COMMAND`. Windows rejects the
+default GCC backend; MSYS Python and Windows venv redirectors are unsupported.
 
 Host-side `titan-coverage seal/run/report` operates after build probes and process
 exit. Use one fresh run directory per shard/process tree, join children before
-reporting, and merge only matching source/tool/build provenance. Failed tests
-remain failed; crashes, timeouts and absent expected counters are incomplete.
+reporting, and merge only matching source/tool/build provenance. Complete
+collection requires both leader exit and confirmed emptiness of its owned POSIX process
+group or Windows Job Object. A leader that leaves descendants running produces
+an incomplete run even when it exits zero. Failed tests remain failed; crashes,
+timeouts, interrupts and absent expected counters are incomplete.
 Pinned gcovr 8.4 emits Titan line-only LCOV/HTML/Cobertura. A line hit does not
 prove every expression or behavior ran. Keep ordinary optimized/platform gates.
 
@@ -947,7 +953,11 @@ titan-coverage report --manifest /tmp/app-coverage/build/build.json \
 ```
 
 The installed host command lives alongside `titanc`; a checkout may invoke
-`python3 titan-coverage`. Reports include `coverage.html`, `coverage.info`,
+`python3 titan-coverage`. On Windows, invoke the installed host script with the
+same direct native Python used for compilation, for example
+`C:/coverage-tools/python.exe -I -B PATH/TO/INSTALLED/titan-coverage run ...`;
+the build's `--coverage-python` option does not select an interpreter for later
+shell commands. Reports include `coverage.html`, `coverage.info`,
 `coverage.xml`, normalized lines and raw evidence. Local coverage requires no
 Codecov credentials or network access once tools are installed; CI uploads
 separately. Staged sources use `--coverage-root ROOT` and repeated
@@ -958,7 +968,10 @@ build a measured shared standard provider and an ordinary 28-root test consumer.
 Children and Lua hosts select the same provider; native dependencies and test
 helpers remain uninstrumented. Run unfiltered for a baseline;
 inspect uncovered lines to add useful cases in the native owner, never a Busted
-stdlib wrapper. See
+stdlib wrapper. Native Windows exposes the same coverage leaf targets through
+`make -f Makefile.win`; they copy the prepared SDK into a fresh local NTFS
+workspace and measure the actual provider DLL, with the ordinary test consumer's
+EXE launcher retained in the sealed inventory. See
 [`native coverage`](../../../doc/language/native-coverage.md) for prerequisites,
 path mappings, counters, and report commands.
 

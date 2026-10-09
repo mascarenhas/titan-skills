@@ -1948,13 +1948,23 @@ For opt-in executable-line coverage, use `titanc --coverage DIRECTORY` with
 repeated `--coverage-module NAME` for the complete production inventory, including
 modules no test currently imports. Selected names require source; omit test
 owners/helpers and `titan.test`, and split mixed test/production modules. The mode
-owns separate C/object/header/image/notes paths, uses GCC 14+ with matching gcov,
-and performs a real attribution probe before compilation. Clang and Windows
-CLANG64 fail clearly for this initial backend. Keep source directives enabled.
+owns separate C/object/header/image/notes paths and performs a real attribution
+probe before compilation. The default backend uses GCC 14+ with matching gcov.
+Native Windows CLANG64/UCRT uses explicit `--coverage-backend llvm-gcov` with
+matching Clang/LLVM 22.1.8 and `--coverage-gcov 'llvm-cov gcov'`; it rejects the
+default GCC backend. Select a direct native x64 Python with
+`--coverage-python COMMAND`; MSYS Python and Windows venv redirectors are
+unsupported. Keep source directives enabled.
 
 Use the installed host `titan-coverage seal`, `run`, and `report` commands after
-building. Each run needs a fresh directory; wait for all children to exit, retain
-run receipts/counters, and preserve failing or incomplete collection. Reporting
+building. On Windows, invoke that installed script with the same direct native
+Python used for compilation, for example
+`C:/coverage-tools/python.exe -I -B PATH/TO/INSTALLED/titan-coverage run ...`;
+`--coverage-python` does not select an interpreter for later shell commands.
+Each run needs a fresh directory; join children before the leader
+exits and retain run receipts/counters. Complete collection requires a naturally
+exited leader and an empty owned process group or Windows Job Object. Unjoined
+descendants, crashes, timeouts and interrupts remain incomplete. Reporting
 uses pinned gcovr 8.4; local coverage needs no Codecov credentials and CI uploads
 separately. It covers Titan executable lines only, not generated-C
 branch/function percentages. Staged builds use `--coverage-root` and repeated
