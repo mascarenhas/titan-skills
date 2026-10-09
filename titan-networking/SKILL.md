@@ -42,7 +42,7 @@ Do not infer an API from a sketch. The API inventories below are the boundary.
 | Work | Read first | Then inspect |
 | --- | --- | --- |
 | TCP/DNS/byte streams | [`doc/language/standard-library-net.md`](../../../doc/language/standard-library-net.md) | [`titan/net.titan`](../../../titan/net.titan), [`spec/stdlib/titan/net/tests.titan`](../../../spec/stdlib/titan/net/tests.titan), [`doc/implementation/libuv-networking.md`](../../../doc/implementation/libuv-networking.md) |
-| TLS/trust/certificates | [`doc/language/standard-library-ssl.md`](../../../doc/language/standard-library-ssl.md) | [`titan/ssl.titan`](../../../titan/ssl.titan), [`spec/stdlib/titan/ssl/tests.titan`](../../../spec/stdlib/titan/ssl/tests.titan), [`doc/implementation/ssl-library.md`](../../../doc/implementation/ssl-library.md) |
+| TLS/trust/certificates | [`doc/language/standard-library-ssl.md`](../../../doc/language/standard-library-ssl.md) | [`titan/ssl.titan`](../../../titan/ssl.titan), [`spec/stdlib/titan/ssl/tests/tests.titan`](../../../spec/stdlib/titan/ssl/tests/tests.titan), [`doc/implementation/ssl-library.md`](../../../doc/implementation/ssl-library.md) |
 | HTTP client/server | [`doc/language/standard-library-http.md`](../../../doc/language/standard-library-http.md) | [`titan/http/`](../../../titan/http), [`spec/stdlib/titan/http/tests/`](../../../spec/stdlib/titan/http/tests), [`doc/implementation/http-library.md`](../../../doc/implementation/http-library.md) |
 | URL validation/normalization | [`doc/language/standard-library-url.md`](../../../doc/language/standard-library-url.md) | [`titan/url.titan`](../../../titan/url.titan), [`spec/stdlib/titan/url/tests.titan`](../../../spec/stdlib/titan/url/tests.titan), [`doc/implementation/url-library.md`](../../../doc/implementation/url-library.md) |
 | WebSocket sessions | [`titan-websocket/SKILL.md`](../titan-websocket/SKILL.md) | [`doc/language/standard-library-websocket.md`](../../../doc/language/standard-library-websocket.md), [`titan/websocket/`](../../../titan/websocket) |
@@ -766,7 +766,7 @@ end
 For local TLS tests, the repository's supported pattern is a checked-in CA,
 leaf certificate, and unencrypted key, an explicit `ca_file` on the client, and
 loopback connections. It does not disable verification; see
-[`spec/stdlib/titan/ssl/tests.titan`](../../../spec/stdlib/titan/ssl/tests.titan).
+[`spec/stdlib/titan/ssl/tests/tests.titan`](../../../spec/stdlib/titan/ssl/tests/tests.titan).
 
 ## URLs: validate once and use the right field
 

@@ -911,6 +911,57 @@ TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   --filter='filters descendants'
 ```
 
+### Opt-in native production coverage
+
+Coverage keeps the ordinary test runner and owning test layers. Compile with
+`--coverage DIRECTORY` and explicit repeated `--coverage-module NAME` production
+scope, excluding test owners, helper modules, private test support and the runner.
+Discovery does not classify helpers; the declared inventory must. Mixed
+production/test owners reject, and wholly untested production modules retain
+zero-count executable notes. GCC 14+ and matching gcov are required; Windows
+CLANG64 rejects this initial backend before artifact generation.
+
+Host-side `titan-coverage seal/run/report` operates after build probes and process
+exit. Use one fresh run directory per shard/process tree, join children before
+reporting, and merge only matching source/tool/build provenance. Failed tests
+remain failed; crashes, timeouts and absent expected counters are incomplete.
+Pinned gcovr 8.4 emits Titan line-only LCOV/HTML/Cobertura. A line hit does not
+prove every expression or behavior ran. Keep ordinary optimized/platform gates.
+
+A complete project example, with tools installed in a private Python environment:
+
+```sh
+python3 -m venv /tmp/titan-coverage-tools
+/tmp/titan-coverage-tools/bin/pip install gcovr==8.4
+export CC=gcc-14 GCOV=gcov-14
+titanc --test --coverage /tmp/app-coverage/build \
+  --coverage-module app.used --coverage-module app.unused app.used_tests
+titan-coverage seal --manifest /tmp/app-coverage/build/build.json \
+  --cc "$CC" --gcov "$GCOV"
+titan-coverage run --manifest /tmp/app-coverage/build/build.json \
+  --run /tmp/app-coverage/run-1 --timeout 120 -- \
+  /tmp/app-coverage/build/bin/app/used_tests
+titan-coverage report --manifest /tmp/app-coverage/build/build.json \
+  --run /tmp/app-coverage/run-1 --output /tmp/app-coverage/report-1 \
+  --gcovr /tmp/titan-coverage-tools/bin/gcovr
+```
+
+The installed host command lives alongside `titanc`; a checkout may invoke
+`python3 titan-coverage`. Reports include `coverage.html`, `coverage.info`,
+`coverage.xml`, normalized lines and raw evidence. Local coverage requires no
+Codecov credentials or network access once tools are installed; CI uploads
+separately. Staged sources use `--coverage-root ROOT` and repeated
+`--coverage-source-map STAGE=TRACKED`; compiled and tracked bytes must match.
+
+The Titan repository's `titan-native-coverage-build`, `-run`, and `-report` targets
+build a measured shared standard provider and an ordinary 28-root test consumer.
+Children and Lua hosts select the same provider; native dependencies and test
+helpers remain uninstrumented. Run unfiltered for a baseline;
+inspect uncovered lines to add useful cases in the native owner, never a Busted
+stdlib wrapper. See
+[`native coverage`](../../../doc/language/native-coverage.md) for prerequisites,
+path mappings, counters, and report commands.
+
 ## 11. When Busted is the right layer, use its existing scaffolding
 
 Do not recreate parser/checker/coder setup locally. Shared helpers live in
