@@ -1959,8 +1959,10 @@ uses pinned gcovr 8.4; local coverage needs no Codecov credentials and CI upload
 separately. It covers Titan executable lines only, not generated-C
 branch/function percentages. Staged builds use `--coverage-root` and repeated
 `--coverage-source-map STAGE=TRACKED`; compiled/tracked bytes must agree. Changed
-coverage settings require a fresh directory; `--incremental` and `-c --test`
-retain isolated receipt-checked objects. See
+coverage settings require a fresh directory. `--incremental` retains isolated
+receipt-checked objects but callers must invalidate dependent inline helpers;
+the repository coverage recipe rebuilds without that option. Sealing rejects
+bare carriage returns in source; LF and CRLF work. See
 [`native coverage`](../../../doc/language/native-coverage.md) for commands and
 [`implementation`](../../../doc/implementation/native-coverage.md) for ownership.
 

@@ -954,8 +954,9 @@ separately. Staged sources use `--coverage-root ROOT` and repeated
 `--coverage-source-map STAGE=TRACKED`; compiled and tracked bytes must match.
 
 The Titan repository's `titan-native-coverage-build`, `-run`, and `-report` targets
-source-link every production stdlib module into the existing aggregate, with
-native dependencies/test helpers uninstrumented. Run unfiltered for a baseline;
+build a measured shared standard provider and an ordinary 28-root test consumer.
+Children and Lua hosts select the same provider; native dependencies and test
+helpers remain uninstrumented. Run unfiltered for a baseline;
 inspect uncovered lines to add useful cases in the native owner, never a Busted
 stdlib wrapper. See
 [`native coverage`](../../../doc/language/native-coverage.md) for prerequisites,
