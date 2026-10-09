@@ -913,67 +913,60 @@ TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
 
 ### Opt-in native production coverage
 
-Coverage keeps the ordinary test runner and owning test layers. Compile with
-`--coverage DIRECTORY` and explicit repeated `--coverage-module NAME` production
-scope, excluding test owners, helper modules, private test support and the runner.
-Discovery does not classify helpers; the declared inventory must. Mixed
-production/test owners reject, and wholly untested production modules retain
-zero-count executable notes. The default backend requires GCC 14+ and matching
-gcov. Native Windows CLANG64/UCRT requires explicit `--coverage-backend llvm-gcov`,
-matching Clang/LLVM 22.1.8, `--coverage-gcov 'llvm-cov gcov'`, and a direct native
-x64 Python selected with `--coverage-python COMMAND`. Windows rejects the
-default GCC backend; MSYS Python and Windows venv redirectors are unsupported.
-
-Host-side `titan-coverage seal/run/report` operates after build probes and process
-exit. Use one fresh run directory per shard/process tree, join children before
-reporting, and merge only matching source/tool/build provenance. Complete
-collection requires both leader exit and confirmed emptiness of its owned POSIX process
-group or Windows Job Object. A leader that leaves descendants running produces
-an incomplete run even when it exits zero. Failed tests remain failed; crashes,
-timeouts, interrupts and absent expected counters are incomplete.
-Pinned gcovr 8.4 emits Titan line-only LCOV/HTML/Cobertura. A line hit does not
-prove every expression or behavior ran. Keep ordinary optimized/platform gates.
-
-A complete project example, with tools installed in a private Python environment:
+Coverage uses ordinary native tests and their owning layers:
 
 ```sh
-python3 -m venv /tmp/titan-coverage-tools
-/tmp/titan-coverage-tools/bin/pip install gcovr==8.4
-export CC=gcc-14 GCOV=gcov-14
-titanc --test --coverage /tmp/app-coverage/build \
-  --coverage-module app.used --coverage-module app.unused app.used_tests
-titan-coverage seal --manifest /tmp/app-coverage/build/build.json \
-  --cc "$CC" --gcov "$GCOV"
-titan-coverage run --manifest /tmp/app-coverage/build/build.json \
-  --run /tmp/app-coverage/run-1 --timeout 120 -- \
-  /tmp/app-coverage/build/bin/app/used_tests
-titan-coverage report --manifest /tmp/app-coverage/build/build.json \
-  --run /tmp/app-coverage/run-1 --output /tmp/app-coverage/report-1 \
-  --gcovr /tmp/titan-coverage-tools/bin/gcovr
+CC=gcc-14 GCOV=gcov-14 titanc --test --coverage calc_tests
+./calc_tests
 ```
 
-The installed host command lives alongside `titanc`; a checkout may invoke
-`python3 titan-coverage`. On Windows, invoke the installed host script with the
-same direct native Python used for compilation, for example
-`C:/coverage-tools/python.exe -I -B PATH/TO/INSTALLED/titan-coverage run ...`;
-the build's `--coverage-python` option does not select an interpreter for later
-shell commands. Reports include `coverage.html`, `coverage.info`,
-`coverage.xml`, normalized lines and raw evidence. Local coverage requires no
-Codecov credentials or network access once tools are installed; CI uploads
-separately. Staged sources use `--coverage-root ROOT` and repeated
-`--coverage-source-map STAGE=TRACKED`; compiled and tracked bytes must match.
+Final coverage links require a test or standalone executable. Use
+`--coverage -c` for separate object compilation before that link; library-only
+provider links are rejected.
 
-The Titan repository's `titan-native-coverage-build`, `-run`, and `-report` targets
-build a measured shared standard provider and an ordinary 28-root test consumer.
-Children and Lua hosts select the same provider; native dependencies and test
-helpers remain uninstrumented. Run unfiltered for a baseline;
-inspect uncovered lines to add useful cases in the native owner, never a Busted
-stdlib wrapper. Native Windows exposes the same coverage leaf targets through
-`make -f Makefile.win`; they copy the prepared SDK into a fresh local NTFS
-workspace and measure the actual provider DLL, with the ordinary test consumer's
-EXE launcher retained in the sealed inventory. See
-[`native coverage`](../../../doc/language/native-coverage.md) for prerequisites,
-path mappings, counters, and report commands.
+By default, source imports without top-level `test_` functions are measured.
+A module containing tests is excluded as a whole; prebuilt modules are ignored.
+Selection follows the source dependency graph, not every repository file.
+Import unused production modules from the test graph to retain their zero-hit
+lines. Override selection with repeated `--coverage-module 'app.*'` globs;
+`*` matches any sequence and `?` one character, including dots. Test-containing
+and prebuilt modules remain excluded. Empty selection fails usefully.
+
+Coverage C/headers/objects live in `.coverage` subdirectories at their normal
+output locations, with separate incremental discovery from ordinary objects.
+Each object stores its partial generated-file list, so final linking also
+includes reused incremental objects. Switching to an optimized ordinary build
+needs no cleanup. `--incremental` remains the caller's dependency-build choice.
+
+Direct execution clears the matching `.gcda` counters, keeps `.gcno` notes,
+runs the normal tests and cleanup, explicitly dumps counters and reports after
+success. Repeat the same executable for fresh coverage. Failed tests keep their
+status. Join test-owned children normally. A line hit does not prove every
+expression or behavior ran; keep ordinary optimized/platform gates.
+
+Basic gcov summaries and annotated output require neither Python nor gcovr.
+GCC 14+ needs matching gcov. Clang uses matching `llvm-cov gcov` with
+`--coverage-backend llvm-gcov`; Windows CLANG64/UCRT chooses that backend by
+default, validated with LLVM 22.1.8. Optional repeated
+`--coverage-format` options accept `html`, `lcov`, or `cobertura` and require
+gcovr 8.4, selected with
+`--coverage-gcovr COMMAND`. `--coverage-output DIRECTORY` changes the default
+`.coverage/report`. Reports expose Titan executable lines, not generated-C
+branch/function percentages. Local coverage needs no Codecov credentials;
+uploads and cross-run/binary/platform combination remain external.
+
+The repository's `titan-native-coverage` target source-links production imports
+into the ordinary native aggregate. `-build` compiles separately; `-run` runs
+and reports, with `TITAN_FILTER` as usual. Request optional richer reports with
+`TITAN_COVERAGE_FORMATS='html lcov cobertura'`. Windows uses the same targets
+through `make -f Makefile.win` and its ordinary private local NTFS SDK copy.
+Child fixtures consuming prebuilt providers remain unmeasured. Add uncovered
+behavior cases in the native owner, never a Busted stdlib wrapper.
+
+Use separate build trees for simultaneous coverage runs because startup resets
+shared counter paths. Keep the build artifacts at their embedded absolute
+paths. See [`native coverage`](../../../doc/language/native-coverage.md) for
+source selection, backend tools and report paths.
 
 ## 11. When Busted is the right layer, use its existing scaffolding
 
