@@ -508,32 +508,24 @@ preserving expression-list adjustment, not blindly mapping it to one name.
 
 ## Native line coverage case (`titan-programmer`, `titan-tester`)
 
-Ask for coverage of production modules `app.used` and `app.unused` through native
-tests in `app.used_tests`, with both an ordinary CLANG64 Windows validation gate
-and an explicit opt-in native Windows coverage workflow.
-Require an explicit complete production inventory, an isolated coverage build,
-GCC 14+ with matching gcov for the default POSIX backend, pinned gcovr 8.4, and
-host-side seal/run/report. The unused module must remain in the denominator.
-Test support, helpers and native dependencies must stay outside it. Windows
-must reject the default GCC backend while retaining its ordinary native suite;
-its explicit coverage workflow requires `--coverage-backend llvm-gcov`, matching
-Clang/LLVM 22.1.8, `--coverage-gcov 'llvm-cov gcov'`, and a direct native x64 Python
-selected with `--coverage-python COMMAND`. Require rejection of MSYS Python and
-Windows venv redirectors, rather than an implicit backend or Python substitution.
-For the repository workflow, require the coverage leaf targets through
-`make -f Makefile.win`, a fresh local NTFS workspace copied from the prepared SDK,
-measurement of the actual provider DLL, and retention of the ordinary test
-consumer's EXE launcher in the sealed inventory.
+Ask for executable-line coverage of `app.used` and unused `app.unused` through
+native tests in `app.used_tests`. The tests import both production modules, a
+prebuilt dependency and a mixed module containing a `test_` function. Ask for
+a basic workflow without Python/gcovr, a glob override selecting `app.*`, an
+incremental rerun, an optimized release afterward without cleaning, and optional
+HTML/LCOV output. Include an ordinary CLANG64 Windows validation gate.
 
-Ask whether successful HTML rendering makes a failed test pass, whether branch
-or function percentages are part of the contract, and whether local coverage
-requires a Codecov token. Require preserved failure/incomplete receipts, line
-metrics alone, and a separate CI upload. Complete collection requires natural
-leader exit and confirmed emptiness of the owned POSIX process group or Windows
-Job Object; an unjoined descendant makes even a zero-exit leader incomplete.
-Crashes, timeouts, interrupts and absent expected counters remain incomplete.
-Ask how to reuse counters and how to measure a staged source copy: require a
-fresh run directory per process tree, matching build/run provenance for merging,
-explicit source mappings and exact compiled/tracked source bytes.
+Require boolean `--coverage` followed by direct test-binary execution, automatic
+source-graph selection and whole-module exclusion for tests. Globs restrict the
+same graph and still exclude mixed/prebuilt owners; explain `*`/`?` including
+dots. The unused imported module remains visible with zero-hit lines. Separate
+`.coverage` objects protect ordinary/release lookup; reused incremental objects
+retain their file inventory. Repeated execution resets matching counters and
+reports after success, while failed tests preserve failure. Basic reporting
+needs only matching GCC 14+/gcov or Clang/llvm-cov gcov. Windows defaults to the
+LLVM backend, validated with LLVM 22.1.8. gcovr 8.4/Python is optional for rich
+formats. Require Titan line metrics, external combination/uploads, ordinary
+child cleanup, build artifacts kept at embedded absolute paths, and separate
+build trees for concurrent sessions.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
