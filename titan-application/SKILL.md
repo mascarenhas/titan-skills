@@ -55,26 +55,31 @@ custom Runtime ownership, or shutdown behavior.
 Titan writes generated `.c`, `.o`, `.ffi.h`, and `.titan.h` beside the selected
 source files. `--tree` changes source lookup, and changing the working directory
 changes final link output; neither isolates objects beside shared sources.
-Application and test mode can select different providers and overwrite those
-objects. Different compiler flags or SDK configurations can collide as well.
+Application and test builds can share unchanged production objects when native
+flags, SDK, and resolved provider bindings match. Test mode alone does not
+require separate production objects. Use separate staged source trees only for
+incompatible configurations, such as coverage instrumentation, different native
+flags, or different SDKs/toolchains.
 
-For builds with multiple modes, give each configuration its own staged source
-tree under the project's output directory, for example `build/app-src` and
-`build/test-src`. Copy the applicable project sources into each tree and invoke
-the compiler against those copies. Synchronize deletions and renames too, or
-recreate the owned tree before copying: stale staged sources can participate in
-folder modules even in a nonincremental build. Own any generated entry-point/
-test-support files and the final executable or DLL payload in that same output
-boundary.
-Only delete directories that the build owns; authored sources stay outside it.
+The ordinary option is to compile authored sources directly and ignore their
+exact generated stems, as described below. Keep final executables, generated
+runners/entry points, and payloads in an owned output directory.
 
-Start with a clean, nonincremental build when that is sufficient. If adding
-`--incremental`, the build system must invalidate imports, foreign headers,
-added or removed source files, compiler/SDK/provider changes, native payloads,
-and flags; timestamps alone do not prove compatibility. Recreating an owned
-staging tree is a simple valid policy. See
+When output isolation is useful, a persistent staged source tree also permits
+incremental builds. Copy only changed sources, preserve unchanged timestamps,
+and synchronize source deletions and renames: stale files can participate in
+folder modules. Only delete directories that the build owns; authored sources
+stay outside it.
+
+Pair `--incremental` with build-system dependency tracking for imports, foreign
+headers, folder-module inventories, compiler/SDK/provider changes, native
+payloads, and flags; content synchronization alone does not prove object
+compatibility. The compiler's object cache covers only its documented local
+conditions. Compile affected owning modules before linking their consumers,
+and clean an owned stage when a configuration change is not covered by the
+invalidation graph. See
 [incremental compilation](../../../doc/language/incremental-compilation.md)
-before retaining objects or implementing dependency tracking.
+for the existing compile/link contract and Make pattern.
 
 ## Create the initial `.gitignore`
 
@@ -129,7 +134,7 @@ than an ignore rule.
 ## Connect native tests and delivery
 
 Add native `titan.test` roots and a repeatable `titanc --test` command using the
-test configuration's source tree. The first requested root determines the
+project's selected source tree. The first requested root determines the
 runner's logical output path on POSIX; copy or name the deliverable explicitly
 instead of guessing it from the common namespace. Read the tester skill's
 [project build guidance](../titan-tester/SKILL.md#9-compile-run-and-filter-a-project-suite)
@@ -137,13 +142,12 @@ for synthetic modules, filters, and installed provider selection. Run a known
 test and inspect the selected count: a successful empty filtered run is not
 test evidence.
 
-Treat runner linkage and application linkage separately. Source-owned
-`titan.test` support can make even a `--static` test build use the installed
-standard DSO; its provider search settings belong to the test command. On
-Linux/macOS, `--static` prefers Titan archives and can fall back to DSOs; it
-does not request a fully static system executable. Validate the delivery claim
-with a relocated application in a temporary directory and an environment
-without compiler or SDK search paths. Check its native dependencies and whether
+The generated runner uses the same compiled `titan.test` provider as ordinary
+imports, through public `Case.new` and `run`; it needs no private test source
+installation. On Linux/macOS, `--static` prefers Titan archives and can fall
+back to DSOs; it does not request a fully static system executable. Validate
+the delivery claim with a relocated application in a temporary directory and
+an environment without compiler or SDK search paths. Check its native dependencies and whether
 it can still locate Titan providers at their original paths; clearing `PATH`
 alone does not rule out embedded absolute paths. Use a bounded smoke test that
 exercises the application's entry point and representative functionality.
