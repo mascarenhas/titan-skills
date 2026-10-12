@@ -1793,11 +1793,12 @@ include:
 
 `--tree` redirects source lookup, not ordinary generated C/object output:
 those files remain beside the selected source. Different working directories
-alone cannot isolate builds that share sources. Stage separate source copies
-for application/test modes or other configurations that must not overwrite
-each other's objects; let the build system own their invalidation. For a
-standalone delivery claim, check a relocated executable with the compiler and
-Titan provider unavailable. `--static` is a preference and can still select a
+alone cannot isolate builds that share sources. Application and test builds
+can reuse unchanged production objects when native flags, SDK, and resolved
+provider bindings match; `--test` alone does not require a second object tree.
+Use separate source copies for incompatible configurations and let the build
+system own invalidation. For a standalone delivery claim, check a relocated
+executable with the compiler and Titan provider unavailable. `--static` is a preference and can still select a
 DSO, so successful compilation alone does not prove provider independence.
 
 The compiler typechecks all requested roots and transitive dependencies before
@@ -1805,8 +1806,10 @@ emitting C. Explicit command-line roots are selected from source; ordinary
 dependencies prefer compiled providers, then source, but expose only their
 public interfaces either way. `--test` deliberately changes ordinary dependency
 lookup to source-first with compiled fallback on a clean miss; it does not
-change that public-only visibility. Spell a collaborating dependency as
-`import "name.titan"`; that import requires source and exposes locals without
+change that public-only visibility. `titan.test` uses ordinary module resolution
+and the selected compiled standard provider; the runner calls its public
+`Case.new` and `run` API without a private source copy. Spell a collaborating
+dependency as `import "name.titan"`; that import requires source and exposes locals without
 changing the logical name. Command-line roots themselves remain unsuffixed
 logical names. To test compiler Lua edits without reinstalling them, run the
 prefix's `busted --run=checkout` from the repository root with command-scoped

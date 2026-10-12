@@ -30,10 +30,12 @@ internals matter, the authoritative sources are:
 - subtest/cleanup edge cases: `spec/fixtures/test_runner/*.titan` and
   `spec/coder/test_runner_spec.lua`.
 
-Do not call any source-private `titan.test.runner_*` operation from an ordinary
-test. Those operations exist only for the generated runner. The repository's
-`support.runtime` is likewise source-only test infrastructure, not part of the
-public `titan.test` API.
+Do not call source-private `titan.test.runner_*` operations from another module.
+They implement execution inside the standard module. The generated runner uses
+ordinary imports and the public `test.Case.new` and `test.run` API. Public
+`test.Skip.reason` lets async helpers preserve nominal skip classification.
+The repository's `support.runtime` is source-only test infrastructure, not part
+of the public `titan.test` API.
 
 ## 1. Choose the owning test layer before writing code
 
@@ -174,6 +176,10 @@ test.verbose(): boolean
 test.location(): (string, string, integer)
 test.assert(check: boolean, message: string?)
 test.skip(reason: string?)
+test.Case.new(full_name: string, owner_module: string,
+              body: function(test.Context): ()): test.Case
+test.run(args: {string}, cases: {test.Case}): integer
+test.Skip.reason: string?  # read-only field on a caught Skip value
 
 test.Context:name(): string
 test.Context:log(message: string)
@@ -183,7 +189,12 @@ test.Context:cleanup(f: function(): ())
 ```
 
 In source, these are selected through the import alias, for example
-`test.assert(...)`, and the runner supplies every `Context`.
+`test.assert(...)`, and the runner supplies every `Context`. `Case` fields are
+private; use `Case.new` to register a named body. `run` accepts process arguments
+without the executable name and executes the cases in array order, handling
+options, filters, reporting, subtests, and cleanup. It returns the ordinary
+runner exit status and resets its state before returning; nested active runs
+raise an error. Most suites use `titanc --test` to generate this thin caller.
 
 ### `assert`
 
@@ -202,9 +213,10 @@ test.assert(actual == expected,
 
 ### `skip`
 
-`test.skip()` or `test.skip(reason)` raises a private nominal marker while the
-runner is active. An uncaught body skip marks the current case skipped and
-prevents its already registered selected children from running. Use skip for a
+`test.skip()` or `test.skip(reason)` raises a public nominal `test.Skip` value
+with a read-only optional `reason` while the runner is active. An uncaught body
+skip marks the current case skipped and prevents its already registered
+selected children from running. Use skip for a
 real unavailable prerequisite, not unfinished code or an intermittently failing
 assertion. A skip raised during cleanup is a **failure**, because descendants
 may already have run.
@@ -219,7 +231,7 @@ small support functions to fail clearly, but does not create a skipped process.
 
 ### `testing` and `verbose`
 
-`testing()` is true only while generated `main` is executing cases and cleanup.
+`testing()` is true only while `test.run` is executing cases and cleanup.
 `verbose()` is additionally true only when `-v`/`--verbose` was parsed. Both are
 false outside a runner, during option parsing, and in imported module
 initializers—modules initialize before generated `main` activates testing.
@@ -735,17 +747,20 @@ titanc --test --tree . calc_test parser_test
 The first requested root owns the executable path (including the normal folder
 module output rule). Test mode emits a standalone only—no provider pair or Lua
 shim—and gives adjacent synthetic artifacts reserved
-`__test_support`, `__test_runner`, and `__test_entrypoint` stems.
+`__test_runner` and `__test_entrypoint` stems. `titan.test` remains an ordinary
+compiled dependency; no synthetic support module or installed source copy is
+required.
 
-Keep application and test configuration objects separate. Ordinary generated
-C/object files stay beside their source even when `--tree` and the invocation
-working directory differ; stage distinct source copies when builds could
-otherwise overwrite shared objects. The source-owned canonical `titan.test`
-can overlap the combined standard archive and make a `--static` test build use
-matching DSO dependencies. If the installed provider is outside the runtime
-search path, set `TITAN_PATH_0_6` to its `lib/titan/0.6` directory. Assess an
-application's standalone deployment with a separate application build and
-relocated process test, rather than inferring it from the test binary.
+Ordinary generated C/object files stay beside their source even when `--tree`
+and the invocation working directory differ. Application and test builds can
+share unchanged production objects when native flags, SDK, and resolved
+provider bindings match. Stage distinct source copies for incompatible
+configurations, such as coverage instrumentation or different toolchains.
+`--static` selects the standard archive normally; it remains a preference and
+may select a DSO when no compatible archive exists. If a selected provider is
+outside the runtime search path, set `TITAN_PATH_0_6` to its `lib/titan/0.6`
+directory. Assess an application's standalone deployment with its application
+executable and a relocated process test.
 
 ### Generated runner options and statuses
 
