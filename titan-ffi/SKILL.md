@@ -20,8 +20,8 @@ The two escape hatches in this skill are equally powerful:
 * `foreign import` emits direct C operations. It has C's memory unsafety and C's
   undefined behavior.
 * `titan.lua` can compile and execute arbitrary Lua or load Lua/C/Titan modules
-  in the current Lua state. It can bypass most static structure just as surely
-  as the FFI can.
+  in the current or an independently owned Lua state. It can bypass most
+  static structure just as surely as the FFI can.
 
 Use both **sparingly**. Keep each escape hatch in one small owner module, convert
 immediately to ordinary Titan types, and expose a typed Titan API. Prefer an
@@ -57,9 +57,11 @@ function-like macro, and the adjacent comment must say why it exists.
 1. A foreign namespace is compile-time-only. It cannot be stored, passed,
    returned, or exported.
 2. Header-dependent C types are nonexportable implementation types. Public
-   interfaces may use only Titan's contextual C primitives and recursively
-   portable pointer, foreign-function-pointer, and owned graphs built from
-   them. An imported typedef remains nonexportable even when it resolves to a
+   interfaces may use Titan's contextual C primitives and recursively portable
+   pointer, foreign-function-pointer, and owned graphs built from them. The
+   intrinsic opaque `lua_State` is also allowed as a pointer pointee, including
+   in callback signatures; its built-in identity survives metadata decoding.
+   Other imported typedefs remain nonexportable even when they resolve to a
    portable primitive.
    A C function pointer boxes as lightuserdata through Titan's toolchain
    portability cast. Portable function-pointer types can occupy module,
@@ -1123,11 +1125,11 @@ Titan error frame or GC-root frame. A Lua API call that longjmps follows that
 API's C contract; Titan cannot run `defer` or translate it to `raise` inside the
 foreign body.
 
-The FFI also supplies no cross-thread Lua attachment or synchronization. A C-only
-foreign callback may obey its library's thread contract, but a callback that
-touches a `lua_State`, Titan GC object, or generated Titan entry must run under
-the owning runtime/thread protocol. Do not call into Lua/Titan from an arbitrary
-native worker thread.
+The FFI supplies no automatic cross-thread Lua attachment or synchronization.
+A C-only foreign callback follows its library's thread contract. It must not
+enter the calling Lua/Titan state from a worker. `lua.Lua:run_async` instead
+exclusively owns an independent state and may execute Lua or Titan initialized
+there; its transfer protocol never shares host GC objects or Titan closures.
 
 Titan's internal UV/HTTP/coroutine callback bridges use private
 `titan/ffi.h` bridges to recover generated `CClosure`, `Udata`, and native-entry
@@ -1260,7 +1262,7 @@ Import the module by its qualified name:
 local lua = import "lua"
 ```
 
-It exposes four APIs:
+Current-state loading uses these APIs:
 
 ```text
 function load(chunk: string, name: string?, env: value):
@@ -1359,6 +1361,58 @@ that dynamic boundary and the call may still fail. For a stable plugin
 protocol, prefer a Titan module and static `import`; use this dynamic design
 only when run-time Lua discovery is the actual requirement.
 
+### Independent states and background execution
+
+```text
+function new(): Lua
+function Lua:close()
+function Lua:run(chunk: string, name: string?, ...: TransferValue):
+  (...: TransferValue)
+function Lua:run_async(chunk: string, name: string?, ...: TransferValue):
+  (...: TransferValue)
+function Lua:run_from_loader(reader: io.Reader, name: string?,
+  ...: TransferValue): (...: TransferValue)
+function Lua:run_async_from_loader(reader: io.Reader, name: string?,
+  ...: TransferValue): (...: TransferValue)
+```
+
+`new` opens Lua's standard libraries in a fresh state and snapshots string-keyed
+native loaders from the creating state's canonical registry preload table.
+Zero-upvalue C loaders are copied; Lua closures, C closures with upvalues, and
+other entries are skipped. Initialized Titan modules publish such native
+loaders, including executable-embedded modules. Requiring a copied loader
+initializes its module independently: no cached module value or host GC state
+is copied. Later preload changes are independent. Native loader/library code
+must remain loaded while any copied function pointer is used.
+
+`TransferValue` has `is_nil`, `is_boolean`, `is_integer`, `is_float`,
+`is_string`, `is_lua_state`, `is_function`, and `is_pointer` variants. Strings
+are copied byte-for-byte into the destination collector. State/pointer
+arguments become lightuserdata; returned threads become borrowed
+`lua_State *`, full userdata becomes its borrowed payload pointer, and
+zero-upvalue C functions become native function pointers. Tables, Lua
+functions, and C closures with upvalues cannot be returned. Pointer variants
+neither root the origin nor synchronize mutable data; retain a source-state
+root for a returned thread/userdata and keep native code loaded. Null C
+function arguments are rejected.
+
+`run` blocks its caller; `run_async` uses `async.run_foreign` inside a Task
+while exclusively owning the independent state. That state may require and
+execute Titan modules, but must never access the hosting state's objects or
+invoke its closures. A concurrent run or close on the same busy wrapper raises. Accepted
+cancellation waits for native completion before cleanup; it cannot interrupt
+Lua code. Both loader methods drain a borrowed Reader before reserving the
+state and never close it. `close` is idempotent after success; a GC finalizer
+closes an otherwise unreachable wrapper.
+
+Failures restore the independent stack's saved entry height and surface copied
+diagnostics.
+Results preserve nils and ordinary flexible-return demand: a finite consumer
+can take a prefix of a larger Lua run, while an open result run keeps Titan's
+normal 200-value limit. Even ignored returned values must be transferable.
+For the exact API and protected stack/packet ledger, read
+`doc/language/standard-library-lua.md` and `doc/implementation/lua-library.md`.
+
 # The Lua C API: trusted exception, not general FFI v1
 
 ## Support status
@@ -1386,9 +1440,9 @@ declaration must supply a state. Never store, return, replace, or use an old
 
 ## The stack transaction pattern
 
-Every new or modified trusted helper that pushes anything should use one explicit
-transaction, even though a few older reviewed standard-library paths still rely
-on their entry frame's `LUA_MINSTACK` reserve:
+Every new or modified current-state helper that pushes anything should use one
+explicit transaction, even though a few older reviewed standard-library paths
+still rely on their entry frame's `LUA_MINSTACK` reserve:
 
 1. snapshot the exact entry top;
 2. install `defer lua_settop(L, saved)` immediately;
@@ -1401,7 +1455,14 @@ on their entry frame's `LUA_MINSTACK` reserve:
    may allocate, run Lua, invoke a metamethod/callback, longjmp, or resize the
    stack.
 
-This exact helper from `titan/lua.titan` is the model:
+Independent-state callbacks use the separate protected ledger in
+`doc/implementation/lua-library.md`: copied/borrowed native packets never
+transfer host GC objects. After native completion, deferred host cleanup frees
+the result buffer, restores the remote stack's saved entry height, and releases
+the exclusive reservation. They do
+not substitute a foreign pointer for a generated function's built-in `L`.
+
+This exact helper from `titan/lua/lua.titan` is the current-state model:
 
 ```titan
 foreign import "lua.h"
@@ -1473,7 +1534,7 @@ callback/borrow audit.
 | `lua_rawset` | pops key and value, retains table; public API performs the write barrier |
 | `lua_next` | pops current key; on success pushes next key and item, on exhaustion nothing; invalid key may longjmp |
 | `luaL_loadbufferx` / `luaL_loadstring` | pushes exactly one function on success or one error object on failure; may allocate/longjmp |
-| `lua_pcallk` | effect depends on fixed nargs/nresults and error path; current use is one exact nonyieldable helper factory only |
+| `lua_pcallk` | effect follows nargs/nresults and the error path; current-state use is the exact nonyieldable test helper factory; separate-state initialization/execution follows the [independent-state protected ledger](../../../doc/implementation/lua-library.md#protected-execution-and-stack-cleanup) |
 | `lua_setupvalue` | success installs/pops top value; missing upvalue returns null and leaves it |
 | `luaL_tolstring` | pushes one string; may call `__tostring`, allocate, or raise; trace before cleanup |
 | `lua_type` | net zero |
@@ -1838,7 +1899,8 @@ searching by analogy.
 * `titan-runtime/titan/ffi.h` — private typed Lua bridges; portable primitives
   are contextual language types and are not typedefs in this header. Do not
   treat every internal declaration as a public application API.
-* `titan/lua.titan` — the public dynamic-loading escape hatch;
+* `titan/lua/lua.titan` and `titan/lua/worker.titan` — the public dynamic-loading
+  and independent-state escape hatch plus protected foreign worker entries;
   `titan/gc.titan` — its typed public collector/finalizer policy boundary.
 * `titan/{iteration,test}.titan`, `titan/peg/native.titan`, and
   `titan/string/string.titan` — other audited Lua-stack examples.

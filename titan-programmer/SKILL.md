@@ -52,8 +52,11 @@ typed, audited boundary.
 `async.run_foreign` is the deliberate cross-cutting exception: it exposes a
 portable raw C function-pointer/pointer signature so a Task can wait for a
 blocking external C call in libuv's worker pool. Load both **`titan-async`** and
-**`titan-ffi`** before using or changing it; the worker may not enter Titan or
-Lua, and cancellation does not end accepted native ownership.
+**`titan-ffi`** before using or changing it; the worker may not enter the
+calling Lua/Titan state, and cancellation does not end accepted native
+ownership. `lua.Lua:run_async` exclusively owns a separate state and can run
+Lua or Titan modules initialized there; load those same two peer skills for
+its transfer and lifetime rules.
 
 Across this skill tree, a `titan` fence is a complete module or an explicitly
 named file in a paired composition. Signature inventories, placeholders,
@@ -1878,8 +1881,10 @@ to the language rules:
   reasoning about callback order.
 - **Keep foreign worker code C-only.** `async.run_foreign` is the one explicit
   worker-pool escape from main-loop Titan execution: the worker performs only
-  its C `f(arg)`, never touches Titan/Lua state, and retains native ownership
-  through the loop-thread after-work callback.
+  its C `f(arg)`, never touches the calling state's Titan/Lua objects, and
+  retains native ownership through the loop-thread after-work callback.
+  `lua.Lua:run_async` can execute code in its separately owned state; that is
+  not permission to transfer a host Titan closure or GC object to a worker.
 - **Cleanup remains owned until terminal native completion.** Cancellation
   does not license dropping a callback owner or double-closing a libuv handle.
   One-shot callbacks settle their exact await capability, while explicit

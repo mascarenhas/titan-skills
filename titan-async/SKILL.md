@@ -31,9 +31,11 @@ Titan async is **cooperative, single-loop continuation execution**:
   until it submits the next callback-bearing operation, returns, or raises;
   then the callback returns to libuv.
 - Filesystem, DNS, and explicit `async.run_foreign` work may execute in libuv
-  worker threads, but only the loop-thread completion callback enters Titan.
-  Worker threads never read or mutate Titan-managed fields; `run_foreign`
-  performs exactly its supplied C function-pointer call over native data.
+  worker threads, but only the loop-thread completion callback enters the
+  calling state's Titan code. Worker threads never read or mutate its
+  Titan-managed fields; `run_foreign` performs exactly its supplied C
+  function-pointer call over native data. `lua.Lua:run_async` may execute Lua
+  and Titan modules initialized in its separately owned state.
 - CPU-bound Titan code that does not finish or yield blocks every Task and the
   event loop. Call `async.yield()` or `timer.yield()` deliberately in such a
   loop.
@@ -382,8 +384,9 @@ error and cancellation precedence before querying a shared reservation.
 
 `async.run_foreign(f, arg)` submits exactly `f(arg)` to libuv's process-wide
 worker pool and suspends the current Task until the after-work callback returns
-to the event-loop thread. Use it only for a blocking call into an external C
-library. The callback is a restricted source `foreign function` or a compatible
+to the event-loop thread. Ordinary applications use it for blocking calls
+into external C libraries; the independent-state Lua adapter is described
+below. The callback is a restricted source `foreign function` or a compatible
 C function pointer—not a Titan closure—and the argument points at native
 storage that remains alive until completion. Load `titan-ffi` when designing
 that boundary.
@@ -395,11 +398,20 @@ embedding C storage in a Titan owner does not make those C fields GC-managed.
 Public `work_t:get_data`/`set_data` use a separate traced value and do not
 replace the native callback payload.
 
-The worker must not inspect Titan or Lua values, enter an ordinary Titan
-function or closure, call a Titan runtime helper or the Lua API, allocate
-through Titan, raise, resume a Task, or touch `TValue`/`Udata`/GC state. A
-restricted source `foreign function` is the deliberate exception: the compiler
-emits it as an exact C callback whose body must itself obey this raw-C boundary.
+The worker must not inspect the calling state's Titan/Lua values, enter its
+ordinary functions or closures, call its runtime helpers or Lua API, allocate
+through its runtime, raise into its frames, resume its Tasks, or touch its
+`TValue`/`Udata`/GC state. A restricted source `foreign function` is emitted as
+an exact C callback whose body must obey this raw-C boundary.
+
+`lua.Lua:run_async` is the independent-state adapter: its worker exclusively
+owns a separate state and may require and execute Titan modules initialized
+there. It never shares host module values or GC objects. Use
+[`titan-ffi`](../titan-ffi/SKILL.md) for `TransferValue` copies, borrowed
+pointers, native preload snapshots, and the `run`/`run_async` APIs. Concurrent
+operations or close on a busy wrapper raise; accepted cancellation waits for
+native completion before the stack is restored and the reservation released.
+
 The suspended caller must retain every owner and must not concurrently access
 bytes the worker may read or write. Submission failure raises immediately. Once
 accepted, cancellation does not stop the C call or release its state early:
@@ -1157,8 +1169,10 @@ These rules apply when maintaining `titan/uv/`, not when writing an adapter:
   generations, token registries, event-kind dispatch, or duplicate owners to
   approximate this exact capability boundary.
 - Loop callbacks run on the owning Lua main state. C worker/thread callbacks
-  never enter Lua/Titan or recover a GC owner. They access only their typed
-  native function/argument carrier; after-work on the loop thread owns delivery.
+  never enter the calling Lua/Titan state or recover one of its GC owners.
+  They access their typed native function/argument carrier; after-work on the
+  loop thread owns delivery. Independently owned state execution follows the
+  `titan.lua` adapter's isolation protocol.
 - Binding callbacks catch ordinary conversion/user-callback errors, remember
   the first caught error and traceback (preserving `false`; Lua 5.5 normalizes
   a raised `nil` to `"<no error object>"` before catch), stop driving, and return
@@ -1396,8 +1410,8 @@ Before accepting a UV binding change or public adapter, also verify:
 - Cancellation does not drop accepted work early or synchronously enter another
   Task.
 - A worker callback reads only its raw function/argument carrier, never enters
-  Titan/Lua, and leaves owner recovery and Task resumption to after-work on the
-  loop thread.
+  the calling Lua/Titan state, and leaves host-owner recovery and Task resumption
+  to after-work on the loop thread.
 - `uv_is_closing` and `uv_walk` remain authoritative; no duplicate resource
   graph, generation, or close flag appears.
 - Behavioral tests use the public production facade unless a genuinely new
@@ -1602,11 +1616,13 @@ is cancelled.
 function pointer over native storage, retain its complete owner through the
 after-work callback, synchronize all shared bytes, and explain that accepted
 work is not stopped by Task cancellation. The worker calls only `f(arg)` and
-never enters Titan/Lua; the shared pool can delay filesystem/DNS work.
+never enters the calling Lua/Titan state; the shared pool can delay
+filesystem/DNS work. Separately owned state execution is a different protocol,
+provided by `lua.Lua:run_async`, not a way to transfer the proposed closure.
 
-**Fail:** Call Titan/Lua from the worker, treat cancellation as native
-completion, release the argument early, or promise a dedicated background
-thread.
+**Fail:** Call the host's Titan/Lua code from the worker, treat cancellation as
+native completion, release the argument early, or promise a dedicated
+background thread.
 
 ## Source map
 
