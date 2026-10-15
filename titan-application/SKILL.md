@@ -52,41 +52,43 @@ custom Runtime ownership, or shutdown behavior.
 
 ## Establish output ownership before compiling
 
-Titan writes generated `.c`, `.o`, `.ffi.h`, and `.titan.h` beside the selected
-source files. `--tree` changes source lookup, and changing the working directory
-changes final link output; neither isolates objects beside shared sources.
-Application and test builds can share unchanged production objects when native
-flags, SDK, and resolved provider bindings match. Test mode alone does not
-require separate production objects. Use separate staged source trees only for
-incompatible configurations, such as coverage instrumentation, different native
-flags, or different SDKs/toolchains.
+Pass an application-owned output directory to every compiler invocation, such
+as `titanc --output build main`. Titan creates missing directories and writes
+generated C, objects, headers, runners, and final native outputs there,
+preserving the source hierarchy relative to the selected source root. `--tree`
+selects the original authored source tree independently of `--output`; output
+isolation needs no source copies. Keep generated files outside the installed
+SDK.
 
-The ordinary option is to compile authored sources directly and ignore their
-exact generated stems, as described below. Keep final executables, generated
-runners/entry points, and payloads in an owned output directory.
+Use the same output directory for incremental object compilation and final
+linking. Application and test builds can share unchanged production objects
+when native flags, SDK, and resolved provider bindings match. Test mode alone
+does not require separate production objects. Use separate output directories
+for incompatible native flags or SDKs/toolchains.
 
-When output isolation is useful, a persistent staged source tree also permits
-incremental builds. Copy only changed sources, preserve unchanged timestamps,
-and synchronize source deletions and renames: stale files can participate in
-folder modules. Only delete directories that the build owns; authored sources
-stay outside it.
+The compiler separates coverage objects from ordinary objects in `.coverage`
+subdirectories inside the output tree. Independent coverage executables or
+processes need separate output roots when their counter lifetimes overlap:
+each execution resets its own counters. See the tester skill's
+[native coverage guidance](../titan-tester/SKILL.md#opt-in-native-production-coverage).
+Only delete output directories that the build owns; authored sources stay
+outside them.
 
 Pair `--incremental` with build-system dependency tracking for imports, foreign
 headers, folder-module inventories, compiler/SDK/provider changes, native
-payloads, and flags; content synchronization alone does not prove object
-compatibility. The compiler's object cache covers only its documented local
-conditions. Compile affected owning modules before linking their consumers,
-and clean an owned stage when a configuration change is not covered by the
-invalidation graph. See
+payloads, and flags. The compiler's object cache covers only its documented
+local conditions. Compile affected owning modules before linking their
+consumers, and clean an owned output tree when a configuration change is not
+covered by the invalidation graph. See
 [incremental compilation](../../../doc/language/incremental-compilation.md)
 for the existing compile/link contract and Make pattern.
 
 ## Create the initial `.gitignore`
 
-For the staged layout above, start with:
+For the output layout above, start with:
 
 ```gitignore
-# All configured build modes and their staged source copies.
+# All configured build modes and their generated outputs.
 /build/
 
 # Workspace language-server cache.
@@ -109,15 +111,15 @@ actually receives its configuration. Example files contain public placeholders.
 
 Avoid blanket `*.c`, `*.h`, `*.lua`, `*.sqlite3`, `*.json`, or `*.log` rules:
 authored FFI helpers, Lua utilities, and test fixtures may use those extensions.
-If compilation happens beside authored sources, enumerate the generated paths
-for the selected module stems, including executable/provider/loader output and
+For a legacy build that omits `--output`, enumerate the generated paths beside
+the selected module stems, including executable/provider/loader output and
 synthetic entry-point/test files. Do not copy Titan's compiler-repository ignore
 file into an application; its source trees and dependency builds differ.
 
 Check the initial rules against both generated/private and authored candidates:
 
 ```sh
-git check-ignore --no-index build/app-src/main.c .env.local .env.example \
+git check-ignore --no-index build/main.c .env.local .env.example \
   main.titan app/native_helper.c scripts/helper.lua tests/fixtures/sample.sqlite3
 git status --short --ignored
 git ls-files
@@ -133,10 +135,10 @@ than an ignore rule.
 
 ## Connect native tests and delivery
 
-Add native `titan.test` roots and a repeatable `titanc --test` command using the
-project's selected source tree. The first requested root determines the
-runner's logical output path on POSIX; copy or name the deliverable explicitly
-instead of guessing it from the common namespace. Read the tester skill's
+Add native `titan.test` roots and a repeatable `titanc --output build --test`
+command using the project's selected source tree. The first requested root
+determines the runner's logical output path on POSIX; copy or name the
+deliverable explicitly instead of guessing it from the common namespace. Read the tester skill's
 [project build guidance](../titan-tester/SKILL.md#9-compile-run-and-filter-a-project-suite)
 for synthetic modules, filters, and installed provider selection. Run a known
 test and inspect the selected count: a successful empty filtered run is not

@@ -529,3 +529,30 @@ child cleanup, build artifacts kept at embedded absolute paths, and separate
 build trees for concurrent sessions.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
+
+### Existing application workflow with two covered executables
+
+Give a fresh agent an application Makefile that copies sources into coverage
+stages, requires Python to normalize gcovr JSON, and externally merges reports
+from a test runner and its standalone child. Ask it to adopt `--output` and
+retain basic native coverage. Do not request a combined metric or rich formats.
+
+Require original-source compilation, compiler-owned `.coverage` artifacts,
+native summaries and annotated reports, and no mandatory Python/gcovr or
+duplicated report processing. The independent covered processes need separate
+output roots for their counters; ordinary app/test links may share compatible
+production objects. Retire the legacy report wrappers and update any test
+expectation that requires renderer-specific output. Keep normal test failures
+and child cleanup, without introducing a new custom audit or merge protocol.
+
+An explicitly requested aggregate or rich report is a separate variant: verify
+that the agent uses the compiler's rich-format options or an appropriate
+external combination tool, rather than interpreting native reporting as a ban
+on optional dependencies. Record observed behavior after running the case.
+
+Forward-check on 2026-10-15: a fresh agent given only the three relevant skills,
+a legacy Makefile, and its stdout assertion selected native per-executable
+reports, removed mandatory Python/gcovr and merge processing, and identified the
+renderer-specific assertion change. With aggregation and rich formats explicitly
+requested, it allowed the optional external tooling. This was a read-only build
+plan evaluation; it did not execute the application.

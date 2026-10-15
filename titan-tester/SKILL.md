@@ -1,14 +1,14 @@
 ---
 name: titan-tester
-description: Write, organize, compile, filter, and debug native Titan tests with titan.test and titanc --test, and choose correctly between native standard-library tests, checker specs, coder specs, and other Busted gates. Use whenever adding or reviewing Titan tests, subtests, assertions, fixtures, cleanup, skips, expected errors, asynchronous tests, test filters, or repository test commands.
+description: Write, organize, compile, filter, and debug native Titan tests and production-source coverage with titan.test, titanc --test, and titanc --coverage. Choose correctly between native standard-library tests, checker specs, coder specs, and other Busted gates. Use for Titan tests, coverage workflows, subtests, assertions, fixtures, cleanup, skips, expected errors, asynchronous tests, test filters, or repository test commands.
 ---
 
 # Titan tester
 
 Use this skill after the basic Titan language skill whenever the task involves a
-`.titan` test, `titan.test`, `titanc --test`, `TITAN_FILTER`, or deciding where a
-Titan repository regression belongs. Titan's native test runner is not Busted,
-LuaUnit, Go's runner, or a special source language. A test file is an ordinary,
+`.titan` test, `titan.test`, `titanc --test`, `titanc --coverage`, `TITAN_FILTER`,
+or deciding where a Titan repository regression belongs. Titan's native test
+runner is not Busted, LuaUnit, Go's runner, or a special source language. A test file is an ordinary,
 statically checked Titan module, compiled through C into one standalone
 executable.
 
@@ -964,15 +964,27 @@ status. Join test-owned children normally. A line hit does not prove every
 expression or behavior ran; keep ordinary optimized/platform gates.
 
 Basic gcov summaries and annotated output require neither Python nor gcovr.
+Use these native reports directly for ordinary consumer coverage. When several
+executables are measured, keep their per-executable reports unless the task or
+project contract requires a combined result. Request optional rich formats
+through the compiler when needed; basic coverage should not acquire their
+Python/gcovr dependency.
+
+When adopting the compiler reporter, review existing coverage wrappers and
+retire redundant collection, path normalization, or rendering code. Keep a
+custom merger or additional audit only when a current requirement warrants it,
+rather than carrying it forward solely because it already exists.
+
 GCC 14+ needs matching gcov. Clang uses matching `llvm-cov gcov` with
 `--coverage-backend llvm-gcov`; Windows CLANG64/UCRT chooses that backend by
 default, validated with LLVM 22.1.8. Optional repeated
 `--coverage-format` options accept `html`, `lcov`, or `cobertura` and require
 gcovr 8.4, selected with
 `--coverage-gcovr COMMAND`. `--coverage-output DIRECTORY` changes the default
-`.coverage/report`. Reports expose Titan executable lines, not generated-C
+`<output>/.coverage/report` when `--output` is passed, or `.coverage/report`
+otherwise. Reports expose Titan executable lines, not generated-C
 branch/function percentages. Local coverage needs no Codecov credentials;
-uploads and cross-run/binary/platform combination remain external.
+uploads and required cross-run/binary/platform combination remain external.
 
 The repository's `titan-native-coverage` target source-links production imports
 into the ordinary native aggregate. `-build` compiles separately; `-run` runs

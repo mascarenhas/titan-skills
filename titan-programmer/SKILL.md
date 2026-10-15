@@ -26,7 +26,8 @@ work crosses one of these boundaries:
   repository, source/test build layout, initial ignore rules, and executable
   delivery checks.
 - **`titan-tester`** — native `titan.test` modules, `titanc --test`, subtests,
-  cleanup, filtering, and repository test-layer ownership.
+  cleanup, filtering, native production coverage, and repository test-layer
+  ownership.
 - **`titan-async`** — Tasks, cancellation, Runtime ownership, timers, libuv
   callbacks, callback-to-Task resumption, and async standard-library internals.
 - **`titan-networking`** — `net`, `ssl`, `url`, and `http` APIs and
@@ -1984,6 +1985,10 @@ optimized release build needs no cleanup after coverage.
 Running the test executable resets its own `.gcda` counters, retains `.gcno`
 notes, runs tests and cleanup, then explicitly dumps and reports after success.
 Failures keep their status. Basic gcov reports need neither Python nor gcovr.
+Use the native summaries and annotated reports directly, including separate
+per-executable reports when measuring several images. Add richer formats or
+external aggregation when the task requires them, and retire obsolete custom
+reporting wrappers when adopting the compiler's reporter.
 GCC requires version 14+ with matching gcov (`CC=gcc-14 GCOV=gcov-14`). Clang
 uses `--coverage-backend llvm-gcov --coverage-gcov 'llvm-cov gcov'` with matching
 versions; native Windows CLANG64/UCRT selects that backend by default (validated
