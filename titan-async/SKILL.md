@@ -158,6 +158,7 @@ The exact top-level scheduling API is:
 function run<|A, B|>(func: function (): (A)): Task<|A, B|>
 function run_foreign(f: foreign function (*void): void, arg: foreign *void)
 function loop()
+function add_close_listener(listener: function (): ()): function (): ()
 function yield()
 function running(): Task<|value, value|>
 function current_loop(): uv.loop_t
@@ -315,6 +316,16 @@ found by a walk. A domain method whose established
 contract requires a Task must separately call `running()`. `request_exit(code)`
 is the Task-aware exit path used by `os.exit`; cleanup completes before exit.
 
+`add_close_listener(callback)` requires an active nonclosing Runtime and returns
+an idempotent remover. Ordered once-only callbacks run outside Tasks after all
+Tasks/native handles retire and `uv.loop_close` succeeds. They cannot yield,
+start Tasks, or use the retired loop. Release only synchronous retained owner
+state here (for example an idle TLS engine after its TCP handle retired), not
+active I/O. Remove the listener when its owner closes early. Removing a later
+listener suppresses it. Exceptions do not skip remaining listeners; `loop`
+preserves its first failure, clears the Runtime, then raises. This is a generic
+retirement observer, not an alternative native handle registry.
+
 ### Persistent sources: subscriptions own delivery, domains own resources
 
 `CoalescingSubscription<|T, E|>` retains the latest unread value;
@@ -343,6 +354,11 @@ Both expose `next`, `has_waiter`, `stop`, and `close`. `next()` returns
 `SubscriptionResult<|T, E|>`: `item(T)`, `error(E)`, `ended()`, or `closed()`.
 Errors/end are terminal and follow buffered items; recoverable errors belong
 inside `T`. Nil and false are real payloads, never absence sentinels.
+
+`BufferedSubscription:has_pending()` synchronously reports queued items or any
+terminal state without consuming, reserving a reader, or checking cancellation.
+Nil/false items count as pending. False is a live empty-queue snapshot, not a
+promise about future producer events.
 
 Buffered sources additionally expose `next_batch()` returning
 `SubscriptionBatchResult<|T, E|>` with `batch(SubscriptionBatch<|T|>)`,
