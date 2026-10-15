@@ -116,6 +116,8 @@ function listen(host: string, port: integer,
                 backlog: integer?, reuse_port: boolean?): Server
 
 function Connection:read(): string?
+function Connection:has_pending_input(): boolean
+function Connection:add_input_listener(listener: function (): ()): function (): ()
 function Connection:read_until(delimiter: string,
                                chop: boolean?): string?
 function Connection:write(data: string)
@@ -167,6 +169,8 @@ function listen(host: string, port: integer,
 function Connection:abort()
 function Connection:handshake()
 function Connection:read(): string?
+function Connection:has_pending_input(): boolean
+function Connection:add_input_listener(listener: function (): ()): function (): ()
 function Connection:read_until(delimiter: string,
                                chop: boolean?): string?
 function Connection:write(data: string)
@@ -257,6 +261,17 @@ record ClientResponse
   headers: Headers
 end
 
+record Client
+function Client.new(): Client
+function Client:request(method: string, source_url: string,
+                        supplied_headers: Headers?, body: string?,
+                        ca_file: string?): ClientResponse
+function Client:get(source_url: string, supplied_headers: Headers?,
+                    ca_file: string?): ClientResponse
+function Client:close_idle_connections()
+function Client:close()
+function close_idle_connections()
+
 function request(method: string, source_url: string,
                  supplied_headers: Headers?, body: string?,
                  ca_file: string?): ClientResponse
@@ -318,12 +333,12 @@ public fields; passing an Array
 through `headers(initial)` validates and copies those records. `Headers`,
 `Response`, and `Server` are opaque. `ClientResponse` and `Request` expose the
 listed public fields but also own private transport/parser state, so neither has
-a public generated constructor. Use `headers`, `request`/`get`, and
+a public generated constructor. Use `headers`, `request`/`get` (or an explicit Client), and
 `listen`/`listen_tls`.
 
-This is an HTTP/1.1-only, one-request client and serial keep-alive server. There
+This is an HTTP/1.1-only pooled client and serial keep-alive server. There
 is no `Router`, request builder, streaming request-body Writer, response `body`
-field, redirect policy, decompressor, cookie jar, proxy mode, connection pool,
+field, redirect policy, decompressor, cookie jar, proxy mode,
 HTTP/2, endpoint getter, or generic middleware API. Validated HTTP upgrades
 transfer a prefix-preserving stream exactly once. Use the dedicated
 [`titan-websocket`](../titan-websocket/SKILL.md) cartridge for the WebSocket
@@ -853,7 +868,11 @@ fails.
 - The optional request body is one in-memory binary string. The client creates
   or checks exact Content-Length, rejects request Transfer-Encoding, and
   rejects Expect because it has no staged `100-continue` client state.
-- The client always sends `Connection: close`. It has no reuse pool.
+- HTTP/1.1 persistence is the default. A supplied `Connection: close` disables
+  reuse for that exchange. Module helpers share one pool per async Runtime;
+  `http.Client()` creates a separate pool that binds on its first request, not
+  construction. Its `get` and `request`
+  methods have the same arguments as the module helpers.
 
 ### Response ownership
 
@@ -862,13 +881,69 @@ responses. The body remains streaming. Content-Length, chunked, no-body, and
 connection-close framing are decoded; chunk framing is not returned.
 Trailers are appended to `response.headers` only as parsing reaches them.
 
-Always register `response:close()` immediately. Reading EOF closes it for you,
-but a caller that stops early owns explicit close. Close discards the remainder,
-closes the one-use transport, is idempotent, and completes transport cleanup
-before pending Task cancellation is published. Redirects and content codings
-are returned unchanged; the caller owns those policies.
+Always register `response:close()` immediately. Reading EOF closes it for you
+and returns a healthy persistent connection to its pool. Early close marks the
+response closed and schedules a background drain, bounded by 50 ms and 256 KiB
+of unread decoded body bytes. It does not wait for draining. Another request
+can open its own connection while the first drains; only complete, valid
+messages can return a connection to the pool. Transport chunks may already
+contain more than the byte allowance; a background drain over the allowance
+cannot reuse its connection. An already complete, validated message can discard
+retained body bytes and release immediately without a drain.
+Close is idempotent and later reads return nil. A response permits one reader;
+closing during an active read retires transport and lets that reader unwind,
+without starting a competing drain.
 
-**COMPOSITION SKETCH — one-request client with a bounded body policy:**
+`Connection: close`, EOF framing, known oversized remainders, upgrades, parse
+failure, truncation, and drain timeout retire the connection. Native retirement
+still completes despite pending cancellation. Background failures are contained
+and cannot change the closed response. Its header collection can acquire
+trailers during successful draining.
+
+Pool keys separate scheme, normalized URL host/port, effective Host, and exact
+HTTPS CA path selection. Clear/close the pool before changing a trust file's
+contents or default trust configuration. Idle retention is bounded to two per
+key and 100 per Client; the 90-second age is checked lazily on pool use. No idle
+Task keeps the Runtime alive. Runtime-close notification retires retained idle
+TLS engines after native handle cleanup and clears the default Client. A later
+Runtime gets a new default pool.
+`http.close_idle_connections()` clears the default pool; the Client method
+clears its own idle connections. `Client:close()` additionally prevents new
+requests and retires drains. Live caller-owned responses still need closing
+and never return connections to a closed Client. Defer an explicit Client's
+close for component-level ownership. Healthy TLS idle eviction and fully read
+nonpersistent responses attempt close_notify with a separate 50 ms timeout;
+timeout/interruption aborts and drains accepted cleanup. Dirty/unread input and
+Runtime-close notification use abort directly. Event-triggered idle retirement
+Tasks remain Client-owned until terminal cleanup, including cancellation before
+first execution. There is no request pipelining.
+
+Idle connections with observed input/EOF/error are discarded. `net.Connection`
+and `ssl.Connection` expose synchronous `has_pending_input()` snapshots without
+consuming or polling. TCP includes retained delimiter bytes, buffered events,
+terminal state, and unconnected state. TLS additionally includes buffered
+plaintext/records/BIO bytes and non-open state; true may describe partial/control
+records rather than readable plaintext. False does not guarantee future health.
+`add_input_listener(callback)` requires a connected/open endpoint and Task,
+returns an idempotent remover, and reports new TCP bytes/EOF/error after buffering.
+It does not start the watcher or replay old input. Callbacks run outside Tasks,
+must not yield, may remove observers or schedule cleanup, and errors fail the
+Runtime after other listeners run. TLS forwards encrypted receive events without
+driving its engine. Remove listeners before transferring/reusing a connection.
+HTTP pools observe idle input and retire on its first arrival even without a
+later request, avoiding indefinite queue growth or a permanently waiting Task.
+
+A stale reused connection gets at most one fresh retry only for exact GET/HEAD,
+nil body, zero received response bytes (including interim responses), and a
+recognized closure error. Partial responses, parse errors, cancellation, bodies,
+and other methods are never replayed. Dirty input detected before output causes
+fresh dialing without replay. Public header edits cannot change wire-derived
+reuse or drain policy.
+
+Redirects and content codings are returned unchanged; the caller owns those
+policies.
+
+**COMPOSITION SKETCH — streaming client with a bounded body policy:**
 
 ```titan
 local http = import "http"
@@ -1248,7 +1323,7 @@ low-level networking adapter.
   uses cancellation-insensitive await on every parent exit. Do not add a native
   HTTP timeout path.
 - HTTP's folder contributors are one module. Its only native boundary is the
-  synchronous llhttp callback bridge; it has no network callback or Task API.
+  synchronous llhttp callback bridge; it has no raw/native network callback or private Task API.
   URL is pure Titan PEG/string code and synchronous.
 
 Authority:
@@ -1291,7 +1366,7 @@ Reject code or advice that does any of the following:
 - manually splits a URL, uses `host` as an HTTP Host header for IPv6, assumes
   relative URLs/fragments/userinfo are supported, or expects URL parse errors
   to raise;
-- expects `http.get` to follow redirects/decompress/reuse connections, supplies
+- expects `http.get` to follow redirects or decompress responses, supplies
   a streaming request body, mutates `Response:headers()` as a live view, or
   invents a Router/middleware/proxy/HTTP2 API;
 - uses HTTP idle timeout as a handler/body/write timeout or expects HTTPS timeout
@@ -1325,7 +1400,8 @@ Before proposing networking code, answer all of these:
 9. Does URL code use `host`/`port`, `target`, and `authority` for their distinct
    roles?
 10. Does HTTP code close responses, obey header/body framing, and avoid claiming
-    redirects, pooling, decompression, or broad timeout coverage?
+    redirects, decompression, or broad timeout coverage? Are active/draining
+    connections excluded from reuse and Client lifetimes scoped to a Runtime?
 11. Are caught failures distinguished by their real record type, with bare
     re-raise for unhandled values?
 12. Are option values consumed directly rather than cargo-cult-cast?
