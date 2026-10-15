@@ -113,7 +113,7 @@ function Connection.new(): Connection
 function Connection:connect_address(address: uv.sockaddr_t)
 function connect(host: string, port: integer): Connection
 function listen(host: string, port: integer,
-                backlog: integer?): Server
+                backlog: integer?, reuse_port: boolean?): Server
 
 function Connection:read(): string?
 function Connection:read_until(delimiter: string,
@@ -162,7 +162,7 @@ function connect(host: string, port: integer,
 function listen(host: string, port: integer,
                 certificate_file: string,
                 private_key_file: string?,
-                backlog: integer?): Server
+                backlog: integer?, reuse_port: boolean?): Server
 
 function Connection:abort()
 function Connection:handshake()
@@ -302,11 +302,11 @@ function Response:reject_upgrade(request_value: Request, status: integer,
 record Server
 function listen(host: string, handler: Handler,
                 port: integer?, backlog: integer?,
-                idle_timeout: integer?): Server
+                idle_timeout: integer?, reuse_port: boolean?): Server
 function listen_tls(host: string, certificate_file: string,
                     handler: Handler, private_key_file: string?,
                     port: integer?, backlog: integer?,
-                    idle_timeout: integer?): Server
+                    idle_timeout: integer?, reuse_port: boolean?): Server
 function Server:idle_timeout(timeout: integer?): integer
 function Server:header_limit(limit: integer?): integer
 function Server:serve()
@@ -603,6 +603,11 @@ size limit for untrusted input rather than collecting without bound.
 - `listen` accepts ports `0..65535`; zero asks the OS for an ephemeral port, but
   the current `Server` exposes no way to retrieve it. Backlog defaults to 128
   and, when supplied, must be `1..2147483647`.
+- `reuse_port` defaults to false. True passes public `uv.TCP_REUSEPORT` at bind
+  time so independent listeners can share the same local address and port;
+  every listener must opt in. Kernel connection distribution has no promised
+  fairness. Unsupported platforms (including macOS/Windows) raise the native
+  `async.OperationError` named `ENOTSUP`; never silently disable the flag.
 - A read watcher starts lazily at the first read and keeps buffering chunks even
   with no waiter. There is no high-water mark. Do not leave a peer producing
   indefinitely while the application does not drain. Buffered chunks are
@@ -897,7 +902,11 @@ For HTTPS with a pinned/test trust bundle, pass it as the third `get` argument:
 ### Listener and Task ownership
 
 - `http.listen` defaults to port 80; `listen_tls` defaults to 443. Both default
-  backlog to 128 and idle timeout to zero. Port zero is allowed but still has no
+  backlog to 128 and idle timeout to zero. Their trailing `reuse_port` option
+  defaults to false and is forwarded to `net.listen`, through `ssl.listen` for
+  HTTPS, with the same native support/errors. It supports independent servers
+  per Lua state or process without changing one Runtime's Task scheduling.
+  Port zero is allowed but still has no
   selected-port getter.
 - Listener construction does not accept. `Server:serve()` owns the accept loop
   and runs until close/error. It starts one independent Task per connection.

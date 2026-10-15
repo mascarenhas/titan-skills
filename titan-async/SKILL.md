@@ -1,6 +1,6 @@
 ---
 name: titan-async
-description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or public titan.uv callbacks, generic await/subscriptions, and native ownership code.
+description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, cross-state receivers, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or public titan.uv callbacks, generic await/subscriptions, and native ownership code.
 ---
 
 # Titan async
@@ -94,10 +94,73 @@ helpers, and UV's native callback bridges remain private.
 ## Exact public `async` surface
 
 `async` declares and owns `Error`, `OperationError`, `CancellationReason`,
-`TaskStatus`, `Task`, and `ResumeToken`. These are not aliases to `uv` types.
+`TaskStatus`, `Task`, `ResumeToken`, `TransferValue`, and `Receiver`. These are not aliases
+to `uv` types.
 Their existing names, constructors, and generic parameters remain available
 through `async`; rebuild compiled consumers after this prerelease owner change.
 `SuspendCancelAction` is the function type `function (): ()`.
+
+`async.TransferValue` is the shared union for independent-state transfers:
+
+```text
+union TransferValue
+  is_nil()
+  is_boolean(boolean)
+  is_integer(integer)
+  is_float(float)
+  is_string(string)
+  is_lua_state(foreign *lua_State)
+  is_function(foreign function (*lua_State): int)
+  is_pointer(foreign *void)
+end
+```
+
+Scalars retain their kinds and strings are copied byte-for-byte between
+collectors. Pointer variants are borrowed and neither retain source objects
+nor synchronize shared memory. `lua.Lua` methods accept and return this union
+owned by async; there is no `lua.TransferValue` alias. Load `titan-ffi` for the
+exact Lua mapping, native pointer lifetime, and worker ownership rules.
+
+### Cross-state receivers
+
+```text
+record Receiver
+function receiver(): Receiver
+function Receiver:handle(): foreign *void
+function send(handle: foreign *void, data: TransferValue)
+function Receiver:wait(): TransferValue
+function Receiver:close()
+```
+
+- Create/root the Receiver in its own state. `receiver()` may bootstrap that
+  state's Runtime outside a Task and never drives the loop. Only the opaque
+  native handle crosses states; do not send a `Receiver` or `uv.async_t` object.
+- `send` is synchronous ordinary Titan code safe across threads. It copies
+  scalar tags/values and complete string bytes (including NUL) into an unbounded
+  native FIFO; pointer variants remain borrowed. Coalesced wakeups preserve all
+  queued messages. Null C-function messages are rejected before enqueue.
+  It allocates/locks and is **not** raw POSIX signal-safe.
+- `wait` needs a Task in the owning Runtime, permits one waiter, and returns
+  FIFO messages. Cancelling a waiter detaches it without dropping messages.
+- `close` synchronously closes send admission, discards pending messages, and
+  wakes the waiter with `"receiver is closed"`. It is idempotent and may run
+  outside a Task. Drive the owning loop to drain native close. Runtime shutdown
+  also disables receivers before the native handle walk closes them.
+- A retained closed Receiver safely rejects late sends. The raw handle itself
+  retains nothing: keep the Receiver rooted and its Lua state open until the
+  handle is withdrawn from every sender and every in-flight send has finished.
+  Only then release its root or close the state. Never dereference this token.
+- For two-phase setup, use a first `Lua:run_async` to retain/export the receiver,
+  then a host Task making a second `run_async` call to drive its remote wait/loop.
+  Synchronous `Lua:run` bootstrap is also supported. Send a
+  cooperative stop message, drain the host worker, close/drain remote handles,
+  withdraw tokens, and close the Lua state. Host cancellation cannot interrupt
+  Lua work; cleanup that must join a worker needs cancellation-insensitive
+  `await_cleanup`, not a cancellable `join` alone.
+
+Use the [complete standalone example](../../../doc/language/standard-library-lua.md#two-phase-receiver-bootstrap)
+for the exact cleanup order. These receivers are distinct from same-state
+bounded `channel<|T|>` values.
 
 The underlying public data is:
 
@@ -407,7 +470,7 @@ an exact C callback whose body must obey this raw-C boundary.
 `lua.Lua:run_async` is the independent-state adapter: its worker exclusively
 owns a separate state and may require and execute Titan modules initialized
 there. It never shares host module values or GC objects. Use
-[`titan-ffi`](../titan-ffi/SKILL.md) for `TransferValue` copies, borrowed
+[`titan-ffi`](../titan-ffi/SKILL.md) for `async.TransferValue` copies, borrowed
 pointers, native preload snapshots, and the `run`/`run_async` APIs. Concurrent
 operations or close on a busy wrapper raise; accepted cancellation waits for
 native completion before the stack is restored and the reservation released.
@@ -417,7 +480,10 @@ bytes the worker may read or write. Submission failure raises immediately. Once
 accepted, cancellation does not stop the C call or release its state early:
 completion stays authoritative, then the Task receives its pending
 cancellation. The pool is shared with filesystem and DNS requests, so long or
-numerous jobs can delay unrelated I/O.
+numerous jobs can delay unrelated I/O. A long-lived remote event loop still
+occupies its worker slot. Size `UV_THREADPOOL_SIZE` before first pool use and
+leave capacity for filesystem/DNS/SQLite work needed by those services; new
+Lua states do not get separate pools.
 
 The portable raw-pointer signature is statically callable across compiled Titan
 modules. It does not create a dynamic Lua coercion for raw pointers or foreign

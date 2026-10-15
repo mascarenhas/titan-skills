@@ -1366,14 +1366,14 @@ only when run-time Lua discovery is the actual requirement.
 ```text
 function new(): Lua
 function Lua:close()
-function Lua:run(chunk: string, name: string?, ...: TransferValue):
-  (...: TransferValue)
-function Lua:run_async(chunk: string, name: string?, ...: TransferValue):
-  (...: TransferValue)
+function Lua:run(chunk: string, name: string?, ...: async.TransferValue):
+  (...: async.TransferValue)
+function Lua:run_async(chunk: string, name: string?, ...: async.TransferValue):
+  (...: async.TransferValue)
 function Lua:run_from_loader(reader: io.Reader, name: string?,
-  ...: TransferValue): (...: TransferValue)
+  ...: async.TransferValue): (...: async.TransferValue)
 function Lua:run_async_from_loader(reader: io.Reader, name: string?,
-  ...: TransferValue): (...: TransferValue)
+  ...: async.TransferValue): (...: async.TransferValue)
 ```
 
 `new` opens Lua's standard libraries in a fresh state and snapshots string-keyed
@@ -1383,9 +1383,16 @@ other entries are skipped. Initialized Titan modules publish such native
 loaders, including executable-embedded modules. Requiring a copied loader
 initializes its module independently: no cached module value or host GC state
 is copied. Later preload changes are independent. Native loader/library code
-must remain loaded while any copied function pointer is used.
+must remain loaded while any copied function pointer is used. Matching
+generated-provider descriptors are copied alongside eligible loaders, including
+inherited descriptors not yet initialized in the creating state. They contain
+code pointers only. Compiled dynamic imports select the destination canonical
+module, then the copied native resolver, then the ordinary DSO provider. ABI
+and consumer compatibility checks precede initialization; globals, metatables,
+and bindings remain per-state. Copied dependencies need no manual require order
+or filesystem paths.
 
-`TransferValue` has `is_nil`, `is_boolean`, `is_integer`, `is_float`,
+`async.TransferValue` has `is_nil`, `is_boolean`, `is_integer`, `is_float`,
 `is_string`, `is_lua_state`, `is_function`, and `is_pointer` variants. Strings
 are copied byte-for-byte into the destination collector. State/pointer
 arguments become lightuserdata; returned threads become borrowed
@@ -1413,6 +1420,28 @@ normal 200-value limit. Even ignored returned values must be transferable.
 For the exact API and protected stack/packet ledger, read
 `doc/language/standard-library-lua.md` and `doc/implementation/lua-library.md`.
 
+`async.Receiver` adds a native FIFO for `async.TransferValue` messages. Create
+and retain it in the destination state; `Receiver:handle()` exports only an
+opaque borrowed `foreign *void`. That handle is accepted by `async.send` in
+another state's ordinary Titan code. It is not a `uv.async_t`, a Titan record
+address to cast back, or a GC root. Strings are copied, including embedded NUL;
+pointer payloads still borrow their referents and need separate lifetime and
+synchronization. `send` allocates and locks, so it is not a raw POSIX signal
+handler operation.
+
+Receiver construction can run outside a destination-state Task during a
+`Lua:run` or first `Lua:run_async` bootstrap; `Receiver:wait` needs a Task in the
+destination Runtime. Keep the
+Receiver rooted there through every send. Close disables admission immediately,
+but a retained closed owner must remain alive until all senders withdraw its
+handle and finish any in-flight calls. Drive the destination loop to drain
+native close, then release roots and call `Lua:close`. A raw handle surviving
+owner collection or state destruction is invalid, even if close happened first.
+Use the [two-phase example](../../../doc/language/standard-library-lua.md#two-phase-receiver-bootstrap)
+and `titan-async` for complete worker cleanup: cancellation of the host does
+not interrupt a running Lua chunk, and a cancellation-insensitive drain must
+finish before the owning state closes.
+
 # The Lua C API: trusted exception, not general FFI v1
 
 ## Support status
@@ -1425,7 +1454,8 @@ API-specific knowledge that ordinary FFI declarations do not encode.
 
 The project currently permits a narrow audited exception in private code of
 `titan.peg`, `titan.string`, `titan.lua`, `titan.iteration`, `titan.gc`, and
-`titan.test`. Treat this section as a review checklist for that trusted code,
+`titan.test`, plus the one-slot Receiver string-copy helper in `titan.async`.
+Treat this section as a review checklist for that trusted code,
 not permission to scatter `lua_*` calls through applications. Prefer:
 
 * a typed Lua callable passed into Titan;
@@ -1537,9 +1567,12 @@ callback/borrow audit.
 | `lua_pcallk` | effect follows nargs/nresults and the error path; current-state use is the exact nonyieldable test helper factory; separate-state initialization/execution follows the [independent-state protected ledger](../../../doc/implementation/lua-library.md#protected-execution-and-stack-cleanup) |
 | `lua_setupvalue` | success installs/pops top value; missing upvalue returns null and leaves it |
 | `luaL_tolstring` | pushes one string; may call `__tostring`, allocate, or raise; trace before cleanup |
+| `lua_pushlstring` | pushes one copied byte string and may allocate/raise; the async Receiver keeps its detached native packet alive through the copy, traces the resulting string, then restores the saved top |
 | `lua_type` | net zero |
 | `lua_topointer` | net zero; returned address is identity-only, borrowed, never dereference it |
 | `ffi.lua_totvalue` | net zero; copies selected slot into traced Titan `value` |
+| `titan_module_preload_symbols` | net zero on success; validates matching zero-upvalue loader/descriptor and returns only a borrowed native resolver; may allocate/raise, so preserve the host saved-top defer |
+| `titan_module_preload` | net zero on success; copies a loader and optional native-only provider descriptor, removing stale descriptors for a NULL resolver; may allocate/raise, so destination installation stays inside its protected opener; never initializes the module |
 | `lua_gc` | net zero; whole-state control, forbidden/unavailable in a finalizer |
 | `lua_settop(L, saved)` | authoritative cleanup to the saved entry height |
 
