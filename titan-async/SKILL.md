@@ -32,8 +32,8 @@ Titan async is **cooperative, single-loop continuation execution**:
   then the callback returns to libuv.
 - Filesystem, DNS, and explicit `async.run_foreign` work may execute in libuv
   worker threads, but only the loop-thread completion callback enters Titan.
-  Worker threads never read or mutate Titan records; `run_foreign` performs
-  exactly its supplied C function-pointer call over native data.
+  Worker threads never read or mutate Titan-managed fields; `run_foreign`
+  performs exactly its supplied C function-pointer call over native data.
 - CPU-bound Titan code that does not finish or yield blocks every Task and the
   event loop. Call `async.yield()` or `timer.yield()` deliberately in such a
   loop.
@@ -387,6 +387,13 @@ library. The callback is a restricted source `foreign function` or a compatible
 C function pointer—not a Titan closure—and the argument points at native
 storage that remains alive until completion. Load `titan-ffi` when designing
 that boundary.
+
+The public UV binding publishes a C-only callback payload through
+`uv_work_t.data` before queueing and leaves it unchanged until completion.
+The worker may read that native payload while its stable owner is retained;
+embedding C storage in a Titan owner does not make those C fields GC-managed.
+Public `work_t:get_data`/`set_data` use a separate traced value and do not
+replace the native callback payload.
 
 The worker must not inspect Titan or Lua values, enter an ordinary Titan
 function or closure, call a Titan runtime helper or the Lua API, allocate

@@ -136,10 +136,10 @@ Use the same native policy for checking and compilation:
 ```sh
 TITAN_EXTRA_CPPFLAGS='-I/opt/widget/include -DWIDGET_API=2' \
 TITAN_EXTRA_LDFLAGS='-L/opt/widget/lib -lwidget' \
-  titanc app.main
+  titanc -o out app.main
 ```
 
-For a simple library name, `titanc app.main -lwidget` is convenient. CPP flags
+For a simple library name, `titanc -o out app.main -lwidget` is convenient. CPP flags
 supply declarations; link flags or `-l` supply implementations. `titanc` takes
 dotted module names, not `.titan` paths.
 
@@ -156,7 +156,7 @@ and earlier-variable restrictions.
 An explicit source dependency's C environment is transitive. Its private Titan
 members still require a direct explicit `.titan` import. Generated C includes
 `A.ffi.h` before `A.titan.h` when present; the latter contains foreign-function
-C declarations and eligible inline bodies. Both source-adjacent header paths are compiler-owned;
+C declarations and eligible inline bodies. Both generated header paths are compiler-owned and follow `--output`;
 do not author either file. Conflicts caused by combining a consumer's headers
 with imported source declarations may be reported by final C compilation.
 
@@ -921,6 +921,9 @@ perform each required probe and retain each failure separately.
 Titan imports a bounded set of object-like macro values:
 
 * supported integer constant expressions;
+* floating literals and bounded arithmetic, including C `float`/`double`/
+  `long double` suffixes and the recognized compiler constant leaves used by
+  `INFINITY`, `NAN`, and `HUGE_VAL*`; generated C retains the public macro name;
 * typed dereferenced accessors such as common `errno` expansions;
 * a fully expanded outer cast to a supported C integer, float, object pointer,
   or function pointer, while generated C still emits the public macro name;
@@ -1034,8 +1037,8 @@ source imports, and binary imports. Physical co-residence in one provider does
 not make it public. Do not design an installed API around a consumer reaching
 another module's foreign function.
 
-Each source module owns a compiler-generated source-adjacent `.ffi.h` for the
-ordered C environment. A module defining foreign functions also owns `.titan.h`
+Each source module owns a compiler-generated `.ffi.h` for the ordered C
+environment, following the selected output directory. A module defining foreign functions also owns `.titan.h`
 for their prototypes and eligible inline bodies. A folder module uses its
 canonical main's path. The compiler prepares required headers before compiling
 source peers. These paths are reserved and are not installed/binary interfaces.

@@ -318,7 +318,7 @@ end
 ```
 
 ```sh
-(cd scratch && titanc --test --tree . calc_test && ./calc_test)
+(cd scratch && titanc -o out --test --tree . calc_test && ./out/calc_test)
 ```
 
 The helper call creates a distinct activation for each captured input and
@@ -599,7 +599,7 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 
 ## 8. Repository-native test ownership and layout
 
-The aggregate currently has 27 explicit logical roots in
+The aggregate currently has 28 explicit logical roots in
 `spec/support/stdlib_test_modules.mk:TITAN_STDLIB_TEST_ROOTS`, shared by Linux,
 macOS, and native Windows:
 
@@ -625,6 +625,7 @@ ssl.tests
 http.tests
 websocket.tests
 url.tests
+path.tests
 os.tests
 os.process_tests
 uv.runtime_tests
@@ -636,7 +637,7 @@ json.tests
 Do not replace this manifest with an import-only aggregator. Making each owner
 an explicit `titanc --test` root keeps its test source authoritative and makes
 discovery see the intended source closure. `test.tests` is deliberately first
-and owns `.titan-tests/test/tests`, the aggregate executable.
+and owns `out/tests/test/tests`, the aggregate executable.
 
 ### Where to put a new standard-library case
 
@@ -714,9 +715,9 @@ cannot replace them. Record the tested macOS architecture explicitly.
 ### Treat shared build products as read-only
 
 Native and Busted helpers must not clean or rebuild the Makefile-owned
-`titan.so`, `titan.a`, `titan-runtime/libtitan.a`, generated standard shims, or
+`out/titan.so`, `out/titan.a`, `titan-runtime/libtitan.a`, generated standard shims, or
 private dependency archives. Generated test cleanup is deliberately bounded:
-`.titan-tests/` is owned wholesale, source-adjacent `.o` files below `spec/`
+`out/tests/` is owned wholesale, source-adjacent `.o` files below `spec/`
 are generated, and a `.c` below `spec/` is removed only when a same-stem
 `.titan` proves ownership. Reserved `__test_{support,runner,entrypoint}` suffixes
 own synthetic runner artifacts. Use `spec/support/clean_generated_test_artifacts.sh`;
@@ -736,12 +737,12 @@ unset LUA_PATH LUA_CPATH LUA_PATH_5_5 LUA_CPATH_5_5
 From the source-tree root, pass dotted module names:
 
 ```sh
-titanc --test --tree . calc_test
-./calc_test
+titanc -o out --test --tree . calc_test
+./out/calc_test
 
 # Several unrelated test roots may share the first root's executable.
-titanc --test --tree . calc_test parser_test
-./calc_test
+titanc -o out --test --tree . calc_test parser_test
+./out/calc_test
 ```
 
 The first requested root owns the executable path (including the normal folder
@@ -751,11 +752,13 @@ shim—and gives adjacent synthetic artifacts reserved
 compiled dependency; no synthetic support module or installed source copy is
 required.
 
-Ordinary generated C/object files stay beside their source even when `--tree`
-and the invocation working directory differ. Application and test builds can
-share unchanged production objects when native flags, SDK, and resolved
-provider bindings match. Stage distinct source copies for incompatible
-configurations, such as coverage instrumentation or different toolchains.
+Pass `--output` for every test build, following the programmer skill.
+Generated C, objects, and headers recreate the source-root-relative hierarchy
+inside that directory; the native runner and executable also use it. Without
+the option, legacy generated C/object files remain beside their source.
+Application and test builds can share unchanged production objects when native
+flags, SDK, and resolved provider bindings match. Use distinct output directories
+for incompatible configurations, such as different toolchains.
 `--static` selects the standard archive normally; it remains a preference and
 may select a DSO when no compatible archive exists. If a selected provider is
 outside the runtime search path, set `TITAN_PATH_0_6` to its `lib/titan/0.6`
@@ -798,16 +801,16 @@ Given `calc_test.test_twice` with children `positive` and `zero`:
 
 ```sh
 # Select the parent and every registered child by matching their common prefix.
-./calc_test --filter='^calc_test[.]test_twice'
+./out/calc_test --filter='^calc_test[.]test_twice'
 
 # Exact parent only: it runs, registers children, but no child is selected.
-./calc_test --filter='^calc_test[.]test_twice$'
+./out/calc_test --filter='^calc_test[.]test_twice$'
 
 # Wrong for a lone child: parent is filtered out, so the child is never created.
-./calc_test --filter='^calc_test[.]test_twice[.]zero$'
+./out/calc_test --filter='^calc_test[.]test_twice[.]zero$'
 
 # Select exactly the parent plus exactly one child with two OR filters.
-./calc_test \
+./out/calc_test \
   -f '^calc_test[.]test_twice$' \
   -f '^calc_test[.]test_twice[.]zero$'
 ```
@@ -824,7 +827,7 @@ compiling any requested root.
 The leaf commands are:
 
 ```sh
-# Build all 27 roots once under .titan-tests; does not run them.
+# Build all 28 roots once under out/tests; does not run them.
 make titan-stdlib-test-build
 
 # Run the existing aggregate from the repository root.
@@ -853,12 +856,13 @@ make test
 `make titan-stdlib-test-build` compiles test/helper modules and shared test
 support through separate `titanc -c --test --incremental` targets, then links
 once with `--test --incremental --no-uv-bootstrap`. Every compiler invocation
-runs from `.titan-tests/` with the same absolute `spec/stdlib/titan` tree.
+runs from `out/tests/` with `--output .` and the same absolute
+`spec/stdlib/titan` tree.
 Make builds native fixtures separately and retains generated outputs for
 incremental reuse; explicit `make clean` removes them. The run target returns
 to the repository root because fixtures rely on that CWD. It supervises the
 aggregate in a separate process group with a default 600-second deadline for
-all 27 roots, including repeated fresh child-fixture compilation with O3/Linux
+all 28 roots, including repeated fresh child-fixture compilation with O3/Linux
 LTO. It streams merged output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
 retain their explicit 15-second limit.
@@ -872,9 +876,9 @@ cases, and the complete gate uses no filter. See
 [Windows commands](../../../doc/implementation/windows-build.md#shared-native-standard-library-tests).
 
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
-`.titan-tests/test/tests` directly from the repository root with repeated
+`out/tests/test/tests` directly from the repository root with repeated
 `-f`, or use one carefully designed Lua pattern. The filter does not change the
-27-root compile.
+28-root compile.
 
 `BUSTED_FILTER` never filters Titan cases, and `TITAN_FILTER` never filters
 Busted. The LuaRocks command adapter also recognizes explicit
@@ -931,8 +935,8 @@ TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
 Coverage uses ordinary native tests and their owning layers:
 
 ```sh
-CC=gcc-14 GCOV=gcov-14 titanc --test --coverage calc_tests
-./calc_tests
+CC=gcc-14 GCOV=gcov-14 titanc -o out --test --coverage calc_tests
+./out/calc_tests
 ```
 
 Final coverage links require a test or standalone executable. Use
@@ -1259,7 +1263,7 @@ do not overfit a feature-specific implementation into the tester skill.
 - `titanc --test` receives logical module name, not filename.
 
 **Strong answer:** produces a complete `calc_test.titan`, a useful message,
-`titanc --test --tree . calc_test`, and `./calc_test`.
+`titanc -o out --test --tree . calc_test`, and `./out/calc_test`.
 
 **Fail signatures:** merely adds a return annotation, uses Lua `assert`, keeps
 it local, invents `@test`, or treats process status 0 as sufficient.
@@ -1587,7 +1591,7 @@ make rock-test \
 ```
 
 Must say `TITAN_FILTER` is a runtime Lua pattern, filters one domain only, and
-does not reduce the 27-root build. Do not accept regex-only escaping or a claim
+does not reduce the 28-root build. Do not accept regex-only escaping or a claim
 that `make rock-test` rebuilds/reinstalls the rock.
 
 ## Eval 17 — API surface discrimination

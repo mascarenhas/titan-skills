@@ -1722,7 +1722,11 @@ ownership and cancellation rules.
 ## Compile with `titanc`
 
 Use an installed ABI-matched Titan/Lua 5.5 toolchain. Run from the source-tree
-root and pass dotted **module names**, never `.titan` paths.
+root and pass dotted **module names**, never `.titan` paths. Always pass
+`-o DIRECTORY` or `--output DIRECTORY` as the normal way to use `titanc`, so
+compiler-generated files stay together outside the source tree. Titan creates
+the directory and missing parents. Use separate output directories for
+incompatible build configurations and add them to the project's ignore rules.
 
 A minimal application tree:
 
@@ -1751,7 +1755,7 @@ end
 Compile and run on Linux or macOS:
 
 ```sh
-(cd scratch && titanc check && ./check)
+(cd scratch && titanc -o out check && ./out/check)
 ```
 
 The exact exported `main(args: {string}): integer` makes a standalone
@@ -1762,14 +1766,15 @@ Without an exact `main`, a single root on Linux or macOS builds paired
 shared/static providers and a Lua shim:
 
 ```sh
-(cd scratch && titanc calc)
-(cd scratch && lua -e 'assert(require("calc").twice(21) == 42)')
+(cd scratch && titanc -o out calc)
+(cd scratch && LUA_PATH='out/?.lua;;' LUA_CPATH='out/?.so;;' \
+  lua -e 'assert(require("calc").twice(21) == 42)')
 ```
 
 Experimental Windows library builds emit DLL providers and Lua shims, with no paired
 Titan archive; `--static` and selected Titan archive providers are unsupported.
-Compilation is serial even when `--jobs` is larger than one. The `check` program
-above produces `bin/check.exe` and `lib/titan/0.6/check.dll`; `--launcher-name`
+`--jobs` also bounds generated-C compilation on Windows. The `check` program
+above produces `out/bin/check.exe` and `out/lib/titan/0.6/check.dll`; `--launcher-name`
 changes only the launcher basename. Windows uses the matched controlled Lua DLL
 and its SDK, not an ordinary stock Windows Lua build. Keep that Lua DLL beside
 the Lua interpreter, compiler frontend, and application launcher EXEs. Follow
@@ -1782,6 +1787,7 @@ Use the matched installed `lua`. A dotted module maps dots to directories;
 include:
 
 ```text
+-o DIR / --output DIR directory for all generated files (created if needed)
 -j N / --jobs N       bound generated-C object compilation
 --static              Linux/macOS: prefer Titan .a dependencies; not linker -static
 --launcher-name NAME  Windows standalone/test EXE basename
@@ -1791,13 +1797,23 @@ include:
 --pretty-print         opt in to clang-format for generated C/headers
 ```
 
-`--tree` redirects source lookup, not ordinary generated C/object output:
-those files remain beside the selected source. Different working directories
-alone cannot isolate builds that share sources. Application and test builds
-can reuse unchanged production objects when native flags, SDK, and resolved
-provider bindings match; `--test` alone does not require a second object tree.
-Use separate source copies for incompatible configurations and let the build
-system own invalidation. For a standalone delivery claim, check a relocated
+`--tree` selects source lookup and `--output` selects generated files
+independently. Generated C, objects, and FFI headers recreate the selected
+source root's hierarchy under the output directory; final providers, loaders,
+executables, and temporary compiler files also live there. For example,
+`titanc --tree /project/src -o out app.main` writes `out/app/main.c`, never
+`/project/src/app/main.c`. Authored quoted headers and source diagnostics still
+use the original source location. Output routing does not add a binary search
+root: use `TITAN_PATH_0_6` for previously built providers and Lua's paths for
+generated loaders. Omitting `--output` retains legacy source-adjacent outputs.
+
+Pass the same output directory throughout separate/incremental compilation.
+Object lookup and generated-header restoration use that tree. Application and
+test builds can reuse unchanged production objects when native flags, SDK, and
+resolved provider bindings match; `--test` alone does not require a second
+object tree. Use separate output directories for incompatible configurations
+and let the build system own invalidation. See
+[`output directories`](../../../doc/language/output-directory.md). For a standalone delivery claim, check a relocated
 executable with the compiler and Titan provider unavailable. `--static` is a preference and can still select a
 DSO, so successful compilation alone does not prove provider independence.
 
@@ -1947,7 +1963,8 @@ skill tree should rerun the lightweight cartridge and routing matrix in
 
 ## Native production source coverage
 
-Use `titanc --test --coverage calc_tests`, then run `./calc_tests` normally.
+Use `titanc -o out --test --coverage calc_tests`, then run
+`./out/calc_tests` normally.
 Final links require a test or standalone executable; `--coverage -c` supports
 separate object compilation, while library-only provider links are rejected.
 Automatic selection instruments source imports without top-level `test_`
@@ -1960,7 +1977,7 @@ Repeated `--coverage-module 'app.*'` overrides automatic selection with a union
 of complete logical-name globs: `*` matches any sequence and `?` one character,
 including dots. Explicit mode still skips test-containing and prebuilt modules.
 Quote globs; an empty selection is an error. Generated C, headers and objects
-live in `.coverage` subdirectories at their normal output locations. Ordinary
+live in `.coverage` subdirectories inside the selected output tree. Ordinary
 and coverage incremental objects cannot satisfy each other's lookup, so an
 optimized release build needs no cleanup after coverage.
 
@@ -1974,7 +1991,7 @@ with LLVM 22.1.8). Keep source directives enabled.
 
 Optional repeated `--coverage-format` options accept `html`, `lcov`, or
 `cobertura` and request gcovr 8.4 rendering; `--coverage-gcovr COMMAND` selects it and `--coverage-output DIRECTORY`
-changes `.coverage/report`. Metrics cover Titan executable lines, not generated-C
+changes the default `out/.coverage/report` with `-o out`. Metrics cover Titan executable lines, not generated-C
 branches/functions. Join children normally, keep build artifacts at their
 embedded absolute paths, and use separate build trees for concurrent coverage
 runs. Combination and Codecov uploads stay external. See
