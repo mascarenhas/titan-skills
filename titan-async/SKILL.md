@@ -1,6 +1,6 @@
 ---
 name: titan-async
-description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or public titan.uv callbacks, generic await/subscriptions, and native ownership code.
+description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, cross-state receivers, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or public titan.uv callbacks, generic await/subscriptions, and native ownership code.
 ---
 
 # Titan async
@@ -31,9 +31,11 @@ Titan async is **cooperative, single-loop continuation execution**:
   until it submits the next callback-bearing operation, returns, or raises;
   then the callback returns to libuv.
 - Filesystem, DNS, and explicit `async.run_foreign` work may execute in libuv
-  worker threads, but only the loop-thread completion callback enters Titan.
-  Worker threads never read or mutate Titan-managed fields; `run_foreign`
-  performs exactly its supplied C function-pointer call over native data.
+  worker threads, but only the loop-thread completion callback enters the
+  calling state's Titan code. Worker threads never read or mutate its
+  Titan-managed fields; `run_foreign` performs exactly its supplied C
+  function-pointer call over native data. `lua.Lua:run_async` may execute Lua
+  and Titan modules initialized in its separately owned state.
 - CPU-bound Titan code that does not finish or yield blocks every Task and the
   event loop. Call `async.yield()` or `timer.yield()` deliberately in such a
   loop.
@@ -92,10 +94,73 @@ helpers, and UV's native callback bridges remain private.
 ## Exact public `async` surface
 
 `async` declares and owns `Error`, `OperationError`, `CancellationReason`,
-`TaskStatus`, `Task`, and `ResumeToken`. These are not aliases to `uv` types.
+`TaskStatus`, `Task`, `ResumeToken`, `TransferValue`, and `Receiver`. These are not aliases
+to `uv` types.
 Their existing names, constructors, and generic parameters remain available
 through `async`; rebuild compiled consumers after this prerelease owner change.
 `SuspendCancelAction` is the function type `function (): ()`.
+
+`async.TransferValue` is the shared union for independent-state transfers:
+
+```text
+union TransferValue
+  is_nil()
+  is_boolean(boolean)
+  is_integer(integer)
+  is_float(float)
+  is_string(string)
+  is_lua_state(foreign *lua_State)
+  is_function(foreign function (*lua_State): int)
+  is_pointer(foreign *void)
+end
+```
+
+Scalars retain their kinds and strings are copied byte-for-byte between
+collectors. Pointer variants are borrowed and neither retain source objects
+nor synchronize shared memory. `lua.Lua` methods accept and return this union
+owned by async; there is no `lua.TransferValue` alias. Load `titan-ffi` for the
+exact Lua mapping, native pointer lifetime, and worker ownership rules.
+
+### Cross-state receivers
+
+```text
+record Receiver
+function receiver(): Receiver
+function Receiver:handle(): foreign *void
+function send(handle: foreign *void, data: TransferValue)
+function Receiver:wait(): TransferValue
+function Receiver:close()
+```
+
+- Create/root the Receiver in its own state. `receiver()` may bootstrap that
+  state's Runtime outside a Task and never drives the loop. Only the opaque
+  native handle crosses states; do not send a `Receiver` or `uv.async_t` object.
+- `send` is synchronous ordinary Titan code safe across threads. It copies
+  scalar tags/values and complete string bytes (including NUL) into an unbounded
+  native FIFO; pointer variants remain borrowed. Coalesced wakeups preserve all
+  queued messages. Null C-function messages are rejected before enqueue.
+  It allocates/locks and is **not** raw POSIX signal-safe.
+- `wait` needs a Task in the owning Runtime, permits one waiter, and returns
+  FIFO messages. Cancelling a waiter detaches it without dropping messages.
+- `close` synchronously closes send admission, discards pending messages, and
+  wakes the waiter with `"receiver is closed"`. It is idempotent and may run
+  outside a Task. Drive the owning loop to drain native close. Runtime shutdown
+  also disables receivers before the native handle walk closes them.
+- A retained closed Receiver safely rejects late sends. The raw handle itself
+  retains nothing: keep the Receiver rooted and its Lua state open until the
+  handle is withdrawn from every sender and every in-flight send has finished.
+  Only then release its root or close the state. Never dereference this token.
+- For two-phase setup, use a first `Lua:run_async` to retain/export the receiver,
+  then a host Task making a second `run_async` call to drive its remote wait/loop.
+  Synchronous `Lua:run` bootstrap is also supported. Send a
+  cooperative stop message, drain the host worker, close/drain remote handles,
+  withdraw tokens, and close the Lua state. Host cancellation cannot interrupt
+  Lua work; cleanup that must join a worker needs cancellation-insensitive
+  `await_cleanup`, not a cancellable `join` alone.
+
+Use the [complete standalone example](../../../doc/language/standard-library-lua.md#two-phase-receiver-bootstrap)
+for the exact cleanup order. These receivers are distinct from same-state
+bounded `channel<|T|>` values.
 
 The underlying public data is:
 
@@ -398,8 +463,9 @@ error and cancellation precedence before querying a shared reservation.
 
 `async.run_foreign(f, arg)` submits exactly `f(arg)` to libuv's process-wide
 worker pool and suspends the current Task until the after-work callback returns
-to the event-loop thread. Use it only for a blocking call into an external C
-library. The callback is a restricted source `foreign function` or a compatible
+to the event-loop thread. Ordinary applications use it for blocking calls
+into external C libraries; the independent-state Lua adapter is described
+below. The callback is a restricted source `foreign function` or a compatible
 C function pointer—not a Titan closure—and the argument points at native
 storage that remains alive until completion. Load `titan-ffi` when designing
 that boundary.
@@ -411,17 +477,29 @@ embedding C storage in a Titan owner does not make those C fields GC-managed.
 Public `work_t:get_data`/`set_data` use a separate traced value and do not
 replace the native callback payload.
 
-The worker must not inspect Titan or Lua values, enter an ordinary Titan
-function or closure, call a Titan runtime helper or the Lua API, allocate
-through Titan, raise, resume a Task, or touch `TValue`/`Udata`/GC state. A
-restricted source `foreign function` is the deliberate exception: the compiler
-emits it as an exact C callback whose body must itself obey this raw-C boundary.
+The worker must not inspect the calling state's Titan/Lua values, enter its
+ordinary functions or closures, call its runtime helpers or Lua API, allocate
+through its runtime, raise into its frames, resume its Tasks, or touch its
+`TValue`/`Udata`/GC state. A restricted source `foreign function` is emitted as
+an exact C callback whose body must obey this raw-C boundary.
+
+`lua.Lua:run_async` is the independent-state adapter: its worker exclusively
+owns a separate state and may require and execute Titan modules initialized
+there. It never shares host module values or GC objects. Use
+[`titan-ffi`](../titan-ffi/SKILL.md) for `async.TransferValue` copies, borrowed
+pointers, native preload snapshots, and the `run`/`run_async` APIs. Concurrent
+operations or close on a busy wrapper raise; accepted cancellation waits for
+native completion before the stack is restored and the reservation released.
+
 The suspended caller must retain every owner and must not concurrently access
 bytes the worker may read or write. Submission failure raises immediately. Once
 accepted, cancellation does not stop the C call or release its state early:
 completion stays authoritative, then the Task receives its pending
 cancellation. The pool is shared with filesystem and DNS requests, so long or
-numerous jobs can delay unrelated I/O.
+numerous jobs can delay unrelated I/O. A long-lived remote event loop still
+occupies its worker slot. Size `UV_THREADPOOL_SIZE` before first pool use and
+leave capacity for filesystem/DNS/SQLite work needed by those services; new
+Lua states do not get separate pools.
 
 The portable raw-pointer signature is statically callable across compiled Titan
 modules. It does not create a dynamic Lua coercion for raw pointers or foreign
@@ -1173,8 +1251,10 @@ These rules apply when maintaining `titan/uv/`, not when writing an adapter:
   generations, token registries, event-kind dispatch, or duplicate owners to
   approximate this exact capability boundary.
 - Loop callbacks run on the owning Lua main state. C worker/thread callbacks
-  never enter Lua/Titan or recover a GC owner. They access only their typed
-  native function/argument carrier; after-work on the loop thread owns delivery.
+  never enter the calling Lua/Titan state or recover one of its GC owners.
+  They access their typed native function/argument carrier; after-work on the
+  loop thread owns delivery. Independently owned state execution follows the
+  `titan.lua` adapter's isolation protocol.
 - Binding callbacks catch ordinary conversion/user-callback errors, remember
   the first caught error and traceback (preserving `false`; Lua 5.5 normalizes
   a raised `nil` to `"<no error object>"` before catch), stop driving, and return
@@ -1412,8 +1492,8 @@ Before accepting a UV binding change or public adapter, also verify:
 - Cancellation does not drop accepted work early or synchronously enter another
   Task.
 - A worker callback reads only its raw function/argument carrier, never enters
-  Titan/Lua, and leaves owner recovery and Task resumption to after-work on the
-  loop thread.
+  the calling Lua/Titan state, and leaves host-owner recovery and Task resumption
+  to after-work on the loop thread.
 - `uv_is_closing` and `uv_walk` remain authoritative; no duplicate resource
   graph, generation, or close flag appears.
 - Behavioral tests use the public production facade unless a genuinely new
@@ -1618,11 +1698,13 @@ is cancelled.
 function pointer over native storage, retain its complete owner through the
 after-work callback, synchronize all shared bytes, and explain that accepted
 work is not stopped by Task cancellation. The worker calls only `f(arg)` and
-never enters Titan/Lua; the shared pool can delay filesystem/DNS work.
+never enters the calling Lua/Titan state; the shared pool can delay
+filesystem/DNS work. Separately owned state execution is a different protocol,
+provided by `lua.Lua:run_async`, not a way to transfer the proposed closure.
 
-**Fail:** Call Titan/Lua from the worker, treat cancellation as native
-completion, release the argument early, or promise a dedicated background
-thread.
+**Fail:** Call the host's Titan/Lua code from the worker, treat cancellation as
+native completion, release the argument early, or promise a dedicated
+background thread.
 
 ## Source map
 
