@@ -31,6 +31,9 @@ Connection:write(kind:MessageType,data:string)
 Connection:ping(timeout_ms:integer?)
 Connection:shutdown(code:integer?,reason:string?,timeout_ms:integer?)
 Connection:close()
+Connection:to_transfer_payload():string
+Connection.from_transfer_payload(payload:string):Connection
+Connection.discard_transfer_payload(payload:string):integer
 Connection:subprotocol():string?
 Connection:close_status():(integer?,string?)
 ```
@@ -99,6 +102,25 @@ Host/SNI/cert identity. No insecure mode, redirects, proxies, cookies/reconnect
 policy, automatic heartbeat, extensions/compression or HTTP2/3 support exists.
 Valid extension offers are syntactically checked and ignored; clients reject
 unsolicited extension negotiation and all nonzero RSV bits.
+
+## Transferring native sessions
+
+For a server session that must move after the upgrade, configure its HTTP
+listener with `read_ahead(false)` before serving. The accepted WebSocket
+inherits that TCP/TLS policy. Finish application I/O and yield with
+`async.yield()` before synchronous encoding so Windows callbacks can retire;
+all WebSocket and native pending-operation guards still apply.
+
+`to_transfer_payload` detaches the source without sending a Close frame;
+`Connection.from_transfer_payload` adopts the session exactly once in the
+destination Runtime. Raw payloads are manually owned, process-local capabilities,
+not persistent data. A queued string has no native-resource finalizer. After
+failed delivery or when draining an abandoned queue,
+`Connection.discard_transfer_payload(payload)` consumes an unadopted session
+without a Runtime and returns native close status. A close attempt consumes
+ownership even on an error; never adopt or discard those bytes again. See the
+[session transfer contract](../../../doc/language/standard-library-websocket.md#transferring-connections)
+and the [networking handoff guidance](../titan-networking/SKILL.md#native-connection-and-http-handoff).
 
 ## Implementation review
 

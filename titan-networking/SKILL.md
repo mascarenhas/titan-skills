@@ -116,6 +116,7 @@ function listen(host: string, port: integer,
                 backlog: integer?, reuse_port: boolean?): Server
 
 function Connection:read(): string?
+function Connection:read_ahead(enabled: boolean?): boolean
 function Connection:has_pending_input(): boolean
 function Connection:add_input_listener(listener: function (): ()): function (): ()
 function Connection:read_until(delimiter: string,
@@ -169,6 +170,7 @@ function listen(host: string, port: integer,
 function Connection:abort()
 function Connection:handshake()
 function Connection:read(): string?
+function Connection:read_ahead(enabled: boolean?): boolean
 function Connection:has_pending_input(): boolean
 function Connection:add_input_listener(listener: function (): ()): function (): ()
 function Connection:read_until(delimiter: string,
@@ -324,8 +326,29 @@ function listen_tls(host: string, certificate_file: string,
                     idle_timeout: integer?, reuse_port: boolean?): Server
 function Server:idle_timeout(timeout: integer?): integer
 function Server:header_limit(limit: integer?): integer
+function Server:read_ahead(enabled: boolean?): boolean
 function Server:serve()
 function Server:close()
+
+record Exchange
+  const request: Request
+  const response: Response
+end
+function Exchange.new(request_value: Request, response: Response): Exchange
+function Exchange:to_transfer_payload(): string
+function Exchange.from_transfer_payload(payload: string): Exchange
+function Exchange.discard_transfer_payload(payload: string): integer
+function Exchange:serve(handler: Handler, idle_timeout: integer?)
+function Exchange:close()
+
+record UpgradedStream
+function UpgradedStream:read(): string?
+function UpgradedStream:read_until(delimiter: string, chop: boolean?): string?
+function UpgradedStream:write(data: string)
+function UpgradedStream:close()
+function UpgradedStream:to_transfer_payload(): string
+function UpgradedStream.from_transfer_payload(payload: string): UpgradedStream
+function UpgradedStream.discard_transfer_payload(payload: string): integer
 ```
 
 `Header(...)` calls the public generated constructor because Header has only
@@ -623,7 +646,7 @@ size limit for untrusted input rather than collecting without bound.
   every listener must opt in. Kernel connection distribution has no promised
   fairness. Unsupported platforms (including macOS/Windows) raise the native
   `async.OperationError` named `ENOTSUP`; never silently disable the flag.
-- A read watcher starts lazily at the first read and keeps buffering chunks even
+- By default a read watcher starts lazily at the first read and keeps buffering chunks even
   with no waiter. There is no high-water mark. Do not leave a peer producing
   indefinitely while the application does not drain. Buffered chunks are
   returned before a stored read error; after they drain, that error remains
@@ -631,6 +654,12 @@ size limit for untrusted input rather than collecting without bound.
   scratch retains at most 64 KiB per active reader; this bound does not limit
   queued application bytes. A Connection retained after raw Runtime teardown
   can retain that scratch until explicit close, a closed read, or collection.
+- `read_ahead(enabled?)` returns the previous policy (default true); omission
+  only queries it. Set false before the first native read starts. Later setters
+  raise. In demand mode, a positive or terminal callback stops the watcher;
+  another read rearms it only after buffered input is exhausted. Transfer
+  preserves the policy. This controls prefetch, not message boundaries or the
+  kernel socket buffer.
 - A listener likewise retains already accepted clients when no Task is waiting;
   there is no application buffer cap beyond the native listen backlog.
 - There may be at most one suspended reader on a Connection and one suspended
@@ -1073,6 +1102,41 @@ cancellation terminalizes the SSL read and any sibling write, so the peer sees
 `TLS_TRUNCATED_EOF`, not graceful `close_notify`. Use `ssl.abort()` when interruption must initiate transport retirement before
 waiting for an accepted native write; interruption does not emit graceful TLS
 shutdown. Do not reach into private transport fields.
+
+## Native connection and HTTP handoff
+
+Load `titan-thread` for OS workers and cross-thread channels. For portable
+handoff after HTTP classification, call `listener:read_ahead(false)` before
+`serve()`. It configures newly accepted TCP/TLS connections before header reads
+or a TLS handshake; existing connections keep their policy. For direct TLS,
+configure the transport/`ssl.Connection` before its first handshake or I/O;
+`ssl.connect` has already handshaken when it returns.
+
+Yield with `async.yield()` after the last completed read/write and before
+synchronous transfer encoding so its native callback can retire on Windows.
+No application Task waiting does not prove a native overlapped read is idle.
+Pending operations, input observers and transport-specific handoff guards still
+apply; demand reads do not waive them.
+
+A handler's Request and Response move together as `http.Exchange(request,
+response)`. Successful encoding detaches before delivery and invalidates those
+source endpoints. Adopt the payload exactly once in the destination Runtime.
+`exchange:serve(handler, idle_timeout?)` dispatches the current exchange and
+subsequent serial keep-alive requests. The non-negative timeout defaults to
+zero and is **not inherited from the listener**. Pass the desired millisecond
+bound explicitly for later request-line/header acquisition; it never times out
+the already parsed current exchange, handlers (including SSE), bodies, drains
+or response writes. `exchange:close()` finishes the current response and retires
+the transport instead.
+
+Detached payload bytes carry manually owned native resources. A string in a
+channel does not acquire a payload finalizer: own failed delivery and queued
+shutdown cleanup. `Exchange.discard_transfer_payload(payload)` and
+`UpgradedStream.discard_transfer_payload(payload)` close a known unadopted
+payload without a Runtime and return native close status. A close attempt
+consumes ownership even when it reports an error; never adopt, replay or discard
+those bytes again. See the [HTTP handoff contract](../../../doc/language/standard-library-http.md#resource-handoff)
+and the TCP/TLS transfer chapters for their exact idle and same-process rules.
 
 ## Deadlines, cancellation, and cleanup
 
