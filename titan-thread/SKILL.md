@@ -192,6 +192,15 @@ for the complete signature table. The main entry points are:
   or `transfer.TransferValue.from_value` directly; endpoint transfer hooks are
   only active during `Sender:send`, `Sender:try_send`, `thread.spawn*`, and
   `Group:spawn*`.
+- **Native resource moves need explicit ownership**: sending an Exchange,
+  WebSocket or other native owner directly through a generic thread channel is
+  not a deterministic cleanup alternative to a raw payload. Channel discard
+  cleans endpoint references; it does not run arbitrary native-resource disposal
+  after failed enqueue or receiver teardown. Use an explicit manually owned
+  payload protocol. Recover or discard rejected delivery; stop producers and
+  drain/dispose queued payloads before `Receiver:close()` discards their bytes.
+  Follow the [networking handoff contract](../titan-networking/SKILL.md#native-connection-and-http-handoff)
+  and [WebSocket disposal guidance](../titan-websocket/SKILL.md#transferring-native-sessions).
 - **`Thread:cancel` targets the child's root `Task`**: if a worker thread
   spawns background child tasks via `async.run`, use a `defer` in the worker's
   root `Task` to cancel and join those child tasks when the root `Task` unwinds.
