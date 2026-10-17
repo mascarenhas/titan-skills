@@ -51,6 +51,9 @@ Choose the right primitive for the job:
 
 ## Worked example
 
+This function drives `async.loop()` itself. Call it from a Lua host outside a
+Task, or compile a standalone caller with `--no-uv-bootstrap`.
+
 ```titan
 local async = import "async"
 local thread = import "thread"
@@ -62,34 +65,32 @@ end
 
 function compute_squares(): integer
   local result = 0
-  async.run(function ()
+  async.run<|nil, value|>(function (): nil
     local req_tx, req_rx = thread.channel<|WorkRequest|>(4)
     local rep_tx, rep_rx = thread.channel<|integer|>(4)
 
     local pool = thread.group(2, true)
     for _ = 1, 2 do
       pool:spawn_one(function (rx: thread.Receiver<|WorkRequest|>)
-        for job in rx:incoming() do
+        for _, job in rx:incoming() do
           job.reply:send(job.value * job.value)
         end
       end, req_rx)
     end
-    -- Drop parent's receiver handle so workers own the remaining references.
-    req_rx = nil as thread.Receiver<|WorkRequest|>
-
     for i = 1, 4 do
       req_tx:send(WorkRequest(i, rep_tx))
     end
     req_tx:close()
-    rep_tx:close()
 
     local errs = pool:wait()
     if #errs > 0 then
       errs[1]:raise()
     end
-    for square in rep_rx:incoming() do
+    rep_tx:close()
+    for _, square in rep_rx:incoming() do
       result = result + square
     end
+    return nil
   end)
   async.loop()
   return result
@@ -153,8 +154,10 @@ for the complete signature table. The main entry points are:
   message is immediately available, or `(false, nil)` if empty or closed and
   drained.
 - **`Receiver:incoming()`** returns a generic-`for` iterator triple
-  (`for msg in rx:incoming() do ... end`) that yields messages until the
-  channel is closed and drained.
+  (`for _, msg? in rx:incoming() do ... end`) that yields `(true, message)`
+  until the channel is closed and drained, then `(nil, nil)`. The first result
+  is a continuation marker, so nil and false messages remain data. Use `msg?`
+  when nil is allowed; an ordinary binding intentionally forces non-nil.
 - **`Receiver:close()`** closes the channel from the consumer side, discards
   any unread buffered messages, and wakes blocked senders with
   `"channel is closed"`.
