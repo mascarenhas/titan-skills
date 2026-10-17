@@ -617,6 +617,11 @@ function ChannelWriter:close()
 `ChannelReader`/`ChannelWriter` fields are local; their generated constructors
 are **not public**. Use the factory.
 
+For cross-thread message passing (`thread.channel`, `Sender`, `Receiver`),
+standalone OS worker threads (`thread.spawn*`, `Thread`), and bounded thread
+groups (`thread.group`, `Group`), load the peer
+[`titan-thread` skill](../titan-thread/SKILL.md).
+
 Evidence: `titan/async.titan` and `doc/language/async-io.md`.
 
 ## Start and drive Tasks correctly

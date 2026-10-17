@@ -30,6 +30,9 @@ work crosses one of these boundaries:
   ownership.
 - **`titan-async`** — Tasks, cancellation, Runtime ownership, timers, libuv
   callbacks, callback-to-Task resumption, and async standard-library internals.
+- **[`titan-thread`](../titan-thread/SKILL.md)** — OS threads (`titan.thread`),
+  bounded cross-thread MPMC channels (`Sender<|T|>`, `Receiver<|T|>`), and
+  structured thread groups (`thread.Group`).
 - **`titan-networking`** — `net`, `ssl`, `url`, and `http` APIs and
   protocols.
 - **[`titan-websocket`](../titan-websocket/SKILL.md)** — WebSocket clients, HTTP upgrades,
