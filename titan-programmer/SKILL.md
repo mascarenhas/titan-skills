@@ -31,8 +31,9 @@ work crosses one of these boundaries:
 - **`titan-async`** — Tasks, cancellation, Runtime ownership, timers, libuv
   callbacks, callback-to-Task resumption, and async standard-library internals.
 - **[`titan-thread`](../titan-thread/SKILL.md)** — OS threads (`titan.thread`),
-  bounded cross-thread MPMC channels (`Sender<|T|>`, `Receiver<|T|>`), and
-  structured thread groups (`thread.Group`).
+  bounded cross-thread MPMC channels (`Sender<|T|>`, `Receiver<|T|>`),
+  structured thread groups (`thread.Group`), and packet-scoped endpoint
+  transfer (`titan.transfer`).
 - **`titan-networking`** — `net`, `ssl`, `url`, and `http` APIs and
   protocols.
 - **[`titan-websocket`](../titan-websocket/SKILL.md)** — WebSocket clients, HTTP upgrades,
@@ -244,11 +245,19 @@ literal or eligible integer macro counts can infer fixed automatic C arrays at
 a direct local sink. An explicit owned type requests GC-owned storage. Written
 sized C array annotations are removed; there is no size threshold.
 
-A public compiled interface may recursively contain portable C primitives,
-pointers, structural callback pointers, and eligible owners. Header typedefs,
-aggregates, arrays, enums, and graphs containing them remain source-local.
-Load **`titan-ffi`** for exact export, coercion, lifetime, callback, and allocation
-rules.
+A public compiled interface may contain an exportable C type graph, including
+portable primitives/pointers/callbacks/eligible owners or named header-dependent
+types. Header-dependent graphs require the original compatible C declarations
+in every consumer; an ordinary Titan import does not inherit those headers.
+Enums, unsupported aggregates, and other nonexportable forms stay private.
+`foreign` calls, source `foreign function` bodies, and raw-pointer transfer are
+an explicit unsafe boundary, comparable to Rust
+`unsafe`: ordinary Titan without them is expected to be well-behaved, while the
+foreign code and its native callers uphold their own pointer, lifetime,
+ownership, ABI, and threading contracts. Titan does not contain arbitrary native
+behavior or validate raw-pointer use.
+
+Load **`titan-ffi`** for exact export, coercion, lifetime, and allocation rules.
 
 ## Automatic conversions: use the typed context
 
@@ -1144,7 +1153,7 @@ cannot be re-exported. Circular imports are compile-time errors.
 Canonical short imports are:
 
 ```text
-coroutine uv async timer io fs net ssl url http websocket os peg string test lua gc math iteration reflect sqlite3 json
+coroutine uv async timer io fs path net ssl url http websocket os peg string test lua gc math iteration reflect sqlite3 json protobuf transfer thread
 ```
 
 They mean the corresponding `titan.*` logical modules.
@@ -1259,10 +1268,10 @@ Native bootstrap code can use a newly generated logical module's
 initialization. Its immutable ABI string belongs to the provider; do not free
 it or unload the image while using it. Call it with its C signature, never
 through `package.loadlib` or `titan._loadlib`. The Windows loader requires this
-query and checks it before calling Lua metadata entries or the initializer;
-existing Unix ABI-2 providers may omit it. The existing Lua-callable `_abi`
-entry, Unix loading behavior, compiled-code ABI `2`, and language-server API
-`1` remain unchanged.
+query and checks it before calling Lua metadata entries or the initializer.
+Existing Unix ABI-2 providers may omit the native query; Unix loading continues
+to use the Lua-callable `_abi` entry. Compiled-code ABI remains `2` and
+language-server API remains `1`; all other existing version numbers stay unchanged.
 
 ## Errors, `catch`, and `defer`
 
@@ -1893,6 +1902,17 @@ to the language rules:
   One-shot callbacks settle their exact await capability, while explicit
   `Task:resume(token)` may wake only the matching `async.suspend(token, ...)`;
   do not paper over an early-resume bug with consumer-side generations.
+- **Keep packet disposal C-only and adopt resources only after finalizer
+  setup.** `transfer.discard_message` and the native retain/release callbacks
+  supplied to `transfer.attach_resource` are C-ABI `foreign function` entries
+  whose complete cleanup chain never enters Lua, runs `from_transfer_payload`
+  decoders, loads modules, or requires a Runtime. `attach_resource` and
+  `claim_resource` themselves are ordinary stateful Titan APIs, authorized only
+  by the exact top encode/decode scope in the current Lua execution. Never
+  raw-`ffi.free` an `encode_message` packet or assume packet discard cleans up
+  manual HTTP/TLS/WebSocket handoff byte strings. In `from_transfer_payload`,
+  construct the inert wrapper (`native = nil`) and register `gc.finalizable`
+  *before* claiming and assigning the native pointer.
 
 The current filesystem watcher demonstrates the preferred local-method and
 dense-drain shape:
@@ -2017,9 +2037,10 @@ runs. Combination and Codecov uploads stay external. See
   source-versus-binary visibility. Ordinary imports stay public-only even when
   source wins; private collaboration requires a terminal `.titan` marker and a
   real source module.
-- For a public C type, prove the complete graph uses only contextual portable
-  primitives/pointers/functions/owners; keep every imported/header-dependent C
-  type private.
+- For a public C type, prove the complete graph is exportable. Prefer a
+  header-free portable boundary when appropriate; otherwise require every
+  consumer to import the original compatible header declarations. Preserve
+  exact C types rather than silently normalizing native typedefs.
 - Recheck const-local RHS requirements, nil-bearing mutable omissions, owner
   initializer authority, shallow const fields/Interface snapshots, and exact
   mutable versus const Array tags. Treat mutable-to-const copy elision as valid
