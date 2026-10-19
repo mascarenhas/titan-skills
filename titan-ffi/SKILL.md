@@ -1,6 +1,6 @@
 ---
 name: titan-ffi
-description: Use Titan's C FFI, source-defined C callbacks, Lua interoperability, the titan.lua escape hatch, or the trusted Lua C API boundary. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, and lifetimes. Do not invoke merely because an implementation is C-backed when no foreign or Lua/C boundary is touched.
+description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, or the trusted Lua C API boundary. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, and lifetimes. Do not invoke merely because an implementation is C-backed when no foreign or Lua/C boundary is touched.
 ---
 
 # Titan FFI and Lua escape hatches
@@ -22,6 +22,16 @@ The two escape hatches in this skill are equally powerful:
 * `titan.lua` can compile and execute arbitrary Lua or load Lua/C/Titan modules
   in the current or an independently owned Lua state. It can bypass most
   static structure just as surely as the FFI can.
+
+Foreign code is an explicit unsafe boundary, comparable to Rust `unsafe`. Pure
+Titan with no `foreign`/FFI is expected to be well-behaved; foreign calls,
+source `foreign function` bodies, and raw-pointer transfer are not. The foreign
+code and every native caller uphold the pointer, lifetime,
+ownership, ABI, and threading contracts of the APIs involved. Titan neither
+contains arbitrary native behavior nor validates that a raw pointer is usable,
+and this skill does not ask for defensive machinery against a caller that
+violates those contracts. Correct lowering of valid Titan and correct public API
+behavior for ordinary consumers remain in scope.
 
 Use both **sparingly**. Keep each escape hatch in one small owner module, convert
 immediately to ordinary Titan types, and expose a typed Titan API. Prefer an
@@ -56,13 +66,12 @@ function-like macro, and the adjacent comment must say why it exists.
 
 1. A foreign namespace is compile-time-only. It cannot be stored, passed,
    returned, or exported.
-2. Header-dependent C types are nonexportable implementation types. Public
-   interfaces may use Titan's contextual C primitives and recursively portable
-   pointer, foreign-function-pointer, and owned graphs built from them. The
-   intrinsic opaque `lua_State` is also allowed as a pointer pointee, including
-   in callback signatures; its built-in identity survives metadata decoding.
-   Other imported typedefs remain nonexportable even when they resolve to a
-   portable primitive.
+2. Public C interfaces require a completely exportable type graph. Contextual
+   primitives and portable pointer/function/eligible-owner graphs need no
+   original header; the intrinsic opaque `lua_State` is a portable pointee.
+   Named header-dependent graphs are also supported when every consumer makes
+   the original compatible declarations visible. Ordinary Titan imports carry
+   identity/layout metadata, not C headers or substitute definitions.
    A C function pointer boxes as lightuserdata through Titan's toolchain
    portability cast. Portable function-pointer types can occupy module,
    record, union, and Option slots and return through Lua/strict stack entries.
@@ -244,26 +253,21 @@ Imported and contextual C types remain distinct C types:
 Maps are errors. A C `union` is unrelated to a Titan `union`; Titan
 records/unions are nominal GC userdata, not C aggregate layouts.
 
-Header-dependent C types can be used in local functions, locals, local aliases,
-and eligible private state, but cannot be serialized through a public
-interface. A public type may recursively contain only contextual C primitives,
-pointers or const pointers to portable C types, structural `foreign function(...): ...` pointers whose parameters/results are portable, and `owned` forms over
-portable allocatable payloads. Imported typedefs, aggregates, arrays, enums,
-and imported function-pointer typedefs remain excluded from public compiled
-interfaces even when their C definition resolves to a portable primitive or
-function signature.
-This is wrong:
+Public graphs may contain contextual C primitives, pointers, structural
+callback pointers, eligible owners, and named header typedefs, structs, unions,
+or fixed arrays when every component is exportable. Embedded aggregates must
+be complete, have no flexible array member, and contain no GC-bearing storage.
+Enum identities, unnamed aggregates without a typedef name, and unsupported C
+forms stay private.
 
-```text
-foreign import "widget.h"
+For header-dependent exports, every consumer needs the original compatible
+declarations, normally through its own `foreign import`. A same-spelled type
+from another header is not the same declaration identity. Ordinary compiled
+imports do not inherit headers; explicit source imports retain their existing
+C-header inheritance. Preserve exact native typedefs unless deliberately
+designing a different portable boundary.
 
--- WRONG: a public compiled-module signature leaks a header-local C type.
-function raw_widget(): foreign *widget
-  return ffi.widget_current()
-end
-```
-
-Wrap it behind Titan types instead:
+For a header-free public wrapper, keep the native details behind Titan types:
 
 ```c
 /* widget.h */
@@ -420,8 +424,10 @@ end
 ```
 
 A C function-pointer value is callable with ordinary parentheses, uses strict C
-arity, and raises if it is `NULL`. It is still not a Titan function value and
-cannot cross through `value`. Function pointers do not support named calls.
+arity, and raises if it is `NULL`. It is still not a Titan function value; it
+boxes into `value` as lightuserdata without preserving its C signature, so
+recovery from `value` requires an explicit unsafe `as` cast. Function pointers
+do not support named calls.
 
 ## Coercions and casts: use the destination first
 
@@ -753,8 +759,8 @@ direct functions, incomplete aggregates, Titan types, nested owners, and C
 array-typedef payloads. `owned T[4]` is not a spelling; use `owned T[]` and an
 allocation count. An owner may be used in aliases, signatures, eligible
 record/union slots, options, Titan Arrays/Maps, and other boxed structures. It
-may cross a public interface only when its complete payload graph is portable;
-an owner over an imported/header-dependent type remains private.
+may cross a public interface when its complete payload graph is exportable and
+every consumer supplies any required original compatible C declarations.
 
 An owner is automatically rooted like other Titan GC values. Passing it to a
 compatible pointer gives C a borrowed payload address while the owner remains
@@ -982,6 +988,78 @@ Titan closures cannot be passed to C does not prohibit those public callbacks.
 UV callbacks that execute on foreign threads remain explicitly C-only and may
 not enter Lua/Titan. See the UV manual and the `titan-async` cartridge.
 
+### Direct UV native synchronization and external-wake entries
+
+`titan.uv` exports C-ABI `foreign function` entries directly through ordinary
+`import "uv"`, usable from both ordinary Titan functions and restricted
+`foreign function` bodies. The former `*_function()` pointer-getter wrappers on
+synchronization records (`mutex_t.lock_function`, `once_function`, and peers)
+are removed; reference or call the direct public foreign entries instead:
+
+* **Mutexes**: `uv.native_mutex_lock(native: *void)`,
+  `uv.native_mutex_trylock(native: *void): int`,
+  `uv.native_mutex_unlock(native: *void)`, and
+  `uv.native_mutex_destroy(native: *void)`.
+* **Reader-writer locks**: `uv.native_rwlock_rdlock`,
+  `uv.native_rwlock_tryrdlock`, `uv.native_rwlock_rdunlock`,
+  `uv.native_rwlock_wrlock`, `uv.native_rwlock_trywrlock`, and
+  `uv.native_rwlock_wrunlock`.
+* **Semaphores, conditions, and barriers**: `uv.native_sem_post`,
+  `uv.native_sem_wait`, `uv.native_sem_trywait`, `uv.native_cond_signal`,
+  `uv.native_cond_broadcast`, `uv.native_cond_wait(cond: *void, mutex: *void)`,
+  `uv.native_cond_timedwait(cond: *void, mutex: *void, timeout_ns: unsigned long long): int`
+  (relative nanoseconds; check predicates in a `while` loop for spurious wakes),
+  and `uv.native_barrier_wait(native: *void): int` (returns a positive
+  serial-thread indicator for one participant and `0` for all others).
+* **Thread-local keys and once guards**: `uv.native_key_get(key: *void): *void`,
+  `uv.native_key_set(key: *void, value: *void)`, and
+  `uv.native_once(guard: *void, callback: function(): void)`.
+* **Cross-thread async and external wakes**: `uv.async_send_native(handle: *void): int`
+  (plus `uv.async_send_function(): foreign function (*void): int` when a C
+  carrier stores a function pointer), `uv.native_external_wake_retain(target: *void)`,
+  `uv.native_external_wake_release(target: *void)`, and
+  `uv.native_external_wake_notify(target: *void): int`,
+  `uv.native_external_wake_is_notified(target: *void): int` (nonconsuming latch
+  query requiring a live borrow/reference), and
+  `uv.native_external_wake_unregister(target: *void): int` (owning-loop-only;
+  zero consumes the registration, never independent producer references).
+
+For a Task terminal barrier, use the
+[`prepare_native_retirement` contract](../titan-async/SKILL.md#reusable-external-prepared-waits-and-uvexternal_wake_t):
+all register/unregister/retire callbacks are nonraising C-only entries. The
+traced keepalive must survive successful native retirement; it does not replace
+independent native context/node/target references through state teardown.
+Callback readiness and status conventions are part of that API, not a generic
+permission to call Lua or block-join an unfinished worker.
+
+Preserve the exact lifetime and blocking distinctions for UV synchronization:
+
+1. **Borrowed GC owner vs caller-owned heap mutex**: `uv.mutex_t.new()` (and
+   `rwlock_t`, `sem_t`, `cond_t`, `barrier_t`, `key_t`) allocates GC-backed
+   nominal storage with explicit `:init()`/`:create()` and
+   `:destroy()`/`:delete()` state machines and **no** automatic GC destructor.
+   `:borrow()` returns a `foreign *void` valid only while the Titan owner stays
+   rooted and live. By contrast, `uv.mutex_t.create_native(): foreign *void`
+   allocates and initializes a process-heap mutex outside any `lua_State` GC.
+   `native_mutex_lock`, `native_mutex_trylock`, and `native_mutex_unlock` accept
+   either `mutex_t:borrow()` or `mutex_t.create_native()` pointers, whereas
+   `uv.native_mutex_destroy` both destroys and `free`s the heap block
+   (NULL-safe) and is valid **only** for `mutex_t.create_native()` output after
+   all native users are quiescent—**never** pass `mutex_t:borrow()` storage to
+   `native_mutex_destroy`.
+2. **OS-thread blocking**: mutex, rwlock, semaphore, condition-variable, and
+   barrier waits block the calling OS thread, not just the current `async.Task`.
+   Never hold a blocking lock across an `async` suspension point or wait on a
+   lock that a sibling Task on the same loop thread must release; use
+   `thread.channel` for cooperative cross-thread Task coordination (there is no
+   `thread.Mutex`).
+3. **`once_t` and `key_t` semantics**: `uv.once_t.new()` initializes its guard
+   in final stable storage (`UV_ONCE_INIT`), has **no** `destroy` or reset
+   operation, and requires a C-only `foreign function(): void` callback.
+   `uv.key_t` stores a borrowed raw pointer per **OS thread** (not
+   `async.Task`-local state and not an ownership container); callers must keep
+   pointees alive until overwritten, thread exit, or `key_delete`.
+
 # Source-defined foreign functions and callbacks
 
 ## A restricted C entry, not a Titan closure adapter
@@ -1032,12 +1110,34 @@ local callback: foreign Compare = compare_items
 Therefore `foreign *(function(...): ...)` means a pointer to a function pointer, not
 another spelling for one callback.
 
-A foreign definition is source-private. Its own module and a **direct importer
-whose import spelling ends in `.titan`** may name it. It is absent from
-`.so`/`.a` type metadata, Lua module members, ordinary imports, transitive
-source imports, and binary imports. Physical co-residence in one provider does
-not make it public. Do not design an installed API around a consumer reaching
-another module's foreign function.
+An unadorned `foreign function` declaration is **public**. Its signature must
+use an exportable graph; invalid exports are rejected, not made private.
+A header-free boundary can use contextual
+primitives and portable pointers/callbacks; a header-dependent boundary instead
+requires the original compatible declarations in the consumer. Keep exact
+native types: `size_t` is not generally interchangeable with `unsigned long long`.
+The transfer loader deliberately chooses the latter for its portable boundary;
+that is not a rule for rewriting other public signatures. Regular
+compiled imports (`import "mod"`) expose public foreign functions through the
+module alias to both ordinary Titan functions and other `foreign function`
+bodies, resolving a stable process-lifetime C function pointer for that consumer
+image with no implicit `L` (`lua_State *`), module userdata, or forwarding
+wrapper. Because runtime-loaded Titan DSOs stay mapped for the process lifetime,
+public and local `foreign function` callbacks that touch only explicit
+native/heap data (such as `transfer.discard_message`, `transfer.copy_message`,
+`thread.channel_retain_sender_native` / `channel_release_sender_native` /
+`channel_retain_receiver_native` / `channel_release_receiver_native`) remain
+callable after the originating `lua_State` closes while their native owner and
+thread contracts hold. Public UV native entries retain their individual
+thread/lifetime restrictions: for example, external-wake unregister is
+owning-loop-only, never a producer-thread or post-loop cleanup substitute.
+
+A `local foreign function` is source-private: only its own module and a
+**direct importer whose import spelling ends in `.titan`** may name it. It is
+absent from `.so`/`.a`/`.dll` type metadata, ordinary imports, transitive source
+imports, and binary imports; physical co-residence in one provider does not make
+it public. Neither public nor local foreign functions appear as Lua module
+members through `require`.
 
 Each source module owns a compiler-generated `.ffi.h` for the ordered C
 environment, following the selected output directory. A module defining foreign functions also owns `.titan.h`
@@ -1056,12 +1156,12 @@ C `void`.
 
 The body is a deliberately closed raw-C subset. It may use:
 
-* parameters and direct-C locals; a mutable local with an explicit nil-bearing
-  pointer type may omit its initializer, which supplies `NULL`; aggregates,
-  scalars, and const locals require an initializer;
+* parameters and direct-C locals; every local in a restricted foreign function
+  requires an initializer expression list;
 * imported C namespaces and their functions, values, fields, types, size and
   alignment;
-* other foreign functions in the module or through an explicit `.titan`
+* other foreign functions in the module, public foreign functions through a
+  regular `import`, or local foreign functions through an explicit `.titan`
   source import;
 * C calls, casts, C-mode operators, field/index access, assignment;
 * `do`, `if`/`elseif`/`else`, `while`, `repeat`, numeric `for`, `break`, and
@@ -1276,8 +1376,10 @@ function dofile(filename: string, ...: value): (...: value)
 function require(modname: string): value
 ```
 
-There is no compiler `lua` short alias, no Lua-module `import`, and no special
-replacement of Lua's global `load`, `dofile`, or `require`.
+`import "lua"` resolves to `titan.lua` through the standard library's top-level
+module shorthand, while in raw Lua code it is `require "titan.lua"`; there is
+no Lua-module `import` and no special replacement of Lua's global `load`,
+`dofile`, or `require`.
 
 ### `load`
 
@@ -1392,16 +1494,22 @@ and consumer compatibility checks precede initialization; globals, metatables,
 and bindings remain per-state. Copied dependencies need no manual require order
 or filesystem paths.
 
-`async.TransferValue` has `is_nil`, `is_boolean`, `is_integer`, `is_float`,
-`is_string`, `is_lua_state`, `is_function`, and `is_pointer` variants. Strings
-are copied byte-for-byte into the destination collector. State/pointer
-arguments become lightuserdata; returned threads become borrowed
-`lua_State *`, full userdata becomes its borrowed payload pointer, and
+`async.TransferValue` (`transfer.TransferValue`) has `is_nil`, `is_boolean`,
+`is_integer`, `is_float`, `is_string`, `is_lua_state`, `is_function`,
+`is_pointer`, `is_record`, `is_union`, `is_closure`, and `is_record_payload`
+variants. Strings and serialized nominal/closure bytes are copied byte-for-byte
+into the destination collector. State/pointer arguments become lightuserdata;
+returned threads become borrowed `lua_State *`, full userdata (outside
+recognized Titan nominals/closures) becomes its borrowed payload pointer, and
 zero-upvalue C functions become native function pointers. Tables, Lua
-functions, and C closures with upvalues cannot be returned. Pointer variants
-neither root the origin nor synchronize mutable data; retain a source-state
-root for a returned thread/userdata and keep native code loaded. Null C
-function arguments are rejected.
+functions, and non-Titan C closures with upvalues cannot be transferred.
+Pointer variants neither root the origin nor synchronize mutable data; retain a
+source-state root for a returned thread/userdata and keep native code loaded.
+Null C function arguments are rejected. `lua.Lua:run` and `Lua:run_async` use a
+separate `titan_lua_value` carrier that does **not** open a packet resource
+scope, so `thread.Sender` and `thread.Receiver` endpoints cannot be passed
+directly as `Lua:run*` arguments or results (pass a `PacketReceiver:handle()`
+or use `thread.spawn*` instead).
 
 `run` blocks its caller; `run_async` uses `async.run_foreign` inside a Task
 while exclusively owning the independent state. That state may require and
@@ -1420,19 +1528,79 @@ normal 200-value limit. Even ignored returned values must be transferable.
 For the exact API and protected stack/packet ledger, read
 `doc/language/standard-library-lua.md` and `doc/implementation/lua-library.md`.
 
-`async.Receiver` adds a native FIFO for `async.TransferValue` messages. Create
-and retain it in the destination state; `Receiver:handle()` exports only an
-opaque borrowed `foreign *void`. That handle is accepted by `async.send` in
-another state's ordinary Titan code. It is not a `uv.async_t`, a Titan record
-address to cast back, or a GC root. Strings are copied, including embedded NUL;
-pointer payloads still borrow their referents and need separate lifetime and
-synchronization. `send` allocates and locks, so it is not a raw POSIX signal
-handler operation.
+`async.Receiver` (`mode = 0`) and `async.PacketReceiver` (`mode = 1`) are
+**lossy, coalescing latest-value** cross-state notification slots (never FIFO
+queues; use `thread.channel<|T|>` for lossless bounded FIFO streams). Create
+and retain the receiver in the destination state; `Receiver:handle()` and
+`PacketReceiver:handle()` export only an opaque borrowed `foreign *void` that is
+not a `uv.async_t`, a Titan record address to cast back, or a GC root.
 
-Receiver construction can run outside a destination-state Task during a
-`Lua:run` or first `Lua:run_async` bootstrap; `Receiver:wait` needs a Task in the
-destination Runtime. Keep the
-Receiver rooted there through every send. Close disables admission immediately,
+* `async.send(handle, data)` copies an attachment-free `async.TransferValue`
+  into a native packet (`transfer.copy_message`) and atomically replaces any
+  unread slot value, disposing the replaced packet via
+  `transfer.discard_message`.
+* `async.send_packet(handle, packet)` moves a single-owner `transfer.Packet`
+  created by `transfer.Packet.from_value`, whose encode scope authorizes
+  endpoint attachments. It clears the prepared source holder in the same
+  native interval as publication. `PacketReceiver:wait_packet()` prepares and
+  finalizes its destination Packet before the native take; the packet stays
+  slot-owned until that take, with no ordinary adoption entry after it.
+  Pre-admission failures (`NULL` handle, consumed/closed
+  packet, closed receiver, or `"receiver handle mode mismatch"`) leave `packet`
+  owned by the caller; once atomic slot exchange commits, the source `Packet` is
+  consumed even if the subsequent `uv_async_send` wake fails. Never pass an
+  `encode_message` pointer to raw `ffi.free`—use native `discard_message`,
+  protected slot-based decode, or adoption into a prepared empty Packet.
+  Packet aliases share consumed state. `borrow_message()` and `borrow_owner()`
+  are non-rooting borrows, not independent owners; do not discard, decode, or
+  adopt a raw message borrow while its Packet still owns it. `take_message()`
+  transfers one raw owner to exactly one consumer. Ordinary Packet methods can
+  fail in their generated entry before a body guard, so do not infer entry-OOM
+  safety or allocation freedom from a short body. Use the
+  [prepared-owner rules](../titan-async/SKILL.md#cross-state-receivers-and-owned-packets).
+
+For audited native packet integrations, use these entries and error helper:
+
+```text
+foreign function decode_message(state: *lua_State, slot: *(*void)): int
+foreign function adopt_into(raw_owner: *void, slot: *(*void)): int
+function raise_message_error(status: integer, failure: value)
+```
+
+Prepare and root an empty `Packet.new()` and borrow its holder before acquiring
+raw ownership. Direct `adopt_into(owner, slot)` then stores a real caller-owned
+`void *` slot into it and clears that slot on status `0`; rejection (`-2` NULL
+owner/slot, `-4` occupied holder, `-5` NULL source) leaves both unchanged.
+This pure native move never allocates, throws, enters Lua, or changes its stack.
+Keep the raw cleanup guard on rejection; never adopt a still-owned Packet borrow.
+
+`decode_message(state, slot)` is different: it requires a live Lua state,
+consumes/clears a valid caller-owned slot on all outcomes, and returns normally.
+Status `0` leaves one semantic value, positive Lua status one error, and negative
+status no new value (`-2` invalid slot; `-3` stack reservation failure).
+
+The call must be direct at the actual guarded pointer local. Its normal return
+commits Titan's mutable-address spill before any raising ordinary operation;
+longjmp after changing only the spill would leave the caller owning stale
+storage. Never pass the raw slot through an ordinary helper whose generated
+entry can fail first. In the same native-call-owning function, copy a positive
+status's top error into a traced `value` before entering any ordinary helper:
+its preamble can change the stack top. Use nil for negative status, preserve
+stack restoration, and only then call
+`raise_message_error(status, rooted_error_or_nil)`. That ordinary helper takes
+no raw owner. Protected stateful decode is not a no-Lua release callback;
+`adopt_into` is a native move into a prepared empty holder, not a decoder or
+disposer. Keep the Packet rooted for the full holder borrow; ordinary wrapper
+preparation happens before raw acquisition or native ownership movement.
+
+Receiver and PacketReceiver construction can run outside a destination-state
+Task during a `Lua:run` or first `Lua:run_async` bootstrap; `Receiver:wait` and
+`PacketReceiver:wait_packet` need a Task in the destination Runtime. Keep the
+owner rooted there through every send. Close disables admission immediately and
+disposes any unread packet via `transfer.discard_message` (which releases
+unclaimed `thread` endpoint attachments in C without entering Lua or running
+`from_transfer_payload` decoders; manual HTTP/TLS/WebSocket handoff byte strings
+still require explicit `discard_transfer_payload`),
 but a retained closed owner must remain alive until all senders withdraw its
 handle and finish any in-flight calls. Drive the destination loop to drain
 native close, then release roots and call `Lua:close`. A raw handle surviving
@@ -1660,16 +1828,26 @@ authoritative state query, and never call a native close twice.
 
 ## Prefer these rewrites
 
-### Public raw C type -> private native state plus public Titan value
+### Public raw C type -> deliberate boundary or private native state
 
-**Wrong:** export `foreign *Handle`, `foreign size_t`, or `owned *Context`; each graph
-depends on a foreign header namespace.
+**Wrong:** publish an imported `foreign *Handle`, `foreign size_t`, or
+`owned *Context` graph by accident, without deciding which header each consumer
+must supply and without a typed conversion at the owner module boundary; or
+declare a header-dependent graph invalid merely because its consumers need the
+original header.
 
-**Right:** keep it in a local function/private eligible record, expose a
-nominal Titan record/Interface/option, and convert counts/status/errors at the
-owner module boundary. A deliberately public `foreign *void`, `foreign *int`, structural
-`foreign function(*void): void`, or portable owner is different: it is legal precisely
-because its entire C type graph is contextual and serializable.
+**Right:** prefer a header-free portable boundary — contextual primitives,
+portable pointers/callbacks, eligible owners, or a nominal Titan
+record/Interface/option — and convert counts/status/errors at the owner module
+boundary. A deliberately public `foreign *void`, `foreign *int`, structural
+`foreign function(*void): void`, or portable owner is legal precisely because its
+entire C type graph is contextual and serializable. A header-dependent
+pointer/typedef/struct/union/array graph is equally legal when every consumer
+makes the original compatible declarations visible through its own `foreign
+import`; same-spelled types from another header are different declarations.
+Enum identities, unnamed aggregates without a typedef name, and other
+nonexportable forms stay private. Keep exact native types instead of normalizing
+them.
 
 ### `value` everywhere -> one dynamic edge
 
@@ -1778,9 +1956,8 @@ feature. Review loaded code with the same seriousness as native C.
 Do not infer support from similar C/Lua syntax. The current boundary does **not**
 support:
 
-* header-dependent/imported C types in an exported/serialized Titan type tree
-  (the documented portable contextual primitive/pointer/function/owner closure
-  is supported);
+* nonexportable C graphs, such as enum identities, flexible-array aggregates,
+  or unnamed aggregates without a typedef name, in public interfaces;
 * C module namespaces as first-class values;
 * pointers to non-FFI Titan types;
 * arbitrary compiler-extension headers outside Titan's C99 parser subset;
@@ -1838,9 +2015,9 @@ For an FFI change:
 2. Order foreign directives for the intended C preprocessing environment;
    `ffi` itself is available throughout the module. Put ordinary Titan imports
    and prerequisite module variables before initializers that use them.
-3. Sketch the public Titan API first. For each public C type, prove recursively
-   that its graph is built only from contextual primitives and portable
-   pointer/function/owner constructors; keep every imported type private.
+3. Sketch the public Titan API first. For each public C type, prove its complete
+   graph is exportable and identify required original compatible headers in
+   every consumer. Do not silently replace exact native typedefs.
 4. Classify every C object as automatic, borrowed pointer, explicit owner, or
    externally allocated resource. Mark exactly where each lifetime ends.
 5. Mark every conversion and operator as Titan, C, strict `value` projection,
@@ -1940,6 +2117,13 @@ searching by analogy.
 * `titan/fs.titan`, `titan/uv/*.titan`, `titan/http/native.titan`, and
   `titan/coroutine.titan` — private source foreign callbacks; study only with
   their ownership/runtime docs, not as generic application templates.
+* `titan/transfer.titan` and `titan/thread/*.titan` — C-ABI `foreign function`
+  entries such as `discard_message`, `copy_message`, `adopt_into`, and
+  `channel_retain_*` / `channel_release_*` operate only on explicit native data
+  and do not require Lua or a Runtime. In contrast, `transfer_load_module` and
+  `decode_message` use a live Lua state through protected stack/registry
+  operations; a foreign declaration alone never proves state-independent
+  cleanup.
 
 ## Focused specs
 
@@ -2097,27 +2281,58 @@ not prompt cleanup.
 
 ## Eval 10 — Unsupported API honesty
 
-**Prompt:** Ask whether Titan supports arbitrary Lua C API calls, C function
-pointer values in `value`, ordinary closures as callbacks, adopted malloc
+**Prompt:** Ask whether Titan supports arbitrary Lua C API calls, signature-checked
+C function-pointer values in `value`, ordinary closures as callbacks, adopted malloc
 pointers, function-like macros, and either portable contextual or imported C
 types in exported interfaces.
 
 **Pass criteria:** clearly says the first five are unsupported as general
-features, allows the documented recursive portable C closure in public
-interfaces, and rejects imported/header-dependent C types there. Distinguishes
-the audited standard-library Lua C API exception, restricted source foreign
-functions, explicitly unsafe lightuserdata assertion, and narrow hand-written
-shim option. It does not invent wrappers, tags, or ownership machinery and
-directs a design question to the maintainer when the boundary cannot be
-reshaped.
+features (a C function pointer boxed in `value` is untyped lightuserdata and
+requires an explicit unsafe `as` cast to recover); allows portable contextual
+graphs and exportable header-dependent graphs, requiring original compatible
+declarations in every consumer for the latter. Distinguishes nonexportable
+enums/flexible-array/unnamed aggregates, the audited standard-library Lua C API
+exception, restricted source foreign functions, explicitly unsafe lightuserdata
+assertion, and narrow shim option.
+It does not invent wrappers, tags, or ownership machinery around a missing
+feature.
+
+## Eval 11 — Direct UV native sync entries, heap mutexes, and no-Lua foreign release callbacks
+
+**Prompt:** A cross-thread C carrier needs a mutex and a release callback that
+may run after the creating `lua_State` closes. A draft calls
+`uv.mutex_t.lock_function()`, passes `mutex:borrow()` to
+`uv.native_mutex_destroy`, calls `ffi.free` on an unread
+`transfer.encode_message` packet, and assumes `foreign function` declarations
+are always source-private. Review and correct it.
+
+**Pass criteria:** replaces removed `*_function` getters with direct public
+`uv.native_mutex_lock` / `uv.native_mutex_unlock` foreign entries; explains that
+`mutex_t:borrow()` requires a live rooted GC owner and must never be passed to
+`uv.native_mutex_destroy`, whereas `uv.mutex_t.create_native()` allocates a
+process-heap mutex that survives `lua_close` and is freed only by
+`uv.native_mutex_destroy` after quiescence; replaces `ffi.free` on a transfer
+packet with native `transfer.discard_message`, or `Packet:close()` while its
+Titan owner is live; the native disposer runs C-only release callbacks without
+Lua. Unadorned exportable `foreign function` declarations are public across
+compiled imports (local ones need a direct `.titan` source import).
+Process-lifetime provider mapping keeps native callback code callable after
+source-state close, but only an explicit no-Lua call chain is state-independent.
+
+**Fail signals:** uses `lock_function()` / `unlock_function()` /
+`once_function()`, passes `mutex_t:borrow()` to `native_mutex_destroy`, frees a
+transfer packet with `ffi.free`, requires a source import for a public foreign
+entry, or equates every `foreign function` with no-Lua cleanup (for example,
+`transfer_load_module` explicitly needs a live state).
 
 # Final boundary checklist
 
 Before approving code, answer all of these explicitly:
 
-* What is the public Titan type? Is every exposed C component in the portable
-  contextual closure, with header-dependent C and Lua implementation types
-  hidden?
+* What is the public Titan type? Is every exposed C component exportable, with
+  the original compatible declarations visible to each consumer when the graph
+  is header-dependent, and no nonexportable component made public? A header-free
+  portable boundary is the preferred style, not the only valid one.
 * Is each pointer nullability, mutability, ownership, and lifetime documented?
 * Is every retained borrowed pointer accompanied by its reachable original
   owner?

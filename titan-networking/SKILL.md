@@ -1130,8 +1130,12 @@ or response writes. `exchange:close()` finishes the current response and retires
 the transport instead.
 
 Detached payload bytes carry manually owned native resources. A string in a
-channel does not acquire a payload finalizer: own failed delivery and queued
-shutdown cleanup. `Exchange.discard_transfer_payload(payload)` and
+channel or `transfer.Packet` does not acquire a payload finalizer—native packet
+discard (`transfer.discard_message`, `Packet:close()`, `thread.Receiver:close()`,
+`async.PacketReceiver:close()`) only
+releases packet-registered `thread` endpoints and never invokes
+`from_transfer_payload` decoders on discard—so callers must own failed delivery
+and queued shutdown cleanup. `Exchange.discard_transfer_payload(payload)` and
 `UpgradedStream.discard_transfer_payload(payload)` close a known unadopted
 payload without a Runtime and return native close status. A close attempt
 consumes ownership even when it reports an error; never adopt, replay or discard

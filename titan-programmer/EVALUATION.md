@@ -15,7 +15,13 @@ complete examples independently with the current isolated Titan toolchain.
 
 A case fails if it invents an API, uses invalid Titan syntax, contradicts the
 single-loop/ownership model, recommends a speculative workaround, or requires a
-manual merely to answer the cartridge's advertised domain.
+manual merely to answer the cartridge's advertised domain. It also fails if it
+adds containment for arbitrary native behavior or raw-pointer misuse at a
+`foreign`/FFI boundary: that boundary is explicitly unsafe (comparable to Rust
+`unsafe`), pure Titan without it is the part expected to be well-behaved, and
+native callers uphold their own pointer, lifetime, ownership, ABI, and threading
+contracts. Valid Titan lowering and public API behavior for ordinary consumers
+remain in scope.
 
 ## Cartridge cases
 
@@ -249,9 +255,25 @@ invented convenience APIs.
 
 Require exact examples and review for foreign imports, automatic and owned C
 storage, contextual pointer conversion, one source-defined foreign callback,
-the built-ins `L` and `M`, and `titan.lua.load`. The answer must distinguish the
-exportable contextual primitive/pointer/function/owner closure from imported
-header-dependent C types that remain private, root every retained owner,
+the built-ins `L` and `M`, and `titan.lua.load`. The answer must separate three
+public-export classes and grade them differently:
+
+- the portable contextual primitive/pointer/function/owner closure, exportable
+  with no original header;
+- named header-dependent C graphs, exportable only when every consumer supplies
+  the original compatible declarations (an ordinary Titan import inherits none,
+  and same-spelled types from another header are a different declaration); and
+- genuinely nonexportable forms such as enum identities, unnamed aggregates
+  without a typedef name, flexible-array aggregates, and unsupported C forms,
+  which stay private.
+
+Preferring a header-free public boundary is a style choice, not a validity
+test: do not mark a correctly declared header-dependent export wrong, and do not
+accept a nonexportable graph as portable. Also require the explicit unsafe
+boundary — pure Titan without `foreign`/FFI is expected well-behaved, while the
+foreign code and its native callers uphold pointer, lifetime, ownership, ABI,
+and threading contracts, with no invented containment for arbitrary native
+behavior or raw-pointer misuse. Root every retained owner,
 distinguish public call-only string borrowing from the trusted standard-library
 exception, state the `void *` object/function-pointer rules precisely, and
 treat `titan.lua` as an FFI-strength audited escape hatch rather than a default
@@ -305,7 +327,140 @@ covering LF, CR, CRLF, multibyte bytes before failure, and EOF, plus separate
 wide/deep and successful/late-failing scaling checks. Require actual selected
 native test evidence and fresh provider installation before claiming a pass.
 
-The first JSON evaluation results are recorded below.
+See the [recorded JSON evaluation results](#json-cartridge-evaluation-2026-09-05).
+
+### TH1 — Cross-thread packet ownership, coalescing receivers, external wakes, and UV native sync (`titan-programmer` + `titan-thread` + `titan-async` + `titan-ffi`)
+
+Review a cross-thread worker draft that:
+1. passes a `thread.Sender<|integer|>` to `transfer.TransferValue.from_value`
+   and `async.send` under the assumption that `async.Receiver` is an unbounded
+   FIFO queue;
+2. calls `ffi.free(transfer.encode_message(req))` when a custom native queue
+   rejects an item, and assumes `Receiver:close()` automatically closes an
+   unread `http.Exchange` by decoding and dropping it;
+3. cancels `th:task()` while the proxy is still `ready`, immediately frees
+   shared native state, and assumes any cleanup await can spend the final epoch;
+4. allocates a new `uv.async_t` for every slow-path wait, or calls a nonexistent
+   `external_wake_t:register` method;
+5. uses `uv.mutex_t.lock_function()`, passes `mutex:borrow()` to
+   `uv.native_mutex_destroy`, and holds a `uv.mutex_t` across `timer.sleep`; and
+6. consumes a `Packet:borrow_message()` pointer while the Packet still owns it,
+   or assumes assigning the Packet reference clones its ownership.
+
+Require corrected code and exact explanations of:
+- packet-scoped resource attachment (`transfer.encode_message` / `decode_message`
+  and `transfer.Packet.from_value` / `Packet:decode`), with exact-top,
+  direction-specific authority in the current Lua execution, nested restoration,
+  and no implicit authority in another Task or child Coroutine; existing hooks
+  remain synchronous/nonyielding;
+- `transfer.attach_resource` / `claim_resource` as ordinary stateful Titan
+  APIs, native retain/release callbacks as the no-Lua path, four-byte
+  little-endian packet-local indexes (not global anti-replay tokens), and
+  wrapper+finalizer setup before claim; standalone policy/protobuf helpers open
+  no scope but may reuse an existing matching exact-top scope for packet-owned
+  opaque/capture collaboration. Index bytes never become standalone reusable
+  ownership policies; independent Lua carriers still have no attachment table;
+- lossy coalescing `async.Receiver` (`mode = 0`, copies attachment-free
+  `TransferValue` policies) versus lossy coalescing `async.PacketReceiver`
+  (`mode = 1`, moves single-owner `transfer.Packet` values with pre-admission
+  preservation, post-exchange source consumption, and pre-check single-reader
+  reservation) versus lossless bounded FIFO `thread.channel<|T|>`;
+- Packet aliases sharing consumed state; a borrowed pointer neither rooting
+  the owner nor granting discard/decode/adoption authority, expiring on
+  close/decode/take/publication; `take_message()` transferring one sole raw
+  owner to exactly one consuming operation, never an ownership clone;
+- prepared `Packet.new()` / rooted `borrow_owner()` before native effects;
+  publication clears the source cell in the foreign commit interval, and receive
+  fills its prepared cell without a post-take ordinary adoption call; generated
+  entry stack/GC failure is not excluded by a body-only ownership guard;
+- raw foreign `decode_message(state, slot): int` consuming/clearing a true
+  caller-owned `void *` slot and returning normally, so the direct call commits
+  its mutable-address spill before error propagation; status `0` leaves one
+  result, positive Lua status one error, negative setup status no new value;
+  root and restore the stack, then propagate only status/error through
+  `raise_message_error`, never a fallible ordinary raw-slot wrapper;
+- native `adopt_into(owner, slot): int` with a rooted empty Packet/holder
+  prepared before raw acquisition; success stores/clears, rejection preserves
+  both cells (`-2` NULL owner/slot, `-4` occupied destination, `-5` NULL source).
+  Adoption has no allocation, throwing work, Lua entry, or stack result;
+- native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
+  the ordinary nonyielding `Packet:close()` facade, no-Lua endpoint release
+  callbacks surviving source-state close, last-Receiver drain pinning, and why
+  manual HTTP/TLS/WebSocket/TCP handoffs still need explicit payload disposal;
+- the Thread proxy retirement contract: no terminal outcome before child
+  OS-thread completion, including pre-start cancellation and failure at
+  Task-root/cleanup entry; a native completion gate must be accepted before
+  proxy exposure, not merely installed by a later cleanup callback. Require the
+  implemented wiring (`prepare_native_retirement` over the control block as
+  `run_with_cleanup` argument three, a body that awaits logical finish only, and
+  cleanup that forwards the first reason before the shield wait).
+  Reasonless native cancellation requires no admitted child cancellation and
+  either the exact bound cleanup wait after ordinary forwarding or a pending
+  terminal outcome whose cleanup was missed/failed; never normal body/prearm.
+  Preserve host outcome and accepted child reason: a later cancellation replaces
+  neither, while a first explicit proxy cancellation arriving during a pending
+  native retirement overrides a pending success/error and terminal status still
+  follows the OS join. A cancellation request short of a terminal proxy is not
+  retirement evidence. Require the nil cleanup reason from a failed proxy body,
+  which becomes the default `simple("cancelled")` request, and the DEFAULT
+  outcome degradation, which the host sees as `simple("cancelled")`. Negative
+  retirement retains native/Task/Runtime ownership and reports a driver error;
+  an explicit later `async.loop()` retries the same retirement without new
+  registration or epoch reset. Source support is not exercised
+  Thread/failure-matrix evidence;
+- `async.prepare_native_retirement(owner, context, register, unregister, retire)`
+  retaining the traced owner and creating the only kind of ExternalWait accepted
+  as `run_with_cleanup` argument three; generic `prepare_external_wait` is not a
+  terminal barrier. Require same-Runtime unused/open/unbound validation,
+  revalidation after allocations, native activation/registration before
+  exposure, and native admission rollback. Body/peer/alias use outside owner
+  cleanup is rejected; its exact private-registrar cleanup wait alone may use
+  the final epoch, while the preaccepted native terminal gate is independent
+  of whether that await or cleanup body executes;
+- `:wait_cleanup()` attaching once to the prearmed native barrier (unbound and
+  ordinary waits rejected), earlier completion inline, and logical close
+  rejecting further awaits without withdrawing unfinished native ownership;
+  native callback return conventions `register: 0/1/negative` and
+  `retire: 0/1/negative`, constructor rollback versus successful retirement,
+  traced keepalive versus an independently retained cross-state native pin;
+  native notification occurs only after monotonic retirement readiness, so
+  post-notification retirement is success/error, never pending-with-no-new-wake;
+- `async.prepare_external_wait` / `wait_external` / `wait_external_cleanup` over
+  `uv.external_wake_t:reserve` (unreferenced) + `:activate` (referenced while
+  active waits require loop liveness) + `:unregister`, domain-to-wake-core lock
+  order, and bounded 64-identity ready-queue draining; and
+- direct public `uv.native_*` foreign entries replacing removed `*_function`
+  getters, `mutex_t:borrow()` rooted owner lifetime versus
+  `mutex_t.create_native()` + `native_mutex_destroy`, OS-thread-blocking mutexes
+  never held across Task suspension, `once_t` in-place initialization with no
+  destroy/reset, and `key_t` as OS-thread-local borrowed pointer storage.
+
+Grade the native surface as the explicit unsafe boundary it is: a `foreign`
+entry, source `foreign function` body, C-side callback, and cross-state pointer
+require the caller to uphold the documented pointer, lifetime, ownership, ABI,
+and threading contracts. Do not reward speculative guards for arbitrary native
+misuse, and do not excuse a public/stdlib contract failure that ordinary Titan
+consumers hit.
+
+Recorded run (2026-10-18, isolated cartridge-only context): TH1, F1, and routing
+queries 20–22 passed all required rubric items above (`titan-programmer` +
+`titan-thread` + `titan-async` + `titan-ffi`), including late first-cancel
+precedence, `nil` cleanup reason on normal/failed completion, `DEFAULT` outcome
+degradation, prearmed proxy retirement barrier, portable vs header-dependent
+exportable vs nonexportable FFI signatures, and the explicit unsafe FFI
+boundary. The implemented thread adapter and generic bridge remain distinct from
+allocation-failure, platform, and benchmark receipts.
+
+When evaluating cross-thread or native-retirement changes, resolve links and
+frontmatter using the mechanical gates below, run fresh TH1, F1, and routing
+queries 20–22, and compare answers with the current source and manual
+signatures. In TH1 check the late first-cancel precedence, nil cleanup reason,
+DEFAULT outcome degradation, and that a cancellation request is not retirement
+evidence; in F1 check the portable versus header-dependent-exportable versus
+nonexportable distinction and the explicit unsafe boundary. Check all four
+external-wake wait paths (send, receive, normal join, proxy cleanup join) and
+the prearmed proxy barrier, and record only actual integrator-run
+native/platform/benchmark evidence.
 
 ## Frontmatter-only routing set
 
@@ -330,7 +485,12 @@ set for these queries:
 16. encode Titan records as JSON and preserve explicit nulls;
 17. change the JSON module's Relabel grammar;
 18. add native JSON record/union mapping tests; and
-19. edit a JSON configuration file for an unrelated Python application.
+19. edit a JSON configuration file for an unrelated Python application;
+20. send a reply `thread.Sender` across `thread.channel` or `async.PacketReceiver`;
+21. call `uv.native_mutex_lock` from a source `foreign function` and manage
+    `uv.mutex_t.create_native()` lifetime; and
+22. write native `titan.test` cases for `Thread:task()` pre-start cancellation
+    and `PacketReceiver` coalescing.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -339,7 +499,11 @@ programmer cartridge for a Lua-only test, and no Titan networking/async/FFI
 cartridge for unrelated Python or C work; no JSON cartridge merely because
 a configuration file uses JSON. Ordinary JSON use selects programmer + json;
 JSON grammar changes add pegs, JSON tests add tester, and explicit reflection
-construction work adds reflect.
+construction work adds reflect. Thread channel and `PacketReceiver` work selects
+programmer + thread + async (adding ffi when touching `transfer.discard_message`
+or raw C callbacks, and tester when writing native tests).
+Query 21 selects **programmer + ffi**; add async only when changing the
+retirement/wake protocol and tester only when writing its native tests.
 
 ## Recorded baseline and post-change results
 

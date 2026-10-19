@@ -153,8 +153,9 @@ contributors share one namespace, and contributor filenames do not appear in
 case names.
 
 Do not give a test owner a bare name rewritten by standard-import shorthand:
-`coroutine`, `uv`, `async`, `timer`, `io`, `fs`, `net`, `ssl`, `url`, `http`, `websocket`,
-`os`, `peg`, `string`, `test`, `lua`, `math`, `gc`, `iteration`, or `reflect`.
+`coroutine`, `uv`, `async`, `timer`, `io`, `fs`, `path`, `net`, `ssl`, `url`,
+`http`, `websocket`, `os`, `peg`, `string`, `test`, `lua`, `math`, `gc`,
+`iteration`, `reflect`, `sqlite3`, `json`, `protobuf`, `transfer`, or `thread`.
 A bare Lua-library name can also collide at
 the native opener boundary; `math` is the canonical example. Prefer
 `calc_test`, `math_spec`, `tests.math`, or a qualified owner such as
@@ -599,7 +600,7 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 
 ## 8. Repository-native test ownership and layout
 
-The aggregate currently has 28 explicit logical roots in
+The aggregate currently has 30 explicit logical roots in
 `spec/support/stdlib_test_modules.mk:TITAN_STDLIB_TEST_ROOTS`, shared by Linux,
 macOS, and native Windows:
 
@@ -632,6 +633,8 @@ uv.runtime_tests
 reflect.tests
 sqlite3.tests
 json.tests
+protobuf.tests
+thread.tests
 ```
 
 Do not replace this manifest with an import-only aggregator. Making each owner
@@ -827,7 +830,7 @@ compiling any requested root.
 The leaf commands are:
 
 ```sh
-# Build all 28 roots once under out/tests; does not run them.
+# Build all 30 roots once under out/tests; does not run them.
 make titan-stdlib-test-build
 
 # Run the existing aggregate from the repository root.
@@ -862,7 +865,7 @@ Make builds native fixtures separately and retains generated outputs for
 incremental reuse; explicit `make clean` removes them. The run target returns
 to the repository root because fixtures rely on that CWD. It supervises the
 aggregate in a separate process group with a default 600-second deadline for
-all 28 roots, including repeated fresh child-fixture compilation with O3/Linux
+all 30 roots, including repeated fresh child-fixture compilation with O3/Linux
 LTO. It streams merged output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
 retain their explicit 15-second limit.
@@ -878,7 +881,7 @@ cases, and the complete gate uses no filter. See
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
 `out/tests/test/tests` directly from the repository root with repeated
 `-f`, or use one carefully designed Lua pattern. The filter does not change the
-28-root compile.
+30-root compile.
 
 `BUSTED_FILTER` never filters Titan cases, and `TITAN_FILTER` never filters
 Busted. The LuaRocks command adapter also recognizes explicit
@@ -1603,7 +1606,7 @@ make rock-test \
 ```
 
 Must say `TITAN_FILTER` is a runtime Lua pattern, filters one domain only, and
-does not reduce the 28-root build. Do not accept regex-only escaping or a claim
+does not reduce the 30-root build. Do not accept regex-only escaping or a claim
 that `make rock-test` rebuilds/reinstalls the rock.
 
 ## Eval 17 — API surface discrimination
@@ -1695,3 +1698,68 @@ particular HTTP timer-only loser cancellation must preserve buffered-request
 ordering while state-owning reader cleanup is shielded on every parent exit.
 Use exact frozen input/provider evidence when a private build tests an evolving
 source tree; a passing old provider is not evidence for later edits.
+
+For packet ownership (`transfer.Packet`, thread endpoints,
+`async.PacketReceiver`), prepared external wakes, and direct `uv.native_*`
+synchronization, keep public behavior in `async.tests`, `thread.tests`, and
+`uv.public_tests`; use only test-owned failure fixtures. Check native
+`discard_message` without a Runtime and after source-state close, and the live
+Packet facade separately: both must release unclaimed attachments with zero
+decoder/module-loader calls. Cover alias consumed state and borrowed-pointer
+non-ownership; raw borrows must not be consumed while their Packet owns them.
+Raw decode regressions use a real uniquely owned `void *` slot passed directly
+to foreign `decode_message(state, slot): int`. Check normal return commits the
+cleared mutable-address spill before status/error propagation, including setup
+and worker-entry failures. Status `0` leaves one rooted result, positive status
+one error, and negative status no new value. Keep ordinary error helpers
+owner-free; an ordinary body-local raw guard is not entry-safe.
+For native `adopt_into(owner, slot)`, prepare/root the empty Packet and borrow
+its holder before raw acquisition. Verify success stores/clears with no Lua
+stack effect, while NULL arguments, occupied destination, and NULL source
+reject without changing either cell; rejected raw ownership remains guarded.
+
+Exercise `run_with_cleanup`'s optional third argument through public behavior:
+require an unused/open/unbound same-Runtime `prepare_native_retirement`
+capability and reject generic prepared waits. Check revalidation after
+allocations, pre-exposure native activation/admission and rollback, traced owner
+rooting, and body/peer/alias exclusion outside owning cleanup. Only its exact
+cleanup wait may use the final epoch; generic/nested cleanup has no privilege.
+The preaccepted terminal gate must survive root/cleanup-entry failure and a
+missed await. Preallocation is not proof ordinary entries cannot allocate.
+Check the bound cleanup wait attaches once to an already-armed barrier, handles
+retirement before suspension, and rejects unbound/ordinary waits. Logical close
+must reject later waits without dropping unfinished native ownership; native
+callback 0/1/negative cases must preserve the stated admission/retirement owners.
+Prove the domain notifies only after monotonic retirement readiness: retirement
+after notification cannot return pending and rely on a second wake to arrive.
+
+Retain required Thread proxy ordering: all terminal outcomes follow actual
+child OS-thread finish, including pre-start cancellation, delayed child cleanup,
+and failures before Task-root/cleanup bodies begin. Test the preaccepted native
+completion barrier, not just a later cleanup callback. Exercise send, receive,
+normal join, and the proxy cleanup join on each path; generic bridge tests are
+not thread-adapter evidence.
+Check reasonless native cancellation requires no accepted child cancellation
+and follows ordinary forwarding at the exact bound cleanup wait, or a pending
+terminal outcome whose cleanup failed; never normal body/prearm. Preserve host
+outcome and accepted child reason. Cover the nil cleanup reason from a failed
+proxy body, which becomes the default `simple("cancelled")` request, and the
+DEFAULT outcome degradation, which surfaces to the host as
+`simple("cancelled")`. Exercise a first explicit proxy cancellation that arrives
+while native retirement is pending: it overrides a pending success/error, while a
+later cancellation replaces neither that first reason nor an accepted child
+reason and terminal status still follows the OS join. A cancellation request
+short of a terminal proxy is not a retirement oracle. Inject negative
+retirement: retain the same
+nonterminal Task, native token/context, target, pending operation and Runtime.
+The driver error must report `async.native_retirement.retire` and its native
+code; direct later `async.loop()` retries without re-registering or resetting
+epochs, including an already-delivered wake. Repeated failure retains ownership
+again. This generic recovery contract is authored; assert it from observed
+behavior rather than assuming the failing path has been exercised.
+Check unreferenced `external_wake_t:reserve` versus active-wait sole-loop liveness,
+cancellation, stale wakes, and shutdown. Preserve the complete 30-root aggregate and
+Runtime-bound cleanup inside `support.runtime`; a runtime filter never reduces
+the build roots. Leave new evaluations unscored until actually run, and
+distinguish source/provider revisions even though both ownership snapshots use
+ABI 2 (language-server API 1; other existing versions unchanged).
