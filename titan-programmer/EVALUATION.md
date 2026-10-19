@@ -417,10 +417,11 @@ Require corrected code and exact explanations of:
   traced keepalive versus an independently retained cross-state native pin;
   native notification occurs only after monotonic retirement readiness, so
   post-notification retirement is success/error, never pending-with-no-new-wake;
-- `async.prepare_external_wait` / `wait_external` / `wait_external_cleanup` over
-  `uv.external_wake_t:reserve` (unreferenced) + `:activate` (referenced while
-  active waits require loop liveness) + `:unregister`, domain-to-wake-core lock
-  order, and bounded 64-identity ready-queue draining; and
+- `async.prepare_external_wait` / `wait_external` / `wait_external_native` /
+  `wait_external_cleanup` over `uv.external_wake_t:reserve` (unreferenced) +
+  `:activate` (referenced while active waits require loop liveness) +
+  `:unregister`, domain-to-wake-core lock order, and bounded 64-identity
+  ready-queue draining; and
 - direct public `uv.native_*` foreign entries replacing removed `*_function`
   getters, `mutex_t:borrow()` rooted owner lifetime versus
   `mutex_t.create_native()` + `native_mutex_destroy`, OS-thread-blocking mutexes
