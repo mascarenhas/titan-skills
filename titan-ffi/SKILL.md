@@ -2118,6 +2118,16 @@ searching by analogy.
   `decode_message` use a live Lua state through protected stack/registry
   operations; a foreign declaration alone never proves state-independent
   cleanup.
+* `titan/protobuf/native.h` and the raw-buffer collaboration entries in
+  `titan.protobuf` — the caller owns the live buffer descriptor, heap storage,
+  and any callback `context` owner; keep them rooted through synchronous
+  serialization and register heap cleanup immediately. Small writes double
+  capacity from a 64-byte minimum. A single reservation larger than four
+  capacities grows to the needed length plus at most 256 bytes (overflow-checked
+  and truncated at `SIZE_MAX`). This bounded slack is independent of transfer's
+  initial 64-byte metadata credit. Transfer still reserves actual metadata,
+  alignment, and attachment entries before detachment and derives interior
+  pointers only after growth; never add a sizing pass that replays a hook.
 
 ## Focused specs
 
@@ -2318,6 +2328,29 @@ source-state close, but only an explicit no-Lua call chain is state-independent.
 transfer packet with `ffi.free`, requires a source import for a public foreign
 entry, or equates every `foreign function` with no-Lua cleanup (for example,
 `transfer_load_module` explicitly needs a live state).
+
+## Eval 12 — Caller-owned protobuf buffer growth
+
+**Prompt:** A public `protobuf.serialize_fields_to_buffer` caller supplies a
+native buffer with a C-only grow callback and a rooted counter array as its
+`context`. It writes one 64 KiB byte field followed by a 192-byte byte field.
+Explain the buffer/context lifetimes, the intended bulk allocation behavior,
+and how a stream of small writes differs. A draft stores an interior data
+pointer before encoding and runs resource-attaching encoders twice to size the
+packet exactly.
+
+**Pass criteria:** keeps the buffer descriptor, storage, and context owner live
+through synchronous callback completion; registers the matching heap cleanup;
+does not retain an interior pointer across growth; describes the 64-byte minimum,
+doubling for small writes, and needed length plus at most 256 bytes for a
+reservation exceeding four capacities, with checked/truncated slack near
+`SIZE_MAX`; recognizes one small allocation and one bulk growth for those two
+fields, not a second payload-sized realloc. Transfer's 64-byte initial metadata
+credit and exact pre-detach attachment-tail reservation remain distinct.
+Rejects replaying hooks in a sizing pass. Uses the public raw-buffer API for
+behavior coverage without private imports or production test hooks.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
 
 # Final boundary checklist
 
