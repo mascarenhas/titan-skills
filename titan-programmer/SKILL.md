@@ -1916,6 +1916,16 @@ to the language rules:
   HTTP/TLS/WebSocket handoff byte strings. In `from_transfer_payload`, construct
   the inert wrapper (`native = nil`) and register `gc.finalizable` *before*
   claiming and assigning the native pointer.
+- **Keep serialization single-pass and canonical.** Protobuf and transfer
+  nested prefixes use minimal varint lengths; never size by replaying custom
+  encoders or resource-attaching hooks. Their bounded backpatch scratch belongs
+  to automatic C storage in the synchronous root append call, not a per-packet
+  or GC allocation. Pass it explicitly, finish expansion before recording
+  packet/trailer offsets, and keep attachment slot indices unchanged when their
+  payload bytes move. Beyond 32 openings in one outer nest, retain the eager
+  fallback. A failed root append restores its starting buffer length without
+  reading mutated automatic scratch during unwind; transfer still owns pending
+  attachment cleanup. See the protobuf and transfer implementation chapters.
 
 The current filesystem watcher demonstrates the preferred local-method and
 dense-drain shape:

@@ -712,3 +712,26 @@ reports, removed mandatory Python/gcovr and merge processing, and identified the
 renderer-specific assertion change. With aggregation and rich formats explicitly
 requested, it allowed the optional external tooling. This was a read-only build
 plan evaluation; it did not execute the application.
+
+## Single-pass nested serialization (`titan-programmer`, `titan-ffi`, `titan-tester`)
+
+Ask for a nested protobuf/transfer length-backpatch optimization at 127/128 and
+16,383/16,384 bytes, depths 1/4/16, with opaque hooks that attach endpoints.
+Require byte-identical minimal varints and one invocation per encoder occurrence,
+not a sizing pass. The candidate must keep bounded patch scratch in automatic
+root-owned C storage rather than enlarging per-operation GC/native allocations,
+pass its pointer only through the synchronous traversal, and finish movement
+before packet metadata or attachment offsets are recorded. Slot indices are not
+byte offsets and move unchanged with their enclosing bytes.
+
+Require the 32-entry bounded eager fallback and rebasing of still-open marks
+after earlier siblings expand. Error cleanup restores the append boundary,
+preserves earlier bytes, does not inspect mutated automatic scratch after
+longjmp, and leaves pending attachment disposal with the transfer scope.
+Native tests own canonical-byte matrices, single-call hooks, depth/breadth
+overflow, failed growth, retry after a caught encode failure, closure captures,
+and resource indices; compiler Busted is not a substitute. Request focused
+native filters and allocation/movement predictions marked as unmeasured until
+the integrator runs them.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
