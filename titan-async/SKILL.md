@@ -407,8 +407,8 @@ cancellation precedence over the recorded body success or error: a first
 explicit `Task:cancel` is accepted while the Task is unfinished, including
 during a pending native retirement. Terminal status still follows native
 retirement. The thread standard library binds this gate to
-`Thread:task()` and suspends its channel/join waits through
-`async.wait_external`.
+`Thread:task()` and suspends its channel waits through
+`async.wait_external_native`, and ordinary join waits through `async.wait_external`.
 
 Only that exact cleanup-policy operation, with the canonical private
 native-retirement registrar, may use the reserved last suspension epoch. Arbitrary
@@ -571,10 +571,31 @@ function ExternalWait:close()
 function wait_external(
     register_fn: function (foreign *void): boolean,
     unregister_fn: function (): ())
+function wait_external_native(
+    owner: value, context: foreign *void,
+    register_fn: foreign function (*void, *void): int,
+    unregister_fn: foreign function (*void): void)
 function wait_external_cleanup(
     register_fn: function (foreign *void): boolean,
     unregister_fn: function (): ())
 ```
+
+`wait_external_native` requires a running Task and is an ordinary cancellable
+wait, not a native retirement capability. It roots `owner` and borrows `context`
+through return/unlink, replacing the pair of per-wait Titan registrar closures.
+Its C-only/nonraising/nonyielding callbacks run on the loop thread after yield:
+register returns `0` ready without admission, `1` linked with one retained
+target, or a negative rejection without a link/reference
+(`async.external_wait.register`). Unregister is synchronous, idempotent and
+called once on cancellation/registration failure, never normal notification or
+inline readiness. NULL callbacks raise before preparation. Completion/token
+identity, deferred delivery and target liveness are unchanged.
+Keep the context storage and every GC owner it references alive for the entire
+call. Channel code roots its endpoint and borrows one automatic C context plus
+embedded waiter in its stackful Task frame; cancellation/unwind unlinks before
+the frame can leave. A borrowed pointer is not state-close protection. Channel
+fast paths use no registrar closure or mutable capture box; do not replace these
+with a fresh per-wait userdata.
 
 `prepare_native_retirement` strongly retains `owner` through callback return and
 committed readiness. That GC root is not a cross-state-close native pin:
@@ -1790,9 +1811,10 @@ Before accepting a UV binding change or public adapter, also verify:
 - Behavioral tests use the public production facade unless a genuinely new
   native boundary demands a focused fixture.
 - Cross-thread native waiter bridges use `async.prepare_external_wait` /
-  `wait_external` / `wait_external_cleanup` and `uv.external_wake_t:reserve` +
-  `:activate` + `:unregister`, keeping `reserve` unreferenced, referencing the
-  shared handle only while active waits remain, preserving domain -> wake-core
+  `wait_external` / `wait_external_native` / `wait_external_cleanup` and
+  `uv.external_wake_t:reserve` + `:activate` + `:unregister`, keeping `reserve`
+  unreferenced, referencing the shared handle only while active waits remain,
+  preserving domain -> wake-core
   lock order, and draining bounded identity batches onto the ready queue without
   reentrant Task resumption.
 
@@ -2023,7 +2045,8 @@ succeeds) or `thread.channel`. Replace `ffi.free` with
 `transfer.discard_message`, which releases unclaimed endpoint attachments in C
 without Lua or decoder calls (while manual HTTP/TLS/WebSocket handoff payloads
 still need explicit `discard_transfer_payload`). Use
-`async.prepare_external_wait` / `wait_external` / `wait_external_cleanup` over
+`async.prepare_external_wait` / `wait_external` / `wait_external_native` /
+`wait_external_cleanup` over
 the Runtime's shared `uv.external_wake_t` (`:reserve` unreferenced, `:activate`
 referenced for active-wait loop liveness) instead of per-wait `uv.async_t`
 handles.
