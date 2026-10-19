@@ -114,7 +114,7 @@ all WebSocket and native pending-operation guards still apply.
 `to_transfer_payload` detaches the source without sending a Close frame;
 `Connection.from_transfer_payload` adopts the session exactly once in the
 destination Runtime. Raw payloads are manually owned, process-local capabilities,
-not persistent data. A queued string or `transfer.Packet` has no WebSocket
+not persistent data. A queued string or native transfer packet has no WebSocket
 resource finalizer (native packet discard only releases packet-registered
 `thread` endpoints and never runs `from_transfer_payload` decoders). After
 failed delivery or when draining an abandoned queue,

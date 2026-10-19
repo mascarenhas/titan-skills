@@ -1699,24 +1699,19 @@ ordering while state-owning reader cleanup is shielded on every parent exit.
 Use exact frozen input/provider evidence when a private build tests an evolving
 source tree; a passing old provider is not evidence for later edits.
 
-For packet ownership (`transfer.Packet`, thread endpoints,
-`async.PacketReceiver`), prepared external wakes, and direct `uv.native_*`
-synchronization, keep public behavior in `async.tests`, `thread.tests`, and
-`uv.public_tests`; use only test-owned failure fixtures. Check native
-`discard_message` without a Runtime and after source-state close, and the live
-Packet facade separately: both must release unclaimed attachments with zero
-decoder/module-loader calls. Cover alias consumed state and borrowed-pointer
-non-ownership; raw borrows must not be consumed while their Packet owns them.
+For native packet ownership (`transfer.encode_message` / `decode_message` /
+`discard_message`, thread endpoints, and eager coalescing `async.Receiver`),
+prepared external wakes, and direct `uv.native_*` synchronization, keep public
+behavior in `async.tests`, `thread.tests`, and `uv.public_tests`; use only
+test-owned failure fixtures. Check native `discard_message` without a Runtime
+and after source-state close, plus `Receiver` overwrite and close disposal: all
+must release unclaimed attachments with zero decoder/module-loader calls.
 Raw decode regressions use a real uniquely owned `void *` slot passed directly
 to foreign `decode_message(state, slot): int`. Check normal return commits the
 cleared mutable-address spill before status/error propagation, including setup
 and worker-entry failures. Status `0` leaves one rooted result, positive status
 one error, and negative status no new value. Keep ordinary error helpers
 owner-free; an ordinary body-local raw guard is not entry-safe.
-For native `adopt_into(owner, slot)`, prepare/root the empty Packet and borrow
-its holder before raw acquisition. Verify success stores/clears with no Lua
-stack effect, while NULL arguments, occupied destination, and NULL source
-reject without changing either cell; rejected raw ownership remains guarded.
 
 Exercise `run_with_cleanup`'s optional third argument through public behavior:
 require an unused/open/unbound same-Runtime `prepare_native_retirement`

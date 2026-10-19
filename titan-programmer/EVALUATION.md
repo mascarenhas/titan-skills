@@ -344,49 +344,41 @@ Review a cross-thread worker draft that:
    `external_wake_t:register` method;
 5. uses `uv.mutex_t.lock_function()`, passes `mutex:borrow()` to
    `uv.native_mutex_destroy`, and holds a `uv.mutex_t` across `timer.sleep`; and
-6. consumes a `Packet:borrow_message()` pointer while the Packet still owns it,
-   or assumes assigning the Packet reference clones its ownership.
+6. wraps a raw `void *` packet slot in an ordinary helper before calling
+   `transfer.decode_message`, or retries `async.send` after a post-exchange
+   notification error.
 
 Require corrected code and exact explanations of:
-- packet-scoped resource attachment (`transfer.encode_message` / `decode_message`
-  and `transfer.Packet.from_value` / `Packet:decode`), with exact-top,
-  direction-specific authority in the current Lua execution, nested restoration,
-  and no implicit authority in another Task or child Coroutine; existing hooks
-  remain synchronous/nonyielding;
+- packet-scoped resource attachment (`transfer.encode_message` /
+  `decode_message`), with exact-top, direction-specific authority in the current
+  Lua execution, nested restoration, and no implicit authority in another Task
+  or child Coroutine; existing hooks remain synchronous/nonyielding;
 - `transfer.attach_resource` / `claim_resource` as ordinary stateful Titan
   APIs, native retain/release callbacks as the no-Lua path, four-byte
   little-endian packet-local indexes (not global anti-replay tokens), and
-  wrapper+finalizer setup before claim; standalone policy/protobuf helpers open
-  no scope but may reuse an existing matching exact-top scope for packet-owned
-  opaque/capture collaboration. Index bytes never become standalone reusable
-  ownership policies; independent Lua carriers still have no attachment table;
-- lossy coalescing `async.Receiver` (`mode = 0`, copies attachment-free
-  `TransferValue` policies) versus lossy coalescing `async.PacketReceiver`
-  (`mode = 1`, moves single-owner `transfer.Packet` values with pre-admission
-  preservation, post-exchange source consumption, and pre-check single-reader
-  reservation) versus lossless bounded FIFO `thread.channel<|T|>`;
-- Packet aliases sharing consumed state; a borrowed pointer neither rooting
-  the owner nor granting discard/decode/adoption authority, expiring on
-  close/decode/take/publication; `take_message()` transferring one sole raw
-  owner to exactly one consuming operation, never an ownership clone;
-- prepared `Packet.new()` / rooted `borrow_owner()` before native effects;
-  publication clears the source cell in the foreign commit interval, and receive
-  fills its prepared cell without a post-take ordinary adoption call; generated
-  entry stack/GC failure is not excluded by a body-only ownership guard;
+  wrapper+finalizer setup before claim; each endpoint unit belongs to exactly
+  one live finalized wrapper or unconsumed in-flight native message entry
+  (adoption moves, native discard releases, close changes state only);
+  standalone policy/protobuf helpers open no scope but may reuse an existing
+  matching exact-top scope for packet-owned opaque/capture collaboration. Index
+  bytes never become standalone reusable ownership policies; independent Lua
+  carriers still have no attachment table;
+- lossy coalescing `async.Receiver` (encodes transferable values or explicit
+  `TransferValue` policies into native packets, preserves caller input on
+  pre-exchange rejection, commits ownership in one C interval on atomic slot
+  exchange before notification, reserves the single reader before slot
+  inspection, and decodes eagerly in `wait()` with `nil`/`false` as data and
+  consuming decode errors) versus lossless bounded FIFO `thread.channel<|T|>`;
 - raw foreign `decode_message(state, slot): int` consuming/clearing a true
   caller-owned `void *` slot and returning normally, so the direct call commits
   its mutable-address spill before error propagation; status `0` leaves one
   result, positive Lua status one error, negative setup status no new value;
   root and restore the stack, then propagate only status/error through
   `raise_message_error`, never a fallible ordinary raw-slot wrapper;
-- native `adopt_into(owner, slot): int` with a rooted empty Packet/holder
-  prepared before raw acquisition; success stores/clears, rejection preserves
-  both cells (`-2` NULL owner/slot, `-4` occupied destination, `-5` NULL source).
-  Adoption has no allocation, throwing work, Lua entry, or stack result;
 - native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
-  the ordinary nonyielding `Packet:close()` facade, no-Lua endpoint release
-  callbacks surviving source-state close, last-Receiver drain pinning, and why
-  manual HTTP/TLS/WebSocket/TCP handoffs still need explicit payload disposal;
+  no-Lua endpoint release callbacks surviving source-state close, last-Receiver
+  drain pinning, and why manual HTTP/TLS/WebSocket/TCP handoffs still need
+  explicit payload disposal;
 - the Thread proxy retirement contract: no terminal outcome before child
   OS-thread completion, including pre-start cancellation and failure at
   Task-root/cleanup entry; a native completion gate must be accepted before
@@ -486,11 +478,11 @@ set for these queries:
 17. change the JSON module's Relabel grammar;
 18. add native JSON record/union mapping tests; and
 19. edit a JSON configuration file for an unrelated Python application;
-20. send a reply `thread.Sender` across `thread.channel` or `async.PacketReceiver`;
+20. send a reply `thread.Sender` across `thread.channel` or `async.Receiver`;
 21. call `uv.native_mutex_lock` from a source `foreign function` and manage
     `uv.mutex_t.create_native()` lifetime; and
 22. write native `titan.test` cases for `Thread:task()` pre-start cancellation
-    and `PacketReceiver` coalescing.
+    and `async.Receiver` coalescing.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -499,7 +491,7 @@ programmer cartridge for a Lua-only test, and no Titan networking/async/FFI
 cartridge for unrelated Python or C work; no JSON cartridge merely because
 a configuration file uses JSON. Ordinary JSON use selects programmer + json;
 JSON grammar changes add pegs, JSON tests add tester, and explicit reflection
-construction work adds reflect. Thread channel and `PacketReceiver` work selects
+construction work adds reflect. Thread channel and `async.Receiver` work selects
 programmer + thread + async (adding ffi when touching `transfer.discard_message`
 or raw C callbacks, and tester when writing native tests).
 Query 21 selects **programmer + ffi**; add async only when changing the

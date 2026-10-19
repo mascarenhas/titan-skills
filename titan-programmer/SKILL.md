@@ -1903,16 +1903,19 @@ to the language rules:
   `Task:resume(token)` may wake only the matching `async.suspend(token, ...)`;
   do not paper over an early-resume bug with consumer-side generations.
 - **Keep packet disposal C-only and adopt resources only after finalizer
-  setup.** `transfer.discard_message` and the native retain/release callbacks
-  supplied to `transfer.attach_resource` are C-ABI `foreign function` entries
-  whose complete cleanup chain never enters Lua, runs `from_transfer_payload`
-  decoders, loads modules, or requires a Runtime. `attach_resource` and
-  `claim_resource` themselves are ordinary stateful Titan APIs, authorized only
-  by the exact top encode/decode scope in the current Lua execution. Never
-  raw-`ffi.free` an `encode_message` packet or assume packet discard cleans up
-  manual HTTP/TLS/WebSocket handoff byte strings. In `from_transfer_payload`,
-  construct the inert wrapper (`native = nil`) and register `gc.finalizable`
-  *before* claiming and assigning the native pointer.
+  setup.** Each endpoint reference unit is owned by either a live finalized
+  wrapper or an unconsumed in-flight native packet entry: adoption moves the
+  unit, native discard releases it, and `close()` changes state only.
+  `transfer.discard_message` and the native retain/release callbacks supplied to
+  `transfer.attach_resource` are C-ABI `foreign function` entries whose complete
+  cleanup chain never enters Lua, runs `from_transfer_payload` decoders, loads
+  modules, or requires a Runtime. `attach_resource` and `claim_resource`
+  themselves are ordinary stateful Titan APIs, authorized only by the exact top
+  encode/decode scope in the current Lua execution. Never raw-`ffi.free` an
+  `encode_message` packet or assume packet discard cleans up manual
+  HTTP/TLS/WebSocket handoff byte strings. In `from_transfer_payload`, construct
+  the inert wrapper (`native = nil`) and register `gc.finalizable` *before*
+  claiming and assigning the native pointer.
 
 The current filesystem watcher demonstrates the preferred local-method and
 dense-drain shape:

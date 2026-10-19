@@ -1,6 +1,6 @@
 ---
 name: titan-thread
-description: Write, review, and test multi-threaded Titan code with titan.thread OS threads, bounded cross-thread MPMC channels, structured thread groups, and packet-scoped endpoint transfer (titan.transfer). Use when spawning isolated OS threads with their own Lua/Titan state and async Runtime, sending/receiving values or nested Sender/Receiver endpoints across thread channels or PacketReceiver, composing Thread:task() with async combinators, or managing bounded concurrency and error propagation with thread.Group.
+description: Write, review, and test multi-threaded Titan code with titan.thread OS threads, bounded cross-thread MPMC channels, structured thread groups, and packet-scoped endpoint transfer (titan.transfer). Use when spawning isolated OS threads with their own Lua/Titan state and async Runtime, sending/receiving values or nested Sender/Receiver endpoints across thread channels or async.Receiver, composing Thread:task() with async combinators, or managing bounded concurrency and error propagation with thread.Group.
 ---
 
 # Titan thread
@@ -37,16 +37,21 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
   and registers its GC finalizer *before* claiming the slot via
   `transfer.claim_resource` and assigning the native pointer without further
   allocation or yielding.
+- Each endpoint reference unit is owned by **exactly one** of: a live finalized
+  wrapper, or an unconsumed in-flight native message entry. Adopting an entry
+  into a pre-finalized wrapper moves that unit; discarding an unconsumed packet
+  entry releases it natively; calling `close()` changes channel state only and
+  never decrements endpoint counts. Message bytes, wake targets, loop liveness,
+  and OS-thread retirement have separate lifetimes.
 - Endpoint hooks require an active packet encode/decode scope
-  (`transfer.encode_message` / `transfer.decode_message` and
-  `transfer.Packet.from_value` / `Packet:decode`, used by `Sender:send`,
+  (`transfer.encode_message` / `transfer.decode_message`, used by `Sender:send`,
   `Sender:try_send`, `thread.spawn*`, `Group:spawn*`, `Thread:cancel`, child
-  outcomes, and `async.PacketReceiver`). `TransferValue` and protobuf helpers
-  never manufacture a scope: endpoint hooks raise without a matching top encode
-  or decode scope. Opaque-hook and capture collaboration within an existing
-  packet may reuse its scope, but resulting index bytes do not become a reusable
-  ownership policy. Legacy `async.Receiver` and `lua.Lua:run*` have no packet
-  attachment transport.
+  outcomes, and `async.send` / `async.Receiver:wait`). `TransferValue` and
+  protobuf helpers never manufacture a scope: endpoint hooks raise without a
+  matching top encode or decode scope. Opaque-hook and capture collaboration
+  within an existing packet may reuse its scope, but resulting index bytes do
+  not become a reusable ownership policy. Independent `lua.Lua:run*` carriers
+  have no packet attachment transport.
   Authority belongs only to the exact top scope, in the matching direction,
   for the current Lua-thread/coroutine execution. Nested packet operations
   restore the enclosing scope on return/error; no older matching scope is
@@ -65,13 +70,10 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
 Choose the right primitive for the job:
 - **`async.channel<|T|>`** — single-state, in-memory cooperative Task queue (no
   serialization, same `lua_State`).
-- **`async.Receiver`** — lossy, coalescing cross-state notification slot for
-  attachment-free `async.TransferValue` policies (latest value wins). It does
-  not accept `transfer.Packet` owners.
-- **`async.PacketReceiver`** — lossy, coalescing cross-state latest-packet slot
-  that moves single-owner `transfer.Packet` capabilities (including packets
-  carrying `Sender<|T|>` / `Receiver<|T|>` attachments) and disposes
-  overwritten/unread packets natively.
+- **`async.Receiver`** — lossy, coalescing cross-state latest-value slot that
+  encodes transferable values (including `Sender<|T|>` / `Receiver<|T|>`
+  attachments) or explicit `async.TransferValue` policies into native packets,
+  decodes eagerly in `wait()`, and disposes overwritten/unread packets natively.
 - **`thread.channel<|T|>`** — lossless, bounded FIFO cross-thread MPMC stream
   with backpressure, graceful close/drain, and transferable `Sender<|T|>` /
   `Receiver<|T|>` endpoints.
@@ -330,19 +332,20 @@ for the complete signature table. The main entry points are:
   and `TransferValue` calls create none and reject resource hooks without one.
   Within packet-owned opaque hooks/capture conversion they can reuse the
   existing scope; the resulting index bytes own nothing and are not reusable
-  standalone policies. Legacy `async.Receiver` and `lua.Lua:run*` do not transport
-  packet attachments; use thread channels/spawn or `async.PacketReceiver`.
+  standalone policies. Standalone `TransferValue` policies and `lua.Lua:run*` do
+  not transport packet attachments; pass endpoints through thread channels/spawn
+  or `async.send` / `async.Receiver`.
 - **Native resource moves need explicit ownership**: automatic packet discard
   (`transfer.discard_message`) only releases registered packet resource-table
   entries (initially `thread.Sender` and `thread.Receiver`). Sending an
   `http.Exchange`, `http.UpgradedStream`, `websocket.Connection`,
   `net.Connection`, `ssl.Connection`, or a transferable `uv.tcp_t`/`uv.pipe_t`
-  through a thread channel or PacketReceiver uses manual payload bytes, not a
+  through a thread channel or `async.Receiver` uses manual payload bytes, not a
   packet disposer. Native discard never runs decoders. Recover using the owning
   type's documented adoption/close procedure, or its `discard_transfer_payload`
   helper where one exists. Files, io/os streams and SQLite Connection have no
   such helper. Stop producers and recover/drain handoffs before closing either
-  `thread.Receiver` or `async.PacketReceiver`. Follow the
+  `thread.Receiver` or `async.Receiver`. Follow the
   [networking handoff contract](../titan-networking/SKILL.md#native-connection-and-http-handoff)
   and [WebSocket disposal guidance](../titan-websocket/SKILL.md#transferring-native-sessions).
 - **`Thread:cancel` targets the child's root `Task`**: if a worker thread
