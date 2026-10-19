@@ -229,8 +229,10 @@ for the complete signature table. The main entry points are:
   valid until synchronous cancellation/unwind unlink completes. Registrars
   commit packet ownership in C before delivery can raise; immediate channel
   paths allocate no registrar closures/capture boxes, and slow paths add no
-  context userdata. Do not let that raw borrow escape the call or mistake the
-  traced endpoint for state-close protection.
+  context userdata. Titan code touches the cell only through a pointer local,
+  never as a by-value aggregate whose try-spill reload would roll back a
+  registrar's packet commit. Do not let that raw borrow escape the call or
+  mistake the traced endpoint for state-close protection.
   Requesting proxy cancellation while the proxy is not yet terminal, or dropping
   an unjoined handle (which best-effort detaches its token at native
   destruction), is not proof that the child retired; a terminal proxy status does

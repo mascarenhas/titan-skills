@@ -595,7 +595,10 @@ call. Channel code roots its endpoint and borrows one automatic C context plus
 embedded waiter in its stackful Task frame; cancellation/unwind unlinks before
 the frame can leave. A borrowed pointer is not state-close protection. Channel
 fast paths use no registrar closure or mutable capture box; do not replace these
-with a fresh per-wait userdata.
+with a fresh per-wait userdata. When a `defer`/`catch` reads an automatic
+context after the wait raises, use it only through a `foreign *T` pointer local:
+a by-value aggregate written in that protected body gets a longjmp-safe spill,
+and recovery reloads stale Titan-written bytes over the callbacks' raw writes.
 
 `prepare_native_retirement` strongly retains `owner` through callback return and
 committed readiness. That GC root is not a cross-state-close native pin:
