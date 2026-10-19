@@ -2123,8 +2123,9 @@ searching by analogy.
   and any callback `context` owner; keep them rooted through synchronous
   serialization and register heap cleanup immediately. Small writes double
   capacity from a 64-byte minimum. A single reservation larger than four
-  capacities grows to the needed length plus at most 256 bytes (overflow-checked
-  and truncated at `SIZE_MAX`). This bounded slack is independent of transfer's
+  capacities grows to the needed length plus at most 256 bytes; the slack is
+  overflow-checked and dropped at `SIZE_MAX` so the request stays at the exact
+  needed length. This bounded slack is independent of transfer's
   initial 64-byte metadata credit. Transfer still reserves actual metadata,
   alignment, and attachment entries before detachment and derives interior
   pointers only after growth; never add a sizing pass that replays a hook.
@@ -2343,9 +2344,10 @@ packet exactly.
 through synchronous callback completion; registers the matching heap cleanup;
 does not retain an interior pointer across growth; describes the 64-byte minimum,
 doubling for small writes, and needed length plus at most 256 bytes for a
-reservation exceeding four capacities, with checked/truncated slack near
-`SIZE_MAX`; recognizes one small allocation and one bulk growth for those two
-fields, not a second payload-sized realloc. Transfer's 64-byte initial metadata
+reservation exceeding four capacities, with an overflow-checked slack that
+falls back to the exact needed length near `SIZE_MAX`; recognizes one small
+allocation and one bulk growth for those two fields, not a second
+payload-sized realloc. Transfer's 64-byte initial metadata
 credit and exact pre-detach attachment-tail reservation remain distinct.
 Rejects replaying hooks in a sizing pass. Uses the public raw-buffer API for
 behavior coverage without private imports or production test hooks.
