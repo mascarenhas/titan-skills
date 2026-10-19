@@ -2121,12 +2121,15 @@ searching by analogy.
 * `titan/protobuf/native.h` and the raw-buffer collaboration entries in
   `titan.protobuf` — the caller owns the live buffer descriptor, heap storage,
   and any callback `context` owner; keep them rooted through synchronous
-  serialization and register heap cleanup immediately. Small writes double
-  capacity from a 64-byte minimum. A single reservation larger than four
-  capacities grows to `needed + max(256, needed / 8)` (division rounds down).
-  Slack is at most 12.5% of `needed` at or above 2,048 bytes, or 256 bytes for
+  serialization and register heap cleanup immediately. Small writes grow through
+  power-of-two capacities from a 64-byte minimum. A single reservation larger
+  than four capacities grows to `needed + max(256, needed / 8)` (division rounds
+  down). Slack is at most 12.5% of `needed` at or above 2,048 bytes, or 256 bytes for
   smaller bulk requests. If adding it would exceed `SIZE_MAX`, the request
-  stays at exactly `needed`. This proportional slack is independent of
+  stays at exactly `needed`. Normal growth after a bulk allocation starts
+  doubling from the largest power of two no greater than `max(capacity, 64)`,
+  rejoining that sequence unless doubling would overflow, when it requests
+  exactly `needed`. This proportional slack is independent of
   transfer's initial 64-byte metadata credit. Transfer still reserves actual
   metadata, alignment, and attachment entries before detachment and derives
   interior pointers only after growth; never add a sizing pass that replays a hook.
@@ -2344,8 +2347,11 @@ packet exactly.
 **Pass criteria:** keeps the buffer descriptor, storage, and context owner live
 through synchronous callback completion; registers the matching heap cleanup;
 does not retain an interior pointer across growth; describes the 64-byte minimum,
-doubling for small writes, and `needed + max(256, needed / 8)` (rounding down)
-for a reservation exceeding four capacities; bounds slack at 12.5% of `needed`
+power-of-two growth for small writes, and `needed + max(256, needed / 8)`
+(rounding down) for a reservation exceeding four capacities; explains how
+normal growth after a bulk allocation starts doubling from the largest power
+of two no greater than `max(capacity, 64)`, with an exact-need fallback if
+doubling would overflow; bounds slack at 12.5% of `needed`
 for requests of at least 2,048 bytes and 256 bytes for smaller bulk requests.
 If adding slack would exceed `SIZE_MAX`, the request is exactly `needed`.
 Recognizes one small allocation and one bulk growth for those two fields, not
