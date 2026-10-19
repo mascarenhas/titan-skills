@@ -1919,8 +1919,10 @@ to the language rules:
 - **Keep serialization single-pass and canonical.** Protobuf and transfer
   nested prefixes use minimal varint lengths; never size by replaying custom
   encoders or resource-attaching hooks. Their bounded backpatch scratch belongs
-  to automatic C storage in the synchronous root append call, not a per-packet
-  or GC allocation. Pass it explicitly, finish expansion before recording
+  to automatic C storage in the root append call, not a per-packet or GC
+  allocation. A coroutine yield may suspend that root; scratch stays valid on
+  its stack, and its address is referenced nowhere outside that call stack.
+  Pass it explicitly, finish expansion before recording
   packet/trailer offsets, and keep attachment slot indices unchanged when their
   payload bytes move. Beyond 32 openings in one outer nest, retain the eager
   fallback. A failed root append restores its starting buffer length without
