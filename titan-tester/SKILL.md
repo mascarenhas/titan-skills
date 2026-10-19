@@ -1712,6 +1712,9 @@ cleared mutable-address spill before status/error propagation, including setup
 and worker-entry failures. Status `0` leaves one rooted result, positive status
 one error, and negative status no new value. Keep ordinary error helpers
 owner-free; an ordinary body-local raw guard is not entry-safe.
+Captured locals cannot supply mutable pointer storage; keep consuming decode in
+its owning function (with `do ... catch` for expected failures), or use a
+by-value `foreign *Slot` pointer to an array cell.
 
 Exercise `run_with_cleanup`'s optional third argument through public behavior:
 require an unused/open/unbound same-Runtime `prepare_native_retirement`

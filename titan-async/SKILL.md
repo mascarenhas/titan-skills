@@ -206,11 +206,15 @@ helper takes no raw owner. Decode is a stateful protected Lua operation;
   raw local, disposes any overwritten unread packet natively via
   `transfer.discard_message`, and calls `uv_async_send`. Pre-exchange rejection
   (`NULL` handle, encoding error, or closed receiver) leaves the slot unchanged
-  and discards the encoded copy through the local guard, preserving the caller's
-  original value or `TransferValue` policy. Once the atomic exchange commits,
-  delivery ownership has moved to the slot even if the subsequent
-  `uv_async_send` notification raises `OperationError` (`"async.send"`): never
-  retry a committed send.
+  and discards any encoded copy through the local guard. Caller-owned endpoint
+  units and a retained `TransferValue` policy remain available, but a direct
+  manual-handoff hook may already have detached its resource during encoding;
+  rejection does not roll back hook side effects. If a manual handoff must be
+  recoverable after send rejection, construct and retain
+  `TransferValue.from_value(resource)` first and send that policy. Once the atomic
+  exchange commits, delivery ownership has moved to the slot even if the
+  subsequent `uv_async_send` notification raises `OperationError`
+  (`"async.send"`): never retry a committed send.
 - **Wake and eager wait (`Receiver:wait(): value`)**: `Receiver`'s `uv.async_t`
   callback only wakes the reserved reader (`Task:resume(token)`); it leaves the
   packet owned by the native slot. `wait()` reserves the single reader *before*

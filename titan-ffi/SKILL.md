@@ -1541,11 +1541,15 @@ a `uv.async_t`, a Titan record address to cast back, or a GC root.
   atomically replaces any unread slot packet, clears the caller's raw local,
   disposes the replaced packet via `transfer.discard_message`, and signals
   `uv_async_send`. Pre-exchange rejections (`NULL` handle, encoding error, or
-  closed receiver) leave the slot untouched and discard the encoded copy via the
-  local guard, preserving the caller's input; once the atomic exchange commits,
-  the send is committed even if the subsequent `uv_async_send` wake fails. Never
-  pass an `encode_message` pointer to raw `ffi.free`—use native
-  `discard_message` or protected slot-based `decode_message`.
+  closed receiver) leave the slot untouched and discard any encoded copy via the
+  local guard. Caller-owned endpoint units and a retained `TransferValue` policy
+  remain available, but a direct manual-handoff hook may already have detached
+  its resource during encoding; rejection does not roll back hook side effects.
+  For a manual handoff that must be recoverable after send rejection, construct
+  and retain `TransferValue.from_value(resource)` first and send that policy.
+  Once the atomic exchange commits, the send is committed even if the subsequent
+  `uv_async_send` wake fails. Never pass an `encode_message` pointer to raw
+  `ffi.free`—use native `discard_message` or protected slot-based `decode_message`.
 * `Receiver`'s libuv callback only wakes the reserved reader; the packet stays
   slot-owned until `Receiver:wait()` takes it into a guarded raw local and calls
   `transfer.decode_message(L, raw)` directly. `wait()` reserves the single
@@ -1566,6 +1570,10 @@ function raise_message_error(status: integer, failure: value)
 caller-owned slot on all outcomes, and returns normally. Status `0` leaves one
 semantic value, positive Lua status one error, and negative status no new value
 (`-2` invalid slot; `-3` stack reservation failure).
+
+Captured locals cannot supply mutable pointer storage; keep consuming decode in
+its owning function (with `do ... catch` for expected failures), or use a
+by-value `foreign *Slot` pointer to an array cell.
 
 The call must be direct at the actual guarded pointer local. Its normal return
 commits Titan's mutable-address spill before any raising ordinary operation;
