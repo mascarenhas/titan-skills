@@ -583,7 +583,8 @@ function wait_external_cleanup(
 `wait_external_native` requires a running Task and is an ordinary cancellable
 wait, not a native retirement capability. It roots `owner` and borrows `context`
 through return/unlink, replacing the pair of per-wait Titan registrar closures.
-Its C-only/nonraising/nonyielding callbacks run on the loop thread after yield:
+Its C-only/nonraising/nonyielding callbacks run on the loop thread (register
+after yield; unregister synchronously from cancellation or the Task's unwind):
 register returns `0` ready without admission, `1` linked with one retained
 target, or a negative rejection without a link/reference
 (`async.external_wait.register`). Unregister is synchronous, idempotent and
