@@ -33,14 +33,15 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
   occurrence** in the active packet's native resource table and serializes a
   4-byte little-endian packet-local slot index (`0xffffffff` is reserved
   invalid). Root, nested structural, and `TransferValue.from_value` /
-  `:to_value()` policy conversions (including closure captures, when the
-  userdata's metatable has no metatable) dispatch through the registered
-  `ResourceCodec` capability (`transfer.register_resource` /
+  `:to_value()` policy conversions (including closure captures) dispatch through
+  the registered `ResourceCodec` capability (`transfer.register_resource` /
   `protobuf.register_resource_codec`, keyed by canonical erased metatable
-  identity) before reflective hook lookup, while custom user hooks can still
-  call `to_transfer_payload` / `from_transfer_payload` (`transfer.attach_resource`
-  / `transfer.claim_resource`). Both reconstruction paths allocate the
-  destination wrapper with `native = nil` and register its GC finalizer *before*
+  identity) before reflective hook lookup. The direct userdata route in
+  `from_value` requires a metatable with no metatable of its own; `:to_value`
+  resolves the capability by initialized nominal name. Custom user hooks can
+  still call `to_transfer_payload` / `from_transfer_payload`
+  (`transfer.attach_resource` / `transfer.claim_resource`). Both reconstruction
+  paths allocate the destination wrapper with `native = nil` and register its GC finalizer *before*
   claiming the slot and assigning the native pointer without further allocation
   or yielding.
 - Each endpoint reference unit is owned by **exactly one** of: a live finalized

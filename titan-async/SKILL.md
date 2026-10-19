@@ -126,10 +126,12 @@ collectors. Pointer variants are borrowed and neither retain source objects
 nor synchronize shared memory. `TransferValue.from_value` / `:to_value` and
 protobuf helpers do not create a packet resource scope. `TransferValue.from_value`
 and `:to_value` dispatch registered `ResourceCodec` records (`thread.Sender` and
-`thread.Receiver`, when the userdata's metatable has no metatable) before
-reflective hooks while keeping the four-byte `is_record_payload` slot-index
-representation. Resource codecs and hooks raise without a matching exact-top
-scope; opaque-hook/capture work within an existing packet may reuse that scope
+`thread.Receiver`) before reflective hooks while keeping the four-byte
+`is_record_payload` slot-index representation. The direct userdata route in
+`from_value` requires a metatable with no metatable of its own; `:to_value`
+resolves the capability by initialized nominal name. Resource codecs and hooks
+raise without a matching exact-top scope; opaque-hook/capture work within an
+existing packet may reuse that scope
 (and native closure packet encode/decode carries its resolved scope through
 `protobuf.serialize_fields_to_buffer_with_context` and
 `protobuf.deserialize_fields_buffer_with_context`). Resulting index bytes still
