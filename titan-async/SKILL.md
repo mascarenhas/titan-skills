@@ -175,12 +175,15 @@ function claim_resource(
 Raw packet integrations require [`titan-ffi`](../titan-ffi/SKILL.md).
 `encode_message(candidate)` encodes any transferable Titan value or explicit
 `TransferValue` policy into a uniquely owned native packet
-(`titan_async_message`) under the current Lua execution's exact top encode
-scope, authorizing `attach_resource` for one retained endpoint per occurrence
-and a four-byte little-endian slot index (with committed resource entries stored
-in the aligned tail of the single packet allocation, and explicit scalar/nominal
-policies and opaque-hook roots allocated directly via `new_scalar_message` /
-`new_nominal_message` without staging a header copy). Scoped `encode_message`
+(`titan_async_message`). Scalars and explicit policies are classified before
+scope acquisition; these routes do not create attachment authority. Structural
+records/unions, registered resource roots, opaque-hook roots and Titan closures
+encode under the current Lua execution's exact top encode scope, authorizing
+`attach_resource` for one retained endpoint per occurrence and a four-byte
+little-endian slot index. Committed resource entries occupy the aligned tail
+of the single packet allocation. Explicit scalar/nominal policies and opaque-hook
+roots are allocated directly via `new_scalar_message` / `new_nominal_message`
+without staging a header copy. Scoped `encode_message`
 and nominal `decode_message` reuse finalized `ResourceScope` frames from a
 bounded state-local pool (where lexical retirement restores
 `resource_scopes[execution] = previous` and disposes unfinished native units
