@@ -2123,12 +2123,13 @@ searching by analogy.
   and any callback `context` owner; keep them rooted through synchronous
   serialization and register heap cleanup immediately. Small writes double
   capacity from a 64-byte minimum. A single reservation larger than four
-  capacities grows to the needed length plus at most 256 bytes; the slack is
-  overflow-checked and dropped at `SIZE_MAX` so the request stays at the exact
-  needed length. This bounded slack is independent of transfer's
-  initial 64-byte metadata credit. Transfer still reserves actual metadata,
-  alignment, and attachment entries before detachment and derives interior
-  pointers only after growth; never add a sizing pass that replays a hook.
+  capacities grows to `needed + max(256, needed / 8)` (division rounds down).
+  Slack is at most 12.5% of `needed` at or above 2,048 bytes, or 256 bytes for
+  smaller bulk requests. If adding it would exceed `SIZE_MAX`, the request
+  stays at exactly `needed`. This proportional slack is independent of
+  transfer's initial 64-byte metadata credit. Transfer still reserves actual
+  metadata, alignment, and attachment entries before detachment and derives
+  interior pointers only after growth; never add a sizing pass that replays a hook.
 
 ## Focused specs
 
@@ -2334,7 +2335,7 @@ entry, or equates every `foreign function` with no-Lua cleanup (for example,
 
 **Prompt:** A public `protobuf.serialize_fields_to_buffer` caller supplies a
 native buffer with a C-only grow callback and a rooted counter array as its
-`context`. It writes one 64 KiB byte field followed by a 192-byte byte field.
+`context`. It writes one 64 KiB byte field followed by a 4 KiB byte field.
 Explain the buffer/context lifetimes, the intended bulk allocation behavior,
 and how a stream of small writes differs. A draft stores an interior data
 pointer before encoding and runs resource-attaching encoders twice to size the
@@ -2343,11 +2344,12 @@ packet exactly.
 **Pass criteria:** keeps the buffer descriptor, storage, and context owner live
 through synchronous callback completion; registers the matching heap cleanup;
 does not retain an interior pointer across growth; describes the 64-byte minimum,
-doubling for small writes, and needed length plus at most 256 bytes for a
-reservation exceeding four capacities, with an overflow-checked slack that
-falls back to the exact needed length near `SIZE_MAX`; recognizes one small
-allocation and one bulk growth for those two fields, not a second
-payload-sized realloc. Transfer's 64-byte initial metadata
+doubling for small writes, and `needed + max(256, needed / 8)` (rounding down)
+for a reservation exceeding four capacities; bounds slack at 12.5% of `needed`
+for requests of at least 2,048 bytes and 256 bytes for smaller bulk requests.
+If adding slack would exceed `SIZE_MAX`, the request is exactly `needed`.
+Recognizes one small allocation and one bulk growth for those two fields, not
+a second payload-sized realloc. Transfer's 64-byte initial metadata
 credit and exact pre-detach attachment-tail reservation remain distinct.
 Rejects replaying hooks in a sizing pass. Uses the public raw-buffer API for
 behavior coverage without private imports or production test hooks.
