@@ -124,12 +124,19 @@ function TransferValue:to_value(): value
 Scalars retain their kinds and strings are copied byte-for-byte between
 collectors. Pointer variants are borrowed and neither retain source objects
 nor synchronize shared memory. `TransferValue.from_value` / `:to_value` and
-protobuf helpers do not create a packet resource scope. Resource hooks raise
-without a matching exact-top scope; opaque-hook/capture work within an existing
-packet may reuse that scope. Resulting index bytes still belong to that packet,
-not to a standalone reusable ownership policy. `lua.Lua` methods use this union
-but a separate carrier with no attachment table; there is no `lua.TransferValue`
-alias. Load `titan-ffi` for exact Lua mapping, pointer and worker lifetime rules.
+protobuf helpers do not create a packet resource scope. `TransferValue.from_value`
+and `:to_value` dispatch registered `ResourceCodec` records (`thread.Sender` and
+`thread.Receiver`, when the userdata's metatable has no metatable) before
+reflective hooks while keeping the four-byte `is_record_payload` slot-index
+representation. Resource codecs and hooks raise without a matching exact-top
+scope; opaque-hook/capture work within an existing packet may reuse that scope
+(and native closure packet encode/decode carries its resolved scope through
+`protobuf.serialize_fields_to_buffer_with_context` and
+`protobuf.deserialize_fields_buffer_with_context`). Resulting index bytes still
+belong to that packet, not to a standalone reusable ownership policy. `lua.Lua`
+methods use this union but a separate carrier with no attachment table; there is
+no `lua.TransferValue` alias. Load `titan-ffi` for exact Lua mapping, pointer
+and worker lifetime rules.
 
 ### Cross-state receivers and native packet ownership
 
@@ -168,15 +175,28 @@ Raw packet integrations require [`titan-ffi`](../titan-ffi/SKILL.md).
 `TransferValue` policy into a uniquely owned native packet
 (`titan_async_message`) under the current Lua execution's exact top encode
 scope, authorizing `attach_resource` for one retained endpoint per occurrence
-and a four-byte little-endian slot index. Guard the returned raw pointer local
-immediately with `defer transfer.discard_message(raw)`, and never pass an
-`encode_message` packet to raw `ffi.free`.
+and a four-byte little-endian slot index (with committed resource entries stored
+in the aligned tail of the single packet allocation, and explicit scalar/nominal
+policies and opaque-hook roots allocated directly via `new_scalar_message` /
+`new_nominal_message` without staging a header copy). Scoped `encode_message`
+and nominal `decode_message` reuse finalized `ResourceScope` frames from a
+bounded state-local pool (where lexical retirement restores
+`resource_scopes[execution] = previous` and disposes unfinished native units
+before pooling, while abandoned active frames are never pooled). Guard the
+returned raw pointer local immediately with `defer transfer.discard_message(raw)`,
+and never pass an `encode_message` packet to raw `ffi.free`.
 
 `decode_message(state, slot)` requires a live Lua state and consumes and clears
 a valid caller-owned `void *` slot on success or failure, including setup/worker
-entry errors. It returns normally: `0` leaves one semantic value on the supplied
-stack; positive Lua status leaves one error; negative status leaves no new
-value (`-2` invalid slot, `-3` stack reservation failure).
+entry errors. Allocation-free scalars decode in C without `lua_pcallk`;
+protected `STRING` and malformed `NULL`-`FUNCTION` packets run inside
+`decode_message_worker` without acquiring a `ResourceScope`, keeping the packet
+in `slot[0]` until outer `decode_message` clears and disposes it via
+`discard_message` after `lua_pcallk`; only nominal packets acquire a decode
+`ResourceScope` and move `slot[0]` into the scope. `decode_message` returns
+normally: `0` leaves one semantic value on the supplied stack; positive Lua
+status leaves one error; negative status leaves no new value (`-2` invalid slot,
+`-3` stack reservation failure).
 
 Call `decode_message` directly at the actual guarded pointer local, so Titan
 commits the mutable-address spill before any ordinary error propagation. Never

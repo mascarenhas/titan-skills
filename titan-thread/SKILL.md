@@ -30,13 +30,19 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
 - Passing a `Sender<|T|>` or `Receiver<|T|>` (at the root, nested in public
   records/unions or their Array fields, inside opaque `to_transfer_payload`
   hooks, or captured in a Titan closure) **retains a new endpoint reference per
-  occurrence** in the active packet's native resource table
-  (`transfer.attach_resource`) and serializes a 4-byte little-endian
-  packet-local slot index (`0xffffffff` is reserved invalid). Reconstruction
-  (`from_transfer_payload`) allocates the destination wrapper with `native = nil`
-  and registers its GC finalizer *before* claiming the slot via
-  `transfer.claim_resource` and assigning the native pointer without further
-  allocation or yielding.
+  occurrence** in the active packet's native resource table and serializes a
+  4-byte little-endian packet-local slot index (`0xffffffff` is reserved
+  invalid). Root, nested structural, and `TransferValue.from_value` /
+  `:to_value()` policy conversions (including closure captures, when the
+  userdata's metatable has no metatable) dispatch through the registered
+  `ResourceCodec` capability (`transfer.register_resource` /
+  `protobuf.register_resource_codec`, keyed by canonical erased metatable
+  identity) before reflective hook lookup, while custom user hooks can still
+  call `to_transfer_payload` / `from_transfer_payload` (`transfer.attach_resource`
+  / `transfer.claim_resource`). Both reconstruction paths allocate the
+  destination wrapper with `native = nil` and register its GC finalizer *before*
+  claiming the slot and assigning the native pointer without further allocation
+  or yielding.
 - Each endpoint reference unit is owned by **exactly one** of: a live finalized
   wrapper, or an unconsumed in-flight native message entry. Adopting an entry
   into a pre-finalized wrapper moves that unit; discarding an unconsumed packet
@@ -53,19 +59,35 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
   not become a reusable ownership policy. Independent `lua.Lua:run*` carriers
   have no packet attachment transport.
   Authority belongs only to the exact top scope, in the matching direction,
-  for the current Lua-thread/coroutine execution. Nested packet operations
-  restore the enclosing scope on return/error; no older matching scope is
-  searched. Another Task or child Coroutine inherits no permission. Custom
-  `to_transfer_payload` and `from_transfer_payload` hooks remain synchronous
-  and **must not yield**; execution isolation is not permission to broaden that
-  hook contract.
+  for the current Lua-thread/coroutine execution. `ResourceScope` frames are
+  acquired from and retired to a bounded state-local pool (independent of
+  Task/coroutine identity so Task-per-message callers reuse retired frames),
+   while `execution` and the enclosing `previous` frame stay in lexical locals
+  and `resource_scopes[execution]` so idle pooled frames hold no authority or
+  thread references and abandoned active frames are never pooled (their GC
+  finalizer reclaims unfinished scratch units and decode packets natively).
+  Structural record/union and closure envelope codecs receive the packet's
+  already-resolved `ResourceScope` (`serialize_inspected_*_to_buffer`,
+  `deserialize_nominal_buffer_with_context`,
+  `serialize_fields_to_buffer_with_context`, and
+  `deserialize_fields_buffer_with_context`), and explicit nominal policies and
+  opaque custom-hook roots allocate their single heap packet directly
+  (`new_nominal_message`, with committed attachments stored in the aligned
+  packet tail). Nested packet operations restore the enclosing scope on
+  return/error; no older matching scope is searched. Another Task or child
+  Coroutine inherits no permission. Custom `to_transfer_payload` and
+  `from_transfer_payload` hooks remain synchronous and **must not yield**;
+  execution isolation is not permission to broaden that hook contract.
 - Claim validation checks exact 4-byte index width, active packet bounds,
   expected release callback (`Sender` cannot claim a `Receiver` slot or vice
-  versa), and unclaimed state before touching any native pointer; duplicate
-  claims raise `"transfer: resource attachment was already claimed"`. Index
-  bytes are not global anti-replay tokens: the same number can identify a
-  different valid entry in another packet. They cannot select an arbitrary
-  native pointer or adopt one current entry twice.
+  versa), and unclaimed state before touching any native pointer; a claimed
+  entry clears its resource pointer to `nil` as the consumed sentinel while
+  retaining its release callback so claiming an already-consumed slot with the
+  wrong resource kind still raises `"transfer: resource attachment kind mismatch"`
+  before `"transfer: resource attachment was already claimed"`. Index bytes are
+  not global anti-replay tokens: the same number can identify a different valid
+  entry in another packet. They cannot select an arbitrary native pointer or
+  adopt one current entry twice.
 
 Choose the right primitive for the job:
 - **`async.channel<|T|>`** — single-state, in-memory cooperative Task queue (no
