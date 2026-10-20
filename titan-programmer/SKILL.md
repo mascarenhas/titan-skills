@@ -1917,8 +1917,8 @@ to the language rules:
   the inert wrapper (`native = nil`) and register `gc.finalizable` *before*
   claiming and assigning the native pointer.
 - **Keep hot finalizer registration allocation-free.** `gc.finalizable` erases
-  its callback to `function (value): ()`; a concrete record or Map callback
-  gets a fresh callable-adjustment closure on every call. For an owner constructed per
+  its callback to `function (value): ()`; a callback whose parameter type is
+  not exactly `value` gets a fresh callable-adjustment closure on every call. For an owner constructed per
   message or per clone, declare the finalizer `function (value): ()`, project
   to the owner inside it, and call `gc.finalizable<|value|>(owner, finalizer)`,
   as `titan.thread` endpoint wrappers do.
