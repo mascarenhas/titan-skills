@@ -345,8 +345,8 @@ Review a cross-thread worker draft that:
 5. uses `uv.mutex_t.lock_function()`, passes `mutex:borrow()` to
    `uv.native_mutex_destroy`, and holds a `uv.mutex_t` across `timer.sleep`; and
 6. wraps a raw `void *` packet slot in an ordinary helper before calling
-   `transfer.decode_message`, or retries `async.send` after a post-exchange
-   notification error.
+   `transfer.decode_message`, assigns the guarded raw local again after taking
+   the packet, or retries `async.send` after a post-exchange notification error.
 
 Require corrected code and exact explanations of:
 - packet-scoped resource attachment (`transfer.encode_message` /
@@ -369,12 +369,14 @@ Require corrected code and exact explanations of:
   exchange before notification, reserves the single reader before slot
   inspection, and decodes eagerly in `wait()` with `nil`/`false` as data and
   consuming decode errors) versus lossless bounded FIFO `thread.channel<|T|>`;
-- raw foreign `decode_message(state, slot): int` consuming/clearing a true
-  caller-owned `void *` slot and returning normally, so the direct call commits
-  its mutable-address spill before error propagation; status `0` leaves one
-  result, positive Lua status one error, negative setup status no new value;
-  root and restore the stack, then propagate only status/error through
-  `raise_message_error`, never a fallible ordinary raw-slot wrapper;
+- ordinary `decode_message(slot: foreign *(*void)): value` taking the actual
+  guarded `foreign *void` local (`&raw`), consuming the packet and clearing the
+  slot before return or before any error propagates (one native `catch`, bare
+  re-raise preserving the original traceback, C-only scalar fast path first);
+  only its entry preamble can fail before ownership is taken, leaving the packet
+  to the caller's `defer discard_message(raw)`; the caller never writes that
+  local again in the guarded region, so catch recovery cannot reload a stale
+  owner, and never wraps the slot in a fallible ordinary helper;
 - native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
   no-Lua endpoint release callbacks surviving source-state close, last-Receiver
   drain pinning, and why manual HTTP/TLS/WebSocket/TCP handoffs still need

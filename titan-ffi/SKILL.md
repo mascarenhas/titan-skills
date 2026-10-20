@@ -1563,43 +1563,44 @@ a `uv.async_t`, a Titan record address to cast back, or a GC root.
   and retain `TransferValue.from_value(resource)` first and send that policy.
   Once the atomic exchange commits, the send is committed even if the subsequent
   `uv_async_send` wake fails. Never pass an `encode_message` pointer to raw
-  `ffi.free`—use native `discard_message` or protected slot-based `decode_message`.
+  `ffi.free`—use native `discard_message` or consuming slot-based `decode_message`.
 * `Receiver`'s libuv callback only wakes the reserved reader; the packet stays
-  slot-owned until `Receiver:wait()` takes it into a guarded raw local and calls
-  `transfer.decode_message(L, raw)` directly. `wait()` reserves the single
+  slot-owned until `Receiver:wait()` takes it into a fresh raw local, guards it,
+  and returns `transfer.decode_message(raw)` directly. `wait()` reserves the single
   reader before inspecting the slot, returns `nil` and `false` as ordinary data,
   and consumes the packet on decode errors with no lazy retry. `is_lua_state`
   and `is_pointer` policies both decode to lightuserdata, requiring an explicit
   unsafe `as` cast to recover a typed pointer. See the
   [receiver ownership rules](../titan-async/SKILL.md#cross-state-receivers-and-native-packet-ownership).
 
-For audited native packet integrations, use this entry and error helper:
+For audited native packet integrations, use this ordinary consuming decoder:
 
 ```text
-foreign function decode_message(state: *lua_State, slot: *(*void)): int
-function raise_message_error(status: integer, failure: value)
+function decode_message(slot: foreign *(*void)): value
 ```
 
-`decode_message(state, slot)` requires a live Lua state, consumes/clears a valid
-caller-owned slot on all outcomes, and returns normally. Status `0` leaves one
-semantic value, positive Lua status one error, and negative status no new value
-(`-2` invalid slot; `-3` stack reservation failure).
+`decode_message(slot)` decodes into the current state and returns the value.
+Once its body runs it consumes the packet and clears the slot before returning
+or before any error propagates with its original traceback; only its own entry
+preamble (Lua frame reservation) can fail first, leaving the packet for the
+caller's guard. A nil slot raises `"transfer: invalid packet owner slot"`; a
+failed scalar result reservation clears/disposes, then raises.
 
-Captured locals cannot supply mutable pointer storage; keep consuming decode in
-its owning function (with `do ... catch` for expected failures), or use a
-by-value `foreign *Slot` pointer to an array cell.
+Pass the actual guarded `foreign *void` local: an exact pointer local supplied
+to the `foreign *(*void)` parameter passes `&local`. Captured locals cannot
+supply mutable pointer storage; keep consuming decode in its owning function
+(with `do ... catch` for expected failures), or pass a by-value `foreign *Slot`
+pointer to an array cell.
 
-The call must be direct at the actual guarded pointer local. Its normal return
-commits Titan's mutable-address spill before any raising ordinary operation;
-longjmp after changing only the spill would leave the caller owning stale
-storage. Never pass the raw slot through an ordinary helper whose generated
-entry can fail first. In the same native-call-owning function, copy a
-nonnegative status's top value/error into a traced `value` before entering any
-ordinary helper: its preamble can change the stack top. Use nil for negative
-status, preserve stack restoration, and only then call
-`raise_message_error(status, rooted_error_or_nil)` when `status ~= 0`. That
-ordinary helper takes no raw owner. Protected stateful decode is not a no-Lua
-release callback; `discard_message` is C-only native disposal.
+Guard the local with `defer transfer.discard_message(raw)` and never write it
+again inside that guarded region, by assignment or a mutating C out-argument.
+Ordinary calls create no spill for the local, so catch recovery reads decode's
+clear from memory; any Titan write would give it a spill that recovery reloads
+as a stale owner. Take packets from C out-arguments before installing the
+guard. Never pass the raw slot through an ordinary forwarding helper. Lua code
+cannot call `decode_message` (raw C pointer parameters have no dynamic Lua
+coercion). Stateful decode is not a no-Lua release callback; `discard_message`
+is C-only native disposal.
 
 Receiver construction can run outside a destination-state Task during a
 `Lua:run` or first `Lua:run_async` bootstrap; `Receiver:wait` needs a Task in
@@ -2128,10 +2129,10 @@ searching by analogy.
 * `titan/transfer.titan` and `titan/thread/*.titan` — C-ABI `foreign function`
   entries such as `discard_message`, `copy_message`, and
   `channel_retain_*` / `channel_release_*` operate only on explicit native data
-  and do not require Lua or a Runtime. In contrast, `transfer_load_module` and
-  `decode_message` use a live Lua state through protected stack/registry
-  operations; a foreign declaration alone never proves state-independent
-  cleanup.
+  and do not require Lua or a Runtime. In contrast, foreign
+  `transfer_load_module` uses a live Lua state through protected stack/registry
+  operations, and ordinary `decode_message` runs Titan code in its caller's
+  state; a foreign declaration alone never proves state-independent cleanup.
 * `titan/protobuf/native.h` and the raw-buffer collaboration entries in
   `titan.protobuf` — the caller owns the live buffer descriptor, heap storage,
   and any callback `context` owner; keep them rooted through synchronous

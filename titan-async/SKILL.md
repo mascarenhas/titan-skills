@@ -159,10 +159,9 @@ is:
 
 ```text
 function encode_message(candidate: value): foreign *void
-foreign function decode_message(state: *lua_State, slot: *(*void)): int
+function decode_message(slot: foreign *(*void)): value
 foreign function discard_message(raw: *void): void
 foreign function copy_message(raw: const *void): *void
-function raise_message_error(status: integer, failure: value)
 function attach_resource(
     resource: foreign *void,
     retain: foreign function (*void): void,
@@ -191,29 +190,28 @@ before pooling, while abandoned active frames are never pooled). Guard the
 returned raw pointer local immediately with `defer transfer.discard_message(raw)`,
 and never pass an `encode_message` packet to raw `ffi.free`.
 
-`decode_message(state, slot)` requires a live Lua state and consumes and clears
-a valid caller-owned `void *` slot on success or failure, including setup/worker
-entry errors. Allocation-free scalars decode in C without `lua_pcallk`;
-protected `STRING` and malformed `NULL`-`FUNCTION` packets run inside
-`decode_message_worker` without acquiring a `ResourceScope`, keeping the packet
-in `slot[0]` until outer `decode_message` clears and disposes it via
-`discard_message` after `lua_pcallk`; only nominal packets acquire a decode
-`ResourceScope` and move `slot[0]` into the scope. `decode_message` returns
-normally: `0` leaves one semantic value on the supplied stack; positive Lua
-status leaves one error; negative status leaves no new value (`-2` invalid slot,
-`-3` stack reservation failure).
+`decode_message(slot)` is an ordinary Titan function that decodes into the
+current state and returns the value. Once its body runs it consumes the packet
+and clears the caller's slot before returning or before any error propagates;
+only its own entry preamble (Lua frame reservation) can fail first, leaving the
+packet for the caller's guard. Allocation-free scalars reserve one result slot
+without `longjmp` and decode in C with no protected region; `STRING` and
+malformed `NULL`-`FUNCTION` packets run inside `decode_message_worker` without
+acquiring a `ResourceScope` (strings clear and dispose after copying); only
+nominal packets acquire a decode `ResourceScope` and move `slot[0]` into it.
+One native `catch` clears `slot[0]`, disposes any residual packet via
+`discard_message`, and bare-re-raises with the original traceback; never
+emulate this with Lua `pcall` or a status-code protocol.
 
-Call `decode_message` directly at the actual guarded pointer local, so Titan
-commits the mutable-address spill before any ordinary error propagation. Never
-wrap the raw slot in an ordinary helper that can fail at entry, or rethrow from
-the foreign boundary before the cleared local is committed. In that same
-function, copy the stack result or positive-status error from the Lua stack into
-a traced `value` before entering any ordinary helper, whose preamble can change
-the stack top; use nil for negative status. Snapshot/restore the stack and root
-results before restoration. Only then call
-`raise_message_error(status, rooted_error_or_nil)` when `status ~= 0`. The
-helper takes no raw owner. Decode is a stateful protected Lua operation;
-`discard_message` is C-only native disposal.
+Take the packet into a real `foreign *void` local, guard it immediately with
+`defer transfer.discard_message(raw)`, and pass that exact local directly
+(`transfer.decode_message(raw)` passes `&raw`). Never write the local again
+inside the guarded region, by assignment or a mutating C out-argument: catch
+recovery reloads only Titan-written spilled locals, so the deferred discard
+would see a stale owner. Take packets from C out-arguments before the guard
+(as `Receiver:wait` does), and never wrap the raw slot in an ordinary
+forwarding helper. Lua code cannot call `decode_message`. Decode is a stateful
+Lua operation; `discard_message` is C-only native disposal.
 
 - **`Receiver` coalesces to the latest value (never a FIFO queue).** For
   lossless, bounded FIFO cross-thread streams with backpressure, use
@@ -244,8 +242,8 @@ helper takes no raw owner. Decode is a stateful protected Lua operation;
   callback only wakes the reserved reader (`Task:resume(token)`); it leaves the
   packet owned by the native slot. `wait()` reserves the single reader *before*
   inspecting the slot (rejecting a second waiter with
-  `"receiver already has a waiting reader"`), takes the packet into a guarded
-  raw local in one C interval, and calls `transfer.decode_message(L, raw)`
+  `"receiver already has a waiting reader"`), takes the packet into a fresh raw
+  local in one C interval, guards it, and returns `transfer.decode_message(raw)`
   directly. `nil` and `false` return as ordinary data. Decode failures consume
   the packet and raise from `wait()` with no lazy retry. `is_lua_state` and
   `is_pointer` policies both arrive as lightuserdata (recovering a typed pointer

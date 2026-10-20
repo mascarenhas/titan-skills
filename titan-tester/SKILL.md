@@ -1706,15 +1706,19 @@ behavior in `async.tests`, `thread.tests`, and `uv.public_tests`; use only
 test-owned failure fixtures. Check native `discard_message` without a Runtime
 and after source-state close, plus `Receiver` overwrite and close disposal: all
 must release unclaimed attachments with zero decoder/module-loader calls.
-Raw decode regressions use a real uniquely owned `void *` slot passed directly
-to foreign `decode_message(state, slot): int`. Check normal return commits the
-cleared mutable-address spill before status/error propagation, including setup
-and worker-entry failures. Status `0` leaves one rooted result, positive status
-one error, and negative status no new value. Keep ordinary error helpers
-owner-free; an ordinary body-local raw guard is not entry-safe.
+Raw decode regressions take a real uniquely owned packet into a `foreign *void`
+local guarded by `defer transfer.discard_message(raw)` and call
+`transfer.decode_message(raw)` directly, catching expected failures with
+`do ... catch`. Check the local is nil after success and after decoder, claim,
+partial-claim, nested-scope, module-load, OOM, and scalar-reservation errors,
+with unclaimed attachments released before GC. Pre-reserve the Lua stack before
+arming an allocator fault so it lands inside decode's body rather than its
+entry preamble, which leaves the packet to the guard. Never write the guarded
+local again inside its region (a spilled stale owner would double-discard).
 Captured locals cannot supply mutable pointer storage; keep consuming decode in
-its owning function (with `do ... catch` for expected failures), or use a
-by-value `foreign *Slot` pointer to an array cell.
+its owning function, or use a by-value `foreign *Slot` pointer to an array
+cell. Lua code in an independent state cannot call `decode_message`; use an
+ordinary test-support entry that asserts the borrowed lightuserdata slot.
 Attachment-count cases that must cross the scope's inline scratch, first heap
 spill, and spill growth derive their counts from
 `TITAN_TRANSFER_INLINE_RESOURCES` (`transfer_native.h`) instead of literals,
