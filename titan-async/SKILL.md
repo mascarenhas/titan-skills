@@ -276,7 +276,19 @@ Lua operation; `discard_message` is C-only native disposal.
   `Receiver` and drive the owning loop to drain native close before releasing
   roots or calling `Lua:close`. Use the
   [complete standalone example](../../../doc/language/standard-library-lua.md#two-phase-receiver-bootstrap)
-  for two-phase setup and `await_cleanup` worker draining.
+  for two-phase setup and `await_cleanup` worker draining. If a state is
+  closed with an unretired Runtime anyway, its finalizer closes the remaining
+  handles and the loop through public `uv.loop_abandon`, without delivering any
+  user callback (even an already-requested close callback), resuming Tasks,
+  running domain unregister functions or notifying close listeners. Native
+  owners captured by callbacks may already have been finalized; merely catching
+  callback errors cannot make dispatch safe. UV clears callback slots once and
+  keeps only internal native retirement handlers. Keep the Runtime active,
+  closing and driving until loop close succeeds, so admission and recursive
+  `async.loop` remain closed. Ordinary GC
+  cannot finalize the module-rooted active Runtime; retired Runtime finalizers
+  are inert even while a newer Runtime is active. This leak-free fallback is not
+  a substitute for explicit teardown order.
 
 The underlying public data is:
 
