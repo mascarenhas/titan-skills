@@ -207,13 +207,14 @@ Give a real `foreign *void` local its packet in its own declaration (or through
 one C out-argument call, as `Receiver:wait` does), guard it immediately with
 `defer transfer.discard_message(raw)`, and pass that exact local directly
 (`transfer.decode_message(raw)` passes `&raw`). Recovery-sensitive
-address-exposed non-GC scalars use the actual volatile local as their single
-home: a decoder's clear is visible to catch/deferred cleanup even when it
-raises without returning. Earlier protected assignments do not leave a stale
-spill that recovery can restore. This is a supported GCC/Clang guarantee
-(including Windows Clang/MSYS2), relying on escaped stores reaching the
-volatile home before an opaque raise. Unqualified callee access retains the
-ISO C 6.7.3p6 caveat, not a strict ISO-C promise; see
+non-GC scalars whose mutable address is taken use one volatile home plus a
+declaration-time compiler escape barrier, so an indirect clear before an
+opaque raise is visible to catch/deferred cleanup. Earlier protected
+assignments leave no stale spill. The barrier preserves the home even if an
+ordinary callee is inlined; volatility alone is insufficient. Decode itself
+contains `catch`/`setjmp` and supported GCC/Clang do not inline it, including
+with Linux LTO. This supported-toolchain guarantee includes Windows
+Clang/MSYS2 but retains the ISO C 6.7.3p6 unqualified-access caveat; see
 [recovery storage and LTO](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
 Never wrap the raw slot in an ordinary forwarding helper: its own entry can
 fail before decode takes ownership.

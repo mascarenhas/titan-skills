@@ -1593,19 +1593,20 @@ supply mutable pointer storage; keep consuming decode in its owning function
 pointer to an array cell.
 
 Guard the local immediately after taking ownership with
-`defer transfer.discard_message(raw)`. Recovery-sensitive address-exposed
-non-GC scalar locals/parameters have one genuinely volatile C home, not a
-separate snapshot. Writes through their contextual mutable address are visible
-after a callee raises without returning, including when an earlier protected
-assignment already made that declaration recovery-sensitive. Decode therefore
-clears the storage that deferred cleanup reads. This is a supported GCC/Clang
-implementation guarantee (including Windows Clang/MSYS2): escaped stores
-reach the volatile home before the opaque raise. Unqualified callee access
-has the ISO C 6.7.3p6 caveat; production Titan LTO can inline callees while the
-default non-LTO Lua error machinery stays opaque. See
-[recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
-This does not change aggregate byte-spill or untracked-alias/asynchronous C
-mutation rules.
+`defer transfer.discard_message(raw)`. Recovery-sensitive non-GC scalars whose
+mutable C address is taken have one volatile C home plus a declaration-time
+compiler escape barrier, not a separate snapshot. The empty GNU extended asm
+keeps that home escaped if an ordinary callee is inlined; volatility alone is
+insufficient. Indirect writes before an opaque raise remain visible to catch
+and deferred cleanup, including after an earlier protected assignment.
+`decode_message` itself contains a `catch`/`setjmp` and supported GCC/Clang do
+not inline it, including with Linux LTO. This is a supported-toolchain
+guarantee (including Windows Clang/MSYS2), with the ISO C 6.7.3p6 caveat for
+unqualified access to a volatile object, not strict ISO-C safety. See
+[recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills)
+for the barrier/LTO assumptions and the separate known limitation: normally
+returning ordinary Titan callees do not commit aggregate out-argument byte
+spills. Untracked-alias/asynchronous C mutation remains outside the guarantee.
 Never pass the raw slot through an ordinary forwarding helper. Lua code cannot
 call `decode_message` (raw C pointer parameters have no dynamic Lua
 coercion). Stateful decode is not a no-Lua release callback; `discard_message`

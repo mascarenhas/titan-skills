@@ -1715,15 +1715,22 @@ with unclaimed attachments released before GC. Pre-reserve the Lua stack before
 arming an allocator fault so it lands inside decode's body rather than its
 entry preamble, which leaves the packet to the guard. Cover a local assigned
 in an earlier protected region as well as a packet acquired in its own
-declaration. Address-exposed recovery-sensitive non-GC scalars have one
-volatile home; a decoder that clears then raises must leave both catch and
-the deferred guard seeing nil, never a stale spill snapshot. Exercise this in
-production/optimized builds, not just validation. Cover `async.Receiver:wait`
-decode failures as well as the thread receive paths.
-This is a supported GCC/Clang implementation guarantee (Windows Clang/MSYS2
-included), not strict ISO-C safety: unqualified callee access has the ISO C
-6.7.3p6 caveat. Keep optimized/LTO coverage of escaped stores before opaque
-raises; see [recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
+declaration. Recovery-sensitive non-GC scalars whose mutable C address is
+taken have one volatile home plus a declaration-time compiler escape barrier;
+a decoder that clears then raises must leave catch and the guard seeing nil,
+never a stale spill. Decode's own `catch`/`setjmp` prevents inlining by
+supported GCC/Clang, including under Linux LTO: native decode coverage is not
+an inlining test. Separately exercise ordinary inlinable scalar callees at
+`-O2`/`-O3`, with no normal-path read: write through the address, then raise
+from a checked return conversion, while the protected body returns directly.
+This terminal error shape exposes GCC's dead-store deletion without a barrier.
+Also cover explicit `raise`, and check declaration barriers on locals, named
+parameters and lambda parameters. Volatility alone is insufficient.
+Cover production/optimized builds and `async.Receiver:wait`,
+not just validation/thread receives. This supported GCC/Clang guarantee
+(including Windows Clang/MSYS2) retains the ISO C 6.7.3p6 unqualified-access
+caveat, not strict ISO-C safety; see
+[recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
 Captured locals cannot supply mutable pointer storage; keep consuming decode in
 its owning function, or use a by-value `foreign *Slot` pointer to an array
 cell. Lua code in an independent state cannot call `decode_message`; use an

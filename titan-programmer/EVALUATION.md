@@ -376,14 +376,21 @@ Require corrected code and exact explanations of:
   slot before return or before any error propagates (one native `catch`, bare
   re-raise preserving the original traceback, C-only scalar fast path first);
   only its entry preamble can fail before ownership is taken, leaving the packet
-  to the caller's immediate `defer discard_message(raw)`; address-exposed
-  recovery-sensitive non-GC scalars have a single genuinely volatile home, so
-  decode's clear is visible even if it raises without returning or the local
-  was assigned in an earlier protected region. This is a supported GCC/Clang
-  (including Windows Clang/MSYS2) implementation guarantee: escaped stores
-  reach the home before an opaque raise, including with production Titan LTO;
-  unqualified access retains the ISO C 6.7.3p6 caveat, not strict ISO-C safety.
-  The caller never wraps the slot in a fallible ordinary helper;
+  to the caller's immediate `defer discard_message(raw)`; recovery-sensitive
+  non-GC scalars whose mutable C address is taken have one volatile home plus
+  a declaration-time compiler escape barrier, so decode's clear remains
+  visible even after an earlier protected assignment. The barrier keeps the
+  home escaped when ordinary callees are inlined; volatility alone is
+  insufficient. Decode's own `catch`/`setjmp` prevents supported GCC/Clang
+  inlining, including under Linux LTO. This implementation guarantee includes
+  Windows Clang/MSYS2, with the ISO C 6.7.3p6 caveat for unqualified access,
+  not strict ISO-C safety. The caller never wraps the slot in a fallible
+  ordinary helper;
+- the scalar guarantee does not extend to aggregate byte spills: a normally
+  returning ordinary Titan callee currently does not commit a mutable aggregate
+  out-argument, so recovery can restore stale bytes if another protected
+  assignment made that object spill-tracked. Treat this as a known limitation,
+  not as aggregate coverage supplied by the scalar tests;
 - native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
   no-Lua endpoint release callbacks surviving source-state close, last-Receiver
   drain pinning, and why manual HTTP/TLS/WebSocket/TCP handoffs still need
