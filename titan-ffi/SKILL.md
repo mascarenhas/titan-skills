@@ -641,6 +641,17 @@ For an API-documented extended borrow into an owner, record, Array, Map, union,
 Interface, or function, keep the original Titan value reachable for the whole
 borrow. Retaining only the pointer does not retain the GC object.
 
+Compact byte decoders can retain a traced buffer owner beside native offsets
+instead of allocating one nominal object per field. `titan.protobuf` embeds its
+single directory entry, spills larger directories into counted owned C arrays,
+and keeps merge strings on the owning `Message`; raw-buffer callers still own
+their complete synchronous borrow. Entry pointers borrow that directory too:
+finish growth before exposing them, and retain the `Message` across nested
+decoding, custom hooks, and collection. Native offset/index arrays contain no GC
+references and need no finalizer. See the paired
+[`protobuf implementation`](../../../doc/implementation/protobuf-library.md#decoding)
+and [public contract](../../../doc/language/standard-library-protobuf.md#wire-mapping).
+
 The ordinary public `string -> char *` / `void *` contract remains call-only.
 Application code should make the native API copy the bytes or allocate an
 explicit native owner rather than retaining Titan's internal string pointer.
