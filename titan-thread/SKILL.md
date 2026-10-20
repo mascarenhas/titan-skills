@@ -67,6 +67,11 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
   and `resource_scopes[execution]` so idle pooled frames hold no authority or
   thread references and abandoned active frames are never pooled (their GC
   finalizer reclaims unfinished scratch units and decode packets natively).
+  A state-wide installed-frame count lets lookups answer "no scope" without
+  resolving the execution when it is zero; each entry point counts before
+  registering its retiring `defer`, so the count can only over-estimate (an
+  abandoned frame keeps it positive). Treat it purely as a fast negative: a
+  positive count never authorizes anything, and the exact-top lookup still runs.
   Structural record/union and closure envelope codecs receive the packet's
   already-resolved `ResourceScope` (`serialize_inspected_*_to_buffer`,
   `deserialize_nominal_buffer_with_context`,
