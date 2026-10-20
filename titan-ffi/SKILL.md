@@ -2139,7 +2139,8 @@ searching by analogy.
   `transfer_load_module` uses a live Lua state through protected stack/registry
   operations, and ordinary `decode_message` runs Titan code in its caller's
   state; a foreign declaration alone never proves state-independent cleanup.
-* `titan/protobuf/native.h` and the raw-buffer collaboration entries in
+* The `titan_protobuf_buffer` writer primitives (SDK `transfer.h`, included by
+  `titan/protobuf/native.h`) and the raw-buffer collaboration entries in
   `titan.protobuf` — the caller owns the live buffer descriptor, heap storage,
   and any callback `context` owner; keep them rooted through synchronous
   serialization and register heap cleanup immediately. Small writes grow through
