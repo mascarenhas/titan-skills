@@ -743,7 +743,10 @@ Automatic structs/unions/fixed arrays have ordinary C block lifetime and no
 escape analysis. They also cannot transitively contain GC-bearing FFI storage.
 The compiler spills automatic aggregate bytes across catchable Titan calls so
 mutation completed before a caught error stays visible; this does not extend
-lifetime.
+lifetime. Writes made through a raw pointer that C retained (callbacks, other
+threads, an ordinary Titan callee's `*void` context) are untracked: recovery
+reloads the last Titan-committed bytes over them. If a `defer`/`catch` must see
+such writes, use the storage only through a pointer local.
 
 ### Source-written owners
 

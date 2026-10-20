@@ -220,10 +220,19 @@ for the complete signature table. The main entry points are:
   satisfy it; a join failure raises `async.OperationError` (`thread.join`) and
   keeps the token for a retry, while a successful join consumes the token and
   latches joined state. The join takes no mutex across the native call and does
-  not yield. Channel send/receive and join waits all use
-  `async.wait_external` over the Runtime's one `uv.external_wake_t`; waiters
-  retain a `wake_target` per registration, inline readiness never links or
-  retains one, and `try_send`/`try_receive` prepare no wait.
+  not yield. Channel send/receive use `async.wait_external_native` with C-ABI
+  registrars and the traced endpoint owner; join uses `async.wait_external`.
+  Both use the Runtime's one `uv.external_wake_t`; waiters retain a
+  `wake_target` per registration, inline readiness never links or retains one,
+  and `try_send`/`try_receive` prepare no wait. Channel calls borrow an automatic
+  C context and embedded waiter in the suspended stackful frame, which stays
+  valid until synchronous cancellation/unwind unlink completes. Registrars
+  commit packet ownership in C before delivery can raise; immediate channel
+  paths allocate no registrar closures/capture boxes, and slow paths add no
+  context userdata. Titan code touches the cell only through a pointer local,
+  never as a by-value aggregate whose try-spill reload would roll back a
+  registrar's packet commit. Do not let that raw borrow escape the call or
+  mistake the traced endpoint for state-close protection.
   Requesting proxy cancellation while the proxy is not yet terminal, or dropping
   an unjoined handle (which best-effort detaches its token at native
   destruction), is not proof that the child retired; a terminal proxy status does
