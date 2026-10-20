@@ -76,7 +76,10 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
   already-resolved `ResourceScope` (`serialize_inspected_*_to_buffer`,
   `deserialize_nominal_buffer_with_context`,
   `serialize_fields_to_buffer_with_context`, and
-  `deserialize_fields_buffer_with_context`), and explicit nominal policies and
+  `deserialize_fields_buffer_with_context`); the nominal decode also receives
+  the `reflect.NominalType?` that the worker's module-initializing lookup
+  already found, so no second registry lookup or `reflect.Type` wrapper runs.
+  Explicit nominal policies and
   opaque custom-hook roots allocate their single heap packet directly
   (`new_nominal_message`, with committed attachments stored in the aligned
   packet tail). Nested packet operations restore the enclosing scope on
