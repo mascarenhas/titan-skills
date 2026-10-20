@@ -26,10 +26,24 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
 `Receiver<|T|>`)**:
 - Scalars, strings, public records/unions, Titan closures (whose captures are
   transferable), and records implementing `to_transfer_payload` /
-  `from_transfer_payload` cross thread boundaries safely.
+  `from_transfer_payload` cross thread boundaries safely. A `value` field (and
+  an erased generic field such as `Box<|T|>.item`) carries nil, a boolean,
+  integer, float, string, public nominal, or Titan Array as one `TitanValue`
+  message; callables, Maps, and Interfaces in it raise
+  `protobuf: unsupported dynamic value`. A nominal held there names its
+  declaring module, which the receiving packet decode loads on demand even in a
+  thread that never imported it; standalone protobuf and `:to_value()` outside
+  a packet load no module for it.
+- Eligible public records/unions (all-public, hook-free, at most 64 decoder
+  directory entries) encode and decode through compiler-generated codecs with
+  the reflective codec's exact bytes, errors, hook calls, and attachment order;
+  Array, foreign, hooked, endpoint, and nominal/Array `value` fields still run
+  the reflective field codec. Do not design payloads around which path runs;
+  `protobuf.use_generated_codecs(false)` is only a differential-test diagnostic.
 - Passing a `Sender<|T|>` or `Receiver<|T|>` (at the root, nested in public
-  records/unions or their Array fields, inside opaque `to_transfer_payload`
-  hooks, or captured in a Titan closure) **retains a new endpoint reference per
+  records/unions or their Array fields, held by a `value` or erased generic
+  field, inside opaque `to_transfer_payload` hooks, or captured in a Titan
+  closure) **retains a new endpoint reference per
   occurrence** in the active packet's native resource table and serializes a
   4-byte little-endian packet-local slot index (`0xffffffff` is reserved
   invalid). Root, nested structural, and `TransferValue.from_value` /
