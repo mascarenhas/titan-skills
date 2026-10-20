@@ -203,13 +203,17 @@ One native `catch` clears `slot[0]`, disposes any residual packet via
 `discard_message`, and bare-re-raises with the original traceback; never
 emulate this with Lua `pcall` or a status-code protocol.
 
-Take the packet into a real `foreign *void` local, guard it immediately with
+Give a real `foreign *void` local its packet in its own declaration (or through
+one C out-argument call, as `Receiver:wait` does), guard it immediately with
 `defer transfer.discard_message(raw)`, and pass that exact local directly
-(`transfer.decode_message(raw)` passes `&raw`). Never write the local again
-inside the guarded region, by assignment or a mutating C out-argument: catch
-recovery reloads only Titan-written spilled locals, so the deferred discard
-would see a stale owner. Take packets from C out-arguments before the guard
-(as `Receiver:wait` does), and never wrap the raw slot in an ordinary
+(`transfer.decode_message(raw)` passes `&raw`). The local must never get a
+recovery spill: never write it (assignment or mutating C out-argument) inside
+any `catch`-protected block or `defer` region whose catch, cleanup, or
+post-catch code reads it, including regions that end before the guard. Spills
+are per declaration for the whole function and decode's clear never updates
+them, so recovery would reload a stale owner and discard it twice; for
+example `local raw = nil; do raw = encode(v) catch return nil end` before the
+guard double-frees on a decode error. Never wrap the raw slot in an ordinary
 forwarding helper. Lua code cannot call `decode_message`. Decode is a stateful
 Lua operation; `discard_message` is C-only native disposal.
 

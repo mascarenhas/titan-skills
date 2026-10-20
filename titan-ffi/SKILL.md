@@ -1592,13 +1592,19 @@ supply mutable pointer storage; keep consuming decode in its owning function
 (with `do ... catch` for expected failures), or pass a by-value `foreign *Slot`
 pointer to an array cell.
 
-Guard the local with `defer transfer.discard_message(raw)` and never write it
-again inside that guarded region, by assignment or a mutating C out-argument.
-Ordinary calls create no spill for the local, so catch recovery reads decode's
-clear from memory; any Titan write would give it a spill that recovery reloads
-as a stale owner. Take packets from C out-arguments before installing the
-guard. Never pass the raw slot through an ordinary forwarding helper. Lua code
-cannot call `decode_message` (raw C pointer parameters have no dynamic Lua
+Give the local its packet in its own declaration (or through one C
+out-argument call that no reading region encloses), guard it immediately with
+`defer transfer.discard_message(raw)`, and never write it again. The local
+must never get a recovery spill. Titan spills a local, for the whole function,
+when any `catch`-protected block or `defer` region writes it (assignment or
+mutating C out-argument) and that region's catch, cleanup, or post-catch code
+reads it; every later recovery reloads the spill. Ordinary calls neither mark
+nor refresh it, so a spilled guarded local, even one spilled by a region that
+ended before the guard, would be reloaded as a stale owner after a decode error
+and discarded twice. An unspilled local is read from memory after recovery
+(its address escapes; the same compiler assumption as registrar wait cells).
+Never pass the raw slot through an ordinary forwarding helper. Lua code cannot
+call `decode_message` (raw C pointer parameters have no dynamic Lua
 coercion). Stateful decode is not a no-Lua release callback; `discard_message`
 is C-only native disposal.
 

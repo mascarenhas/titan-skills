@@ -345,8 +345,10 @@ Review a cross-thread worker draft that:
 5. uses `uv.mutex_t.lock_function()`, passes `mutex:borrow()` to
    `uv.native_mutex_destroy`, and holds a `uv.mutex_t` across `timer.sleep`; and
 6. wraps a raw `void *` packet slot in an ordinary helper before calling
-   `transfer.decode_message`, assigns the guarded raw local again after taking
-   the packet, or retries `async.send` after a post-exchange notification error.
+   `transfer.decode_message`, fills the guarded raw local inside an earlier
+   `do ... catch` (`local raw = nil; do raw = encode(v) catch ... end`) before
+   guarding and decoding it, or retries `async.send` after a post-exchange
+   notification error.
 
 Require corrected code and exact explanations of:
 - packet-scoped resource attachment (`transfer.encode_message` /
@@ -374,9 +376,12 @@ Require corrected code and exact explanations of:
   slot before return or before any error propagates (one native `catch`, bare
   re-raise preserving the original traceback, C-only scalar fast path first);
   only its entry preamble can fail before ownership is taken, leaving the packet
-  to the caller's `defer discard_message(raw)`; the caller never writes that
-  local again in the guarded region, so catch recovery cannot reload a stale
-  owner, and never wraps the slot in a fallible ordinary helper;
+  to the caller's `defer discard_message(raw)`; the caller gives the local its
+  packet in its own declaration and never writes it again, because a write in
+  any `catch`-protected block or `defer` region whose recovery reads it spills
+  the local for the whole function and recovery would reload a stale owner
+  (decode's clear never updates the spill), and never wraps the slot in a
+  fallible ordinary helper;
 - native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
   no-Lua endpoint release callbacks surviving source-state close, last-Receiver
   drain pinning, and why manual HTTP/TLS/WebSocket/TCP handoffs still need

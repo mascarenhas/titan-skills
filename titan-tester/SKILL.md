@@ -1713,8 +1713,12 @@ local guarded by `defer transfer.discard_message(raw)` and call
 partial-claim, nested-scope, module-load, OOM, and scalar-reservation errors,
 with unclaimed attachments released before GC. Pre-reserve the Lua stack before
 arming an allocator fault so it lands inside decode's body rather than its
-entry preamble, which leaves the packet to the guard. Never write the guarded
-local again inside its region (a spilled stale owner would double-discard).
+entry preamble, which leaves the packet to the guard. Give the guarded local
+its packet in its own declaration and never write it again; a write in any
+`catch`-protected block or `defer` region whose recovery code reads it (even
+one ending before the guard) spills it, and recovery would then reload a stale
+owner and double-discard. Cover `async.Receiver:wait` decode failures as well
+as the thread receive paths.
 Captured locals cannot supply mutable pointer storage; keep consuming decode in
 its owning function, or use a by-value `foreign *Slot` pointer to an array
 cell. Lua code in an independent state cannot call `decode_message`; use an
