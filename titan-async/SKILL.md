@@ -464,6 +464,12 @@ method just to recreate a capability closure. All three registrar forms return
 returned request; cancellable requires the accepted request unless settled
 inline. Create any required request view before native acceptance.
 
+Inspect `Result`/`CancellableResult` only with `case`. They are immutable and
+have no identity contract: every payload-less success (explicit `suspend`
+wakes, external waits, nil-resolving adapters) may return one shared
+`success(nil)` per Lua state, so never compare results for identity, use them
+as Map keys, or attach finalizers to them.
+
 Completion storage is reused per Task. Save the integer supplied to `start`
 with that exact Completion and pass it to every method. `context`, `resolve`,
 and `reject` reject a stale number; duplicate settlement raises. Checked Task
