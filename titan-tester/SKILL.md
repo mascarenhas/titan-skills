@@ -1713,12 +1713,17 @@ local guarded by `defer transfer.discard_message(raw)` and call
 partial-claim, nested-scope, module-load, OOM, and scalar-reservation errors,
 with unclaimed attachments released before GC. Pre-reserve the Lua stack before
 arming an allocator fault so it lands inside decode's body rather than its
-entry preamble, which leaves the packet to the guard. Give the guarded local
-its packet in its own declaration and never write it again; a write in any
-`catch`-protected block or `defer` region whose recovery code reads it (even
-one ending before the guard) spills it, and recovery would then reload a stale
-owner and double-discard. Cover `async.Receiver:wait` decode failures as well
-as the thread receive paths.
+entry preamble, which leaves the packet to the guard. Cover a local assigned
+in an earlier protected region as well as a packet acquired in its own
+declaration. Address-exposed recovery-sensitive non-GC scalars have one
+volatile home; a decoder that clears then raises must leave both catch and
+the deferred guard seeing nil, never a stale spill snapshot. Exercise this in
+production/optimized builds, not just validation. Cover `async.Receiver:wait`
+decode failures as well as the thread receive paths.
+This is a supported GCC/Clang implementation guarantee (Windows Clang/MSYS2
+included), not strict ISO-C safety: unqualified callee access has the ISO C
+6.7.3p6 caveat. Keep optimized/LTO coverage of escaped stores before opaque
+raises; see [recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
 Captured locals cannot supply mutable pointer storage; keep consuming decode in
 its owning function, or use a by-value `foreign *Slot` pointer to an array
 cell. Lua code in an independent state cannot call `decode_message`; use an

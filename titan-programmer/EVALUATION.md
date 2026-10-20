@@ -376,12 +376,14 @@ Require corrected code and exact explanations of:
   slot before return or before any error propagates (one native `catch`, bare
   re-raise preserving the original traceback, C-only scalar fast path first);
   only its entry preamble can fail before ownership is taken, leaving the packet
-  to the caller's `defer discard_message(raw)`; the caller gives the local its
-  packet in its own declaration and never writes it again, because a write in
-  any `catch`-protected block or `defer` region whose recovery reads it spills
-  the local for the whole function and recovery would reload a stale owner
-  (decode's clear never updates the spill), and never wraps the slot in a
-  fallible ordinary helper;
+  to the caller's immediate `defer discard_message(raw)`; address-exposed
+  recovery-sensitive non-GC scalars have a single genuinely volatile home, so
+  decode's clear is visible even if it raises without returning or the local
+  was assigned in an earlier protected region. This is a supported GCC/Clang
+  (including Windows Clang/MSYS2) implementation guarantee: escaped stores
+  reach the home before an opaque raise, including with production Titan LTO;
+  unqualified access retains the ISO C 6.7.3p6 caveat, not strict ISO-C safety.
+  The caller never wraps the slot in a fallible ordinary helper;
 - native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
   no-Lua endpoint release callbacks surviving source-state close, last-Receiver
   drain pinning, and why manual HTTP/TLS/WebSocket/TCP handoffs still need

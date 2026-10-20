@@ -206,16 +206,19 @@ emulate this with Lua `pcall` or a status-code protocol.
 Give a real `foreign *void` local its packet in its own declaration (or through
 one C out-argument call, as `Receiver:wait` does), guard it immediately with
 `defer transfer.discard_message(raw)`, and pass that exact local directly
-(`transfer.decode_message(raw)` passes `&raw`). The local must never get a
-recovery spill: never write it (assignment or mutating C out-argument) inside
-any `catch`-protected block or `defer` region whose catch, cleanup, or
-post-catch code reads it, including regions that end before the guard. Spills
-are per declaration for the whole function and decode's clear never updates
-them, so recovery would reload a stale owner and discard it twice; for
-example `local raw = nil; do raw = encode(v) catch return nil end` before the
-guard double-frees on a decode error. Never wrap the raw slot in an ordinary
-forwarding helper. Lua code cannot call `decode_message`. Decode is a stateful
-Lua operation; `discard_message` is C-only native disposal.
+(`transfer.decode_message(raw)` passes `&raw`). Recovery-sensitive
+address-exposed non-GC scalars use the actual volatile local as their single
+home: a decoder's clear is visible to catch/deferred cleanup even when it
+raises without returning. Earlier protected assignments do not leave a stale
+spill that recovery can restore. This is a supported GCC/Clang guarantee
+(including Windows Clang/MSYS2), relying on escaped stores reaching the
+volatile home before an opaque raise. Unqualified callee access retains the
+ISO C 6.7.3p6 caveat, not a strict ISO-C promise; see
+[recovery storage and LTO](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
+Never wrap the raw slot in an ordinary forwarding helper: its own entry can
+fail before decode takes ownership.
+Lua code cannot call `decode_message`. Decode is a stateful Lua operation;
+`discard_message` is C-only native disposal.
 
 - **`Receiver` coalesces to the latest value (never a FIFO queue).** For
   lossless, bounded FIFO cross-thread streams with backpressure, use

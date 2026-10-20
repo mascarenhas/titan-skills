@@ -1592,17 +1592,20 @@ supply mutable pointer storage; keep consuming decode in its owning function
 (with `do ... catch` for expected failures), or pass a by-value `foreign *Slot`
 pointer to an array cell.
 
-Give the local its packet in its own declaration (or through one C
-out-argument call that no reading region encloses), guard it immediately with
-`defer transfer.discard_message(raw)`, and never write it again. The local
-must never get a recovery spill. Titan spills a local, for the whole function,
-when any `catch`-protected block or `defer` region writes it (assignment or
-mutating C out-argument) and that region's catch, cleanup, or post-catch code
-reads it; every later recovery reloads the spill. Ordinary calls neither mark
-nor refresh it, so a spilled guarded local, even one spilled by a region that
-ended before the guard, would be reloaded as a stale owner after a decode error
-and discarded twice. An unspilled local is read from memory after recovery
-(its address escapes; the same compiler assumption as registrar wait cells).
+Guard the local immediately after taking ownership with
+`defer transfer.discard_message(raw)`. Recovery-sensitive address-exposed
+non-GC scalar locals/parameters have one genuinely volatile C home, not a
+separate snapshot. Writes through their contextual mutable address are visible
+after a callee raises without returning, including when an earlier protected
+assignment already made that declaration recovery-sensitive. Decode therefore
+clears the storage that deferred cleanup reads. This is a supported GCC/Clang
+implementation guarantee (including Windows Clang/MSYS2): escaped stores
+reach the volatile home before the opaque raise. Unqualified callee access
+has the ISO C 6.7.3p6 caveat; production Titan LTO can inline callees while the
+default non-LTO Lua error machinery stays opaque. See
+[recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
+This does not change aggregate byte-spill or untracked-alias/asynchronous C
+mutation rules.
 Never pass the raw slot through an ordinary forwarding helper. Lua code cannot
 call `decode_message` (raw C pointer parameters have no dynamic Lua
 coercion). Stateful decode is not a no-Lua release callback; `discard_message`
