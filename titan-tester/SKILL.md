@@ -1715,6 +1715,10 @@ owner-free; an ordinary body-local raw guard is not entry-safe.
 Captured locals cannot supply mutable pointer storage; keep consuming decode in
 its owning function (with `do ... catch` for expected failures), or use a
 by-value `foreign *Slot` pointer to an array cell.
+Attachment-count cases that must cross the scope's inline scratch, first heap
+spill, and spill growth derive their counts from
+`TITAN_TRANSFER_INLINE_RESOURCES` (`transfer_native.h`) instead of literals,
+so a capacity change cannot silently turn a spill case into an inline one.
 
 Exercise `run_with_cleanup`'s optional third argument through public behavior:
 require an unused/open/unbound same-Runtime `prepare_native_retirement`
