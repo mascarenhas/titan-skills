@@ -2134,12 +2134,8 @@ searching by analogy.
   cleanup.
 * `titan/protobuf/native.h` and the raw-buffer collaboration entries in
   `titan.protobuf` — the caller owns the live buffer descriptor, heap storage,
-  and any callback `context` owner; keep them rooted until serialization returns
-  or unwinds, including across coroutine yields, and register heap cleanup
-  immediately. A failed root append restores its starting `length` and preserves
-  previously appended bytes; capacity can remain grown, and hook side effects
-  and resource attachments are not rolled back. The enclosing transfer scope
-  owns pending attachment cleanup. Small writes grow through
+  and any callback `context` owner; keep them rooted through synchronous
+  serialization and register heap cleanup immediately. Small writes grow through
   power-of-two capacities from a 64-byte minimum. A single reservation larger
   than four capacities grows to `needed + max(256, needed / 8)` (division rounds
   down). Slack is at most 12.5% of `needed` at or above 2,048 bytes, or 256 bytes for
