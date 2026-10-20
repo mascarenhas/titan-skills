@@ -737,8 +737,12 @@ linear-use analysis proves the mutable allocation is unique and unaliased:
    freeze the returned array in place without memory allocation.
 
 Passing, storing in an outer aggregate/container, aliasing, rebinding, or
-capturing the Array, or using the source afterward retains the copy. Code cannot
-observe which path was selected.
+capturing the Array, or using the source afterward retains the copy. The
+terminal cast must be the whole initializer of a one-name local or the whole
+returned expression: `local frozen = items as const { T }` followed by
+`consume(frozen)` freezes, while `consume(items as const { T })` or a returned
+cast that the sink then converts to `value` copies. Code cannot observe which
+path was selected.
 
 Container value types are de-optionized: `{integer?}` means `{integer}`, and
 `{string: integer?}` means `{string: integer}`. Nil means absence, not a stored
