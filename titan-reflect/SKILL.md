@@ -87,9 +87,11 @@ Lookup does not import a module; an unregistered name returns nil. Preserve
 that optional result with an explicit `NominalType?` local or `local result?`.
 
 `NamedType:resolve()` looks up the named nominal and returns the corresponding
-`Type` variant, falling back to `Type.is_value()` for an unknown name. A
-registered name returns the same cached immutable `Type` on every call in that
-state; misses are never cached, so a name registered later resolves normally.
+`Type` variant, falling back to `Type.is_value()` for an unknown name.
+Resolving a registered name again reuses a cached wrapper, which saves an
+allocation but is not an identity contract: inspect results with `case`, and
+never compare `Type` values by identity or use them as Map keys. Misses are
+never cached, so a name registered later resolves normally.
 `Type:resolve()` delegates for `is_named` and `is_foreign_named` receivers;
 every other descriptor is returned unchanged. Neither operation recursively
 expands a whole schema.

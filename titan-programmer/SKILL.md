@@ -731,10 +731,11 @@ linear-use analysis proves the mutable allocation is unique and unaliased:
    references are non-escaping reads/writes (loops, `#`, indexing), with no
    closure captures, frozen in place at its terminal same-block cast or return.
 2. **Linear function returns:** When all return paths of a function return a
-   freshly constructed array or an unaliased local builder array, the function's
-   return type is marked linear. Callers directly assigning or casting the call
-   result to a `const` target (e.g. `local res: const { B } = map(xs, f)`)
-   freeze the returned array in place without memory allocation.
+   freshly constructed array, an unaliased local builder array, or an earlier
+   linear call's result, the function's return type is marked linear. Later
+   callers in the same module directly assigning or casting the call result to
+   a `const` target (e.g. `local res: const { B } = map(xs, f)`) freeze the
+   returned array in place without memory allocation.
 
 Passing, storing in an outer aggregate/container, aliasing, rebinding, or
 capturing the Array, or using the source afterward retains the copy. The
