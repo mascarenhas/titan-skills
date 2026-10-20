@@ -35,7 +35,8 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
   thread that never imported it; standalone protobuf and `:to_value()` outside
   a packet load no module for it.
 - Eligible public records/unions (all-public, hook-free, at most 64 decoder
-  directory entries) encode and decode through compiler-generated codecs with
+  frame entries: record fields, or one selector plus the largest union
+  payload's parts, independent of variant count) use compiler-generated codecs with
   the reflective codec's exact bytes, errors, hook calls, and attachment order;
   Array, foreign, hooked, endpoint, and nominal/Array `value` fields still run
   the reflective field codec. Do not design payloads around which path runs;
