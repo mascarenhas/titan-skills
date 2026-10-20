@@ -1240,7 +1240,14 @@ waiting Task, make the shared action clear that reservation unconditionally,
 and release on scope exit only when the stored Task is still the current one:
 `Task:cancel` runs the action only while that exact waiter is suspended, but
 the cancelled waiter unwinds later through a queued wake, after which a
-successor may already hold the reservation.
+successor may already hold the reservation. The unconditional action is exact
+only if **no waker clears the reservation while its waiter is still
+suspended**: wake by `resume` and leave release to the waiter's own exit
+`defer` or the action. A Task stays suspended until its queued wake is
+delivered, so cancelling a woken-but-undelivered waiter still runs the action.
+If the waker had already cleared the reservation and a successor had taken it,
+that action would clear the successor's reservation. A waker that clears first,
+like `Gate:open` below, needs a per-wait action that compares identity.
 
 A monotonic one-waiter latch uses this shape:
 
