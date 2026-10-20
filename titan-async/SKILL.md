@@ -257,9 +257,10 @@ Lua operation; `discard_message` is C-only native disposal.
   cancellation withdraws only the reader reservation, preserving an unread
   packet in the slot. The reservation is free when `cancel` returns, so a
   successor may reserve before the cancelled reader unwinds; that unwinding
-  never releases the successor's reservation. Each Receiver owns one
-  persistent reader state (Task identity, token, cancellation action), so a
-  wait allocates no reservation state.
+  never releases the successor's reservation. Each Receiver creates one
+  persistent reader state (Task identity, token, cancellation action) on its
+  first wait and reuses it, so later waits allocate no reservation state and a
+  notification-only Receiver allocates none.
 - **Disposal and close**: replacing a slot packet, calling `:close()`, Runtime
   shutdown, or `lua_close` GC finalization disposes any unread packet via
   `transfer.discard_message` without entering Lua, invoking
@@ -1235,9 +1236,10 @@ scheduled with the token captured by the suspension. Ordinary correct-token
 registration with ordinary scope cleanup too.
 
 A long-lived single-reader owner may allocate its token and cancellation action
-once (as `async.Receiver` does) instead of per wait. Reserve by storing the
-waiting Task, make the shared action clear that reservation unconditionally,
-and release on scope exit only when the stored Task is still the current one:
+once (as `async.Receiver` does on its first wait) instead of per wait. Reserve
+by storing the waiting Task, make the shared action clear that reservation
+unconditionally, and release on scope exit only when the stored Task is still
+the current one:
 `Task:cancel` runs the action only while that exact waiter is suspended, but
 the cancelled waiter unwinds later through a queued wake, after which a
 successor may already hold the reservation. The unconditional action is exact
