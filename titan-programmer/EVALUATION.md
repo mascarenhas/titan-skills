@@ -345,9 +345,7 @@ Review a cross-thread worker draft that:
 5. uses `uv.mutex_t.lock_function()`, passes `mutex:borrow()` to
    `uv.native_mutex_destroy`, and holds a `uv.mutex_t` across `timer.sleep`; and
 6. wraps a raw `void *` packet slot in an ordinary helper before calling
-   `transfer.decode_message`, fills the guarded raw local inside an earlier
-   `do ... catch` (`local raw = nil; do raw = encode(v) catch ... end`) before
-   guarding and decoding it, or retries `async.send` after a post-exchange
+   `transfer.decode_message`, or retries `async.send` after a post-exchange
    notification error.
 
 Require corrected code and exact explanations of:
