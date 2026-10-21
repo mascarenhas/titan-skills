@@ -1130,9 +1130,9 @@ or response writes. `exchange:close()` finishes the current response and retires
 the transport instead.
 
 Detached payload bytes carry manually owned native resources. A string in a
-channel or `transfer.Packet` does not acquire a payload finalizer—native packet
-discard (`transfer.discard_message`, `Packet:close()`, `thread.Receiver:close()`,
-`async.PacketReceiver:close()`) only
+channel or native transfer packet does not acquire a payload finalizer—native
+packet discard (`transfer.discard_message`, `thread.Receiver:close()`,
+`async.Receiver:close()`) only
 releases packet-registered `thread` endpoints and never invokes
 `from_transfer_payload` decoders on discard—so callers must own failed delivery
 and queued shutdown cleanup. `Exchange.discard_transfer_payload(payload)` and

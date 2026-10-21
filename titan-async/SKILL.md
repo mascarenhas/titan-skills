@@ -1,6 +1,6 @@
 ---
 name: titan-async
-description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, coalescing Receiver/PacketReceiver slots, external prepared waits, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/run_with_cleanup/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or public titan.uv callbacks, generic await/subscriptions, external_wake_t, and native ownership code.
+description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, coalescing Receiver slots, external prepared waits, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/run_with_cleanup/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or public titan.uv callbacks, generic await/subscriptions, external_wake_t, and native ownership code.
 ---
 
 # Titan async
@@ -94,7 +94,7 @@ helpers, and UV's native callback bridges remain private.
 ## Exact public `async` surface
 
 `async` declares and owns `Error`, `OperationError`, `CancellationReason`,
-`TaskStatus`, `Task`, `ResumeToken`, `Receiver`, `PacketReceiver`, and
+`TaskStatus`, `Task`, `ResumeToken`, `Receiver`, and
 `ExternalWait`, and exports `TransferValue` as a transparent alias of
 `transfer.TransferValue`. These are not aliases to `uv` types.
 `SuspendCancelAction` is the function type `function (): ()`.
@@ -124,54 +124,44 @@ function TransferValue:to_value(): value
 Scalars retain their kinds and strings are copied byte-for-byte between
 collectors. Pointer variants are borrowed and neither retain source objects
 nor synchronize shared memory. `TransferValue.from_value` / `:to_value` and
-protobuf helpers do not create a packet resource scope. Resource hooks raise
-without a matching exact-top scope; opaque-hook/capture work within an existing
-packet may reuse that scope. Resulting index bytes still belong to that packet,
-not to a standalone reusable ownership policy. `lua.Lua` methods use this union
-but a separate carrier with no attachment table; there is no `lua.TransferValue`
-alias. Load `titan-ffi` for exact Lua mapping, pointer and worker lifetime rules.
+protobuf helpers do not create a packet resource scope. `TransferValue.from_value`
+and `:to_value` dispatch registered `ResourceCodec` records (`thread.Sender` and
+`thread.Receiver`) before reflective hooks while keeping the four-byte
+`is_record_payload` slot-index representation. The direct userdata route in
+`from_value` requires a metatable with no metatable of its own; `:to_value`
+resolves the capability by initialized nominal name. Resource codecs and hooks
+raise without a matching exact-top scope; opaque-hook/capture work within an
+existing packet may reuse that scope
+(and native closure packet encode/decode carries its resolved scope through
+`protobuf.serialize_fields_to_buffer_with_context` and
+`protobuf.deserialize_fields_buffer_with_context`). Resulting index bytes still
+belong to that packet, not to a standalone reusable ownership policy. `lua.Lua`
+methods use this union but a separate carrier with no attachment table; there is
+no `lua.TransferValue` alias. Load `titan-ffi` for exact Lua mapping, pointer
+and worker lifetime rules.
 
-### Cross-state receivers and owned packets
+### Cross-state receivers and native packet ownership
 
-`async` provides two **lossy, coalescing** cross-state notification routes
-sharing the same atomic latest-packet native slot (`titan_async_receiver`),
-distinguished by handle mode (`mode = 0` for copied `TransferValue` policies,
-`mode = 1` for single-owner `transfer.Packet` moves):
+`async` provides one **lossy, coalescing** cross-state notification route
+backed by an atomic latest-packet native slot (`titan_async_receiver`):
 
 ```text
 record Receiver
 function receiver(): Receiver
 function Receiver:handle(): foreign *void
-function send(handle: foreign *void, data: TransferValue)
-function Receiver:wait(): TransferValue
+function send(handle: foreign *void, candidate: value)
+function Receiver:wait(): value
 function Receiver:close()
-
-record PacketReceiver
-function packet_receiver(): PacketReceiver
-function PacketReceiver:handle(): foreign *void
-function send_packet(handle: foreign *void, packet: transfer.Packet)
-function PacketReceiver:wait_packet(): transfer.Packet
-function PacketReceiver:close()
 ```
 
-The companion packet ownership API in `titan.transfer` (`import "transfer"`) is:
+The companion raw packet ownership API in `titan.transfer` (`import "transfer"`)
+is:
 
 ```text
-record Packet
-function Packet.new(): Packet
-function Packet.from_value(candidate: value): Packet
-function Packet:borrow_owner(): foreign *void
-function Packet:borrow_message(): foreign *void
-function Packet:take_message(): foreign *void
-function Packet:decode(): value
-function Packet:close()
-
 function encode_message(candidate: value): foreign *void
-foreign function decode_message(state: *lua_State, slot: *(*void)): int
-foreign function adopt_into(raw_owner: *void, slot: *(*void)): int
+function decode_message(slot: foreign *(*void)): value
 foreign function discard_message(raw: *void): void
 foreign function copy_message(raw: const *void): *void
-function raise_message_error(status: integer, failure: value)
 function attach_resource(
     resource: foreign *void,
     retain: foreign function (*void): void,
@@ -181,89 +171,103 @@ function claim_resource(
     expected_release: foreign function (*void): void): foreign *void
 ```
 
-Raw packet integrations require [`titan-ffi`](../titan-ffi/SKILL.md). Prepare
-and root an empty `Packet.new()` and obtain `borrow_owner()` **before** acquiring
-raw ownership. `adopt_into(owner, slot)` then moves a real caller-owned `void *`
-slot into that holder: `0` stores and clears the slot; `-2` NULL owner/slot,
-`-4` occupied destination, or `-5` NULL source leave both unchanged. It performs
-no allocation, Lua entry, stack effect, or throwing work. Keep the original
-raw cleanup guard on rejection; borrowing an already-owned Packet message is
-not a new owner.
+Raw packet integrations require [`titan-ffi`](../titan-ffi/SKILL.md).
+`encode_message(candidate)` encodes any transferable Titan value or explicit
+`TransferValue` policy into a uniquely owned native packet
+(`titan_async_message`). Scalars and explicit policies are classified before
+scope acquisition; these routes do not create attachment authority. Structural
+records/unions, registered resource roots, opaque-hook roots and Titan closures
+encode under the current Lua execution's exact top encode scope, authorizing
+`attach_resource` for one retained endpoint per occurrence and a four-byte
+little-endian slot index. Committed resource entries occupy the aligned tail
+of the single packet allocation. Explicit scalar/nominal policies and opaque-hook
+roots are allocated directly via `new_scalar_message` / `new_nominal_message`
+without staging a header copy. Scoped `encode_message`
+and nominal `decode_message` reuse finalized `ResourceScope` frames from a
+bounded state-local pool (where lexical retirement restores
+`resource_scopes[execution] = previous` and disposes unfinished native units
+before pooling, while abandoned active frames are never pooled). Guard the
+returned raw pointer local immediately with `defer transfer.discard_message(raw)`,
+and never pass an `encode_message` packet to raw `ffi.free`.
 
-`decode_message(state, slot)` instead requires a live Lua state and consumes
-and clears a valid owner slot on success or failure, including setup/worker
-entry errors. It returns normally: `0` leaves one semantic value on the supplied
-stack; positive Lua status leaves one error; negative status leaves no new
-value (`-2` invalid slot, `-3` stack reservation failure).
+`decode_message(slot)` is an ordinary Titan function that decodes into the
+current state and returns the value. Once its body runs it consumes the packet
+and clears the caller's slot before returning or before any error propagates;
+only its own entry preamble (Lua frame reservation) can fail first, leaving the
+packet for the caller's guard. Allocation-free scalars reserve one result slot
+without `longjmp` and decode in C with no protected region; `STRING` and
+malformed `NULL`-`FUNCTION` packets run inside `decode_message_worker` without
+acquiring a `ResourceScope` (strings clear and dispose after copying); only
+nominal packets acquire a decode `ResourceScope` and move `slot[0]` into it.
+One native `catch` clears `slot[0]`, disposes any residual packet via
+`discard_message`, and bare-re-raises with the original traceback; never
+emulate this with Lua `pcall` or a status-code protocol.
 
-Call directly at the actual guarded pointer local, so Titan commits the
-mutable-address spill before any ordinary error propagation. Never wrap the
-raw slot in an ordinary helper that can fail at entry, or rethrow from the
-foreign boundary before the cleared local is committed. In that same function,
-copy a positive-status error from the Lua stack into a traced `value` before
-entering any ordinary helper, whose preamble can change the stack top; use nil
-for negative status. Snapshot/restore the stack and root results before
-restoration. Only then call `raise_message_error(status, rooted_error_or_nil)`.
-The helper takes no raw owner. Decode is a stateful protected Lua operation;
-`adopt_into` is a pure native ownership move, and `discard_message` is native
-disposal. Holder pointers retain neither their Packet nor its allocation.
+Give a real `foreign *void` local its packet in its own declaration (or through
+one C out-argument call, as `Receiver:wait` does), guard it immediately with
+`defer transfer.discard_message(raw)`, and pass that exact local directly
+(`transfer.decode_message(raw)` passes `&raw`). Recovery-sensitive
+non-GC scalars whose mutable address is taken use one volatile home plus a
+declaration-time compiler escape barrier, so an indirect clear before an
+opaque raise is visible to catch/deferred cleanup. Earlier protected
+assignments leave no stale spill. The barrier preserves the home even if an
+ordinary callee is inlined; volatility alone is insufficient. Decode itself
+contains `catch`/`setjmp` and supported GCC/Clang do not inline it. The
+volatile-home/barrier guarantee is verified with GCC, including LTO
+(production-provider evidence), and with Clang at `-O2`/`-O3` without LTO.
+Clang LTO is not separately verified. This supported-toolchain guarantee
+includes Windows Clang/MSYS2 but retains the ISO C 6.7.3p6 unqualified-access
+caveat; see
+[recovery storage and LTO](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
+Never wrap the raw slot in an ordinary forwarding helper: its own entry can
+fail before decode takes ownership.
+Lua code cannot call `decode_message`. Decode is a stateful Lua operation;
+`discard_message` is C-only native disposal.
 
-- **Both `Receiver` and `PacketReceiver` coalesce to the latest value (never a
-  FIFO queue).** For lossless, bounded FIFO cross-thread streams with
-  backpressure, use `thread.channel<|T|>` (load `titan-thread`); for same-state
-  Task queues, use `async.channel<|T|>`.
-- **Create and root the receiver in its owning state.** `receiver()` and
-  `packet_receiver()` may bootstrap that state's Runtime outside a Task and
-  never drive the loop. Only the opaque `foreign *void` pointer from `:handle()`
-  crosses states; never send a `Receiver`, `PacketReceiver`, or `uv.async_t`
-  object. Mixing `send` with a `PacketReceiver` handle or `send_packet` with a
-  `Receiver` handle raises `"receiver handle mode mismatch"`.
-- **Legacy copied route (`Receiver` / `send` / `Receiver:wait`)**: `send` copies
-  an attachment-free `TransferValue` via `transfer.copy_message` (rejecting
-  resource-bearing packets and NULL C functions), atomically replaces any
-  unread packet in the native slot (disposing the replaced packet via
-  `transfer.discard_message`), and signals `uv_async_send`. Its loop callback
-  reconstructs a fresh `TransferValue`, frees the native packet, and publishes
-  into a `CoalescingSubscription`. Newer sends before callback delivery or
-  before `wait()` consumes the subscription overwrite earlier unread values.
-- **Owned packet route (`PacketReceiver` / `send_packet` / `wait_packet`) and
-  `transfer.Packet`**:
-  - `Packet.from_value(v)` (and `encode_message(v)`) opens the exact top encode
-    scope in the current Lua execution, authorizing `attach_resource` for one
-    retained endpoint per occurrence and a four-byte little-endian slot index.
-    `Packet.new()` prepares an inert finalized owner before acquiring native
-    ownership. Raw adoption requires a uniquely owned non-NULL allocation in
-    the caller slot, never a borrow or a pointer another Packet still owns.
-  - `borrow_message()` neither roots its Packet nor grants independent
-    ownership. Keep the Packet rooted; the pointer expires on close, decode,
-    take, or committed publication. Never discard, decode, or adopt that borrow
-    while its Packet owns it. `take_message()` transfers the sole raw owner to
-    exactly one later consuming operation. Packet reference copies alias the
-    same consumed state; they do not clone it.
-  - `Packet:decode()` reconstructs under the exact top decode scope; native
-    disposal releases unclaimed entries, while already-adopted wrappers retain
-    their own references. `Packet:close()` is idempotent with a nonyielding GC
-    fallback. Never raw-`ffi.free` an encoded packet. Ordinary Packet methods
-    can grow the stack or run GC in generated entry preparation; they retain
-    their existing owner through that preparation and use a native slot commit
-    for consumption. A short ordinary body is not allocation-free or a general
-    entry-OOM-safe raw handoff.
-  - `Packet:borrow_owner()` borrows its stable native holder, not an independent
-    owner or root. Prepare this borrow while the Packet remains rooted, before
-    native effects. `send_packet` performs atomic slot exchange and source-
-    holder clearing in one foreign interval, before disposal/notification; it
-    never calls an ordinary `take_message()` after publication. Pre-admission
-    errors preserve source ownership. Post-exchange notification errors consume
-    it: never retry or double-free a committed Packet.
-  - `PacketReceiver`'s `uv.async_t` callback only wakes the reserved reader
-    (`Task:resume(token)`); it leaves the packet owned by the native slot.
-    `wait_packet()` prepares/finalizes an inert Packet and borrows its holder
-    before taking anything from the slot. The native take fills that holder
-    directly; no fallible ordinary adoption entry follows the exchange.
-    It reserves the single reader *before* inspecting the slot (rejecting a
-    second waiter with `"packet receiver already has a waiting reader"`),
-    rechecks closed/slot state after stale wakes, and withdraws only that
-    reservation on cancellation, preserving an unread packet.
+- **`Receiver` coalesces to the latest value (never a FIFO queue).** For
+  lossless, bounded FIFO cross-thread streams with backpressure, use
+  `thread.channel<|T|>` (load `titan-thread`); for same-state Task queues, use
+  `async.channel<|T|>`.
+- **Create and root the receiver in its owning state.** `receiver()` may
+  bootstrap that state's Runtime outside a Task and never drives the loop. Only
+  the opaque `foreign *void` pointer from `:handle()` crosses states; never send
+  a `Receiver` or `uv.async_t` object.
+- **Sending (`send(handle, candidate: value)`)**: Accepts any transferable Titan
+  value (including `thread.Sender` / `thread.Receiver` endpoints) or an explicit
+  `TransferValue` policy. It encodes `candidate` into a guarded raw local via
+  `transfer.encode_message(candidate)`, then in one C interval checks `closed`,
+  atomically exchanges the packet into the receiver's slot, clears the caller's
+  raw local, disposes any overwritten unread packet natively via
+  `transfer.discard_message`, and calls `uv_async_send`. Pre-exchange rejection
+  (`NULL` handle, encoding error, or closed receiver) leaves the slot unchanged
+  and discards any encoded copy through the local guard. Caller-owned endpoint
+  units and a retained `TransferValue` policy remain available, but a direct
+  manual-handoff hook may already have detached its resource during encoding;
+  rejection does not roll back hook side effects. If a manual handoff must be
+  recoverable after send rejection, construct and retain
+  `TransferValue.from_value(resource)` first and send that policy. Once the atomic
+  exchange commits, delivery ownership has moved to the slot even if the
+  subsequent `uv_async_send` notification raises `OperationError`
+  (`"async.send"`): never retry a committed send.
+- **Wake and eager wait (`Receiver:wait(): value`)**: `Receiver`'s `uv.async_t`
+  callback only wakes the reserved reader (`Task:resume(token)`); it leaves the
+  packet owned by the native slot. `wait()` reserves the single reader *before*
+  inspecting the slot (rejecting a second waiter with
+  `"receiver already has a waiting reader"`), takes the packet into a fresh raw
+  local in one C interval, guards it, and returns `transfer.decode_message(raw)`
+  directly. `nil` and `false` return as ordinary data. Decode failures consume
+  the packet and raise from `wait()` with no lazy retry. `is_lua_state` and
+  `is_pointer` policies both arrive as lightuserdata (recovering a typed pointer
+  requires an explicit unsafe `as` cast), and nominal/closure payloads
+  reconstruct eagerly without exposing raw wire bytes. Stale wakes recheck
+  closed/slot state before re-suspending under the same reservation, and
+  cancellation withdraws only the reader reservation, preserving an unread
+  packet in the slot. The reservation is free when `cancel` returns, so a
+  successor may reserve before the cancelled reader unwinds; that unwinding
+  never releases the successor's reservation. Each Receiver creates one
+  persistent reader state (Task identity, token, cancellation action) on its
+  first wait and reuses it, so later waits allocate no reservation state and a
+  notification-only Receiver allocates none.
 - **Disposal and close**: replacing a slot packet, calling `:close()`, Runtime
   shutdown, or `lua_close` GC finalization disposes any unread packet via
   `transfer.discard_message` without entering Lua, invoking
@@ -274,12 +278,24 @@ disposal. Holder pointers retain neither their Packet nor its allocation.
   have no packet disposer and require explicit adoption or
   `discard_transfer_payload`.
 - **Borrowed handle lifetime**: `:handle()` retains nothing. Keep the
-  `Receiver` or `PacketReceiver` rooted and its Lua state open until the handle
-  is withdrawn from every sender and every in-flight `send` / `send_packet` has
-  returned, then drive the owning loop to drain native close before releasing
+  `Receiver` rooted and its Lua state open until the handle is withdrawn from
+  every sender and every in-flight `send` has returned, then close the
+  `Receiver` and drive the owning loop to drain native close before releasing
   roots or calling `Lua:close`. Use the
   [complete standalone example](../../../doc/language/standard-library-lua.md#two-phase-receiver-bootstrap)
-  for two-phase setup and `await_cleanup` worker draining.
+  for two-phase setup and `await_cleanup` worker draining. If a state is
+  closed with an unretired Runtime anyway, its finalizer closes the remaining
+  handles and the loop through public `uv.loop_abandon`, without delivering any
+  user callback (even an already-requested close callback), resuming Tasks,
+  running domain unregister functions or notifying close listeners. Native
+  owners captured by callbacks may already have been finalized; merely catching
+  callback errors cannot make dispatch safe. UV clears callback slots once and
+  keeps only internal native retirement handlers. Keep the Runtime active,
+  closing and driving until loop close succeeds, so admission and recursive
+  `async.loop` remain closed. Ordinary GC
+  cannot finalize the module-rooted active Runtime; retired Runtime finalizers
+  are inert even while a newer Runtime is active. This leak-free fallback is not
+  a substitute for explicit teardown order.
 
 The underlying public data is:
 
@@ -417,8 +433,8 @@ cancellation precedence over the recorded body success or error: a first
 explicit `Task:cancel` is accepted while the Task is unfinished, including
 during a pending native retirement. Terminal status still follows native
 retirement. The thread standard library binds this gate to
-`Thread:task()` and suspends its channel/join waits through
-`async.wait_external`.
+`Thread:task()` and suspends its channel waits through
+`async.wait_external_native`, and ordinary join waits through `async.wait_external`.
 
 Only that exact cleanup-policy operation, with the canonical private
 native-retirement registrar, may use the reserved last suspension epoch. Arbitrary
@@ -471,6 +487,12 @@ method just to recreate a capability closure. All three registrar forms return
 `uv.req_t?`: ordinary/cleanup may return nil and never implicitly cancel a
 returned request; cancellable requires the accepted request unless settled
 inline. Create any required request view before native acceptance.
+
+Inspect `Result`/`CancellableResult` only with `case`. They are immutable and
+have no identity contract: every payload-less success (explicit `suspend`
+wakes, external waits, nil-resolving adapters) may return one shared
+`success(nil)` per Lua state, so never compare results for identity, use them
+as Map keys, or attach finalizers to them.
 
 Completion storage is reused per Task. Save the integer supplied to `start`
 with that exact Completion and pass it to every method. `context`, `resolve`,
@@ -581,10 +603,39 @@ function ExternalWait:close()
 function wait_external(
     register_fn: function (foreign *void): boolean,
     unregister_fn: function (): ())
+function wait_external_native(
+    owner: value, context: foreign *void,
+    register_fn: foreign function (*void, *void): int,
+    unregister_fn: foreign function (*void): void)
 function wait_external_cleanup(
     register_fn: function (foreign *void): boolean,
     unregister_fn: function (): ())
 ```
+
+`wait_external_native` requires a running Task and is an ordinary cancellable
+wait, not a native retirement capability. It roots `owner` and borrows `context`
+through return/unlink, replacing the pair of per-wait Titan registrar closures.
+Its C-only/nonraising/nonyielding callbacks run on the loop thread (register
+after yield; unregister synchronously from cancellation or the Task's unwind):
+register returns `0` ready without admission, `1` linked with one retained
+target, or a negative rejection without a link/reference
+(`async.external_wait.register`). Unregister is synchronous, idempotent and
+called once on cancellation/registration failure, not on inline readiness or a
+normal notification-then-resume. A `Task:cancel` arriving after native
+notification but before the Task resumes still calls unregister: the native
+domain must pass the consumed wakeup to another eligible waiter when progress
+remains possible, as thread channels do with their wakeup baton. NULL callbacks
+raise before preparation. Completion/token identity, deferred delivery and
+target liveness are unchanged.
+Keep the context storage and every GC owner it references alive for the entire
+call. Channel code roots its endpoint and borrows one automatic C context plus
+embedded waiter in its stackful Task frame; cancellation/unwind unlinks before
+the frame can leave. A borrowed pointer is not state-close protection. Channel
+fast paths use no registrar closure or mutable capture box; do not replace these
+with a fresh per-wait userdata. When a `defer`/`catch` reads an automatic
+context after the wait raises, use it only through a `foreign *T` pointer local:
+a by-value aggregate written in that protected body gets a longjmp-safe spill,
+and recovery reloads stale Titan-written bytes over the callbacks' raw writes.
 
 `prepare_native_retirement` strongly retains `owner` through callback return and
 committed readiness. That GC root is not a cross-state-close native pin:
@@ -1207,6 +1258,22 @@ scheduled with the token captured by the suspension. Ordinary correct-token
 `resume` does not run it. It must not yield or raise. Always pair the
 registration with ordinary scope cleanup too.
 
+A long-lived single-reader owner may allocate its token and cancellation action
+once (as `async.Receiver` does on its first wait) instead of per wait. Reserve
+by storing the waiting Task, make the shared action clear that reservation
+unconditionally, and release on scope exit only when the stored Task is still
+the current one:
+`Task:cancel` runs the action only while that exact waiter is suspended, but
+the cancelled waiter unwinds later through a queued wake, after which a
+successor may already hold the reservation. The unconditional action is exact
+only if **no waker clears the reservation while its waiter is still
+suspended**: wake by `resume` and leave release to the waiter's own exit
+`defer` or the action. A Task stays suspended until its queued wake is
+delivered, so cancelling a woken-but-undelivered waiter still runs the action.
+If the waker had already cleared the reservation and a successor had taken it,
+that action would clear the successor's reservation. A waker that clears first,
+like `Gate:open` below, needs a per-wait action that compares identity.
+
 A monotonic one-waiter latch uses this shape:
 
 ```titan
@@ -1766,10 +1833,10 @@ Before accepting Task/application code, verify:
 - Runtime-bound test cleanup finishes inside `support.runtime`, not later in a
   test context cleanup.
 - For cross-state notifications, it distinguishes lossy coalescing
-  `async.Receiver` (copies attachment-free `TransferValue` policies) from lossy
-  coalescing `async.PacketReceiver` (moves single-owner `transfer.Packet`
-  values, including `thread` endpoints, with post-exchange source consumption
-  and pre-check single-reader reservation) and lossless FIFO `thread.channel`.
+  `async.Receiver` (encodes values or explicit `TransferValue` policies into
+  native packets, carries `thread` endpoints, commits ownership on atomic slot
+  exchange, reserves the single reader before slot inspection, and decodes
+  eagerly in `wait()`) from lossless FIFO `thread.channel`.
 - A proxy requiring native retirement uses a same-Runtime native capability
   from `prepare_native_retirement` as `run_with_cleanup` argument three, not a
   generic prepared wait. Native admission precedes exposure; the terminal gate
@@ -1800,9 +1867,10 @@ Before accepting a UV binding change or public adapter, also verify:
 - Behavioral tests use the public production facade unless a genuinely new
   native boundary demands a focused fixture.
 - Cross-thread native waiter bridges use `async.prepare_external_wait` /
-  `wait_external` / `wait_external_cleanup` and `uv.external_wake_t:reserve` +
-  `:activate` + `:unregister`, keeping `reserve` unreferenced, referencing the
-  shared handle only while active waits remain, preserving domain -> wake-core
+  `wait_external` / `wait_external_native` / `wait_external_cleanup` and
+  `uv.external_wake_t:reserve` + `:activate` + `:unregister`, keeping `reserve`
+  unreferenced, referencing the shared handle only while active waits remain,
+  preserving domain -> wake-core
   lock order, and draining bounded identity batches onto the ready queue without
   reentrant Task resumption.
 
@@ -2013,37 +2081,42 @@ provided by `lua.Lua:run_async`, not a way to transfer the proposed closure.
 native completion, release the argument early, or promise a dedicated
 background thread.
 
-### 15. Coalescing receivers, owned packets, and external wakes
+### 15. Coalescing receivers, native packet ownership, and external wakes
 
-**Prompt:** An agent claims `async.Receiver` is an unbounded FIFO queue that
-can carry `thread.Sender` endpoints via `TransferValue.from_value`, proposes
-calling `ffi.free(transfer.encode_message(v))` on a rejected send, and allocates
-a fresh `uv.async_t` per channel wait. Review and correct the design.
+**Prompt:** An agent claims `async.Receiver` is an unbounded FIFO queue whose
+`wait()` returns a lazy `TransferValue`, passes a `thread.Sender` to standalone
+`TransferValue.from_value`, proposes calling `ffi.free(transfer.encode_message(v))`
+on a rejected custom queue send, and allocates a fresh `uv.async_t` per channel
+wait. Review and correct the design.
 
-**Pass:** Explain that both `async.Receiver` and `async.PacketReceiver` are
-lossy, coalescing latest-value slots, whereas `thread.channel<|T|>` is the
+**Pass:** Explain that `async.Receiver` is a lossy, coalescing latest-value slot
+whose `wait()` eagerly decodes and returns the transferred value (consuming the
+packet on decode failure with no retry), whereas `thread.channel<|T|>` is the
 lossless bounded FIFO stream. Standalone `TransferValue.from_value` opens no
-packet resource scope and rejects `thread` endpoints; use `transfer.Packet.from_value`
-with `async.PacketReceiver` (`send_packet` / `wait_packet`) when coalescing
-cross-state delivery must carry endpoints, noting that `send_packet` preserves
-caller ownership on pre-admission errors and consumes the `Packet` once atomic
-slot exchange commits. Replace `ffi.free` with `transfer.discard_message` or
-`Packet:close()`, which release unclaimed endpoint attachments in C without Lua
-or decoder calls (while manual HTTP/TLS/WebSocket handoff payloads still need
-explicit `discard_transfer_payload`). Use `async.prepare_external_wait` /
-`wait_external` / `wait_external_cleanup` over the Runtime's shared
-`uv.external_wake_t` (`:reserve` unreferenced, `:activate` referenced for
-active-wait loop liveness) instead of per-wait `uv.async_t` handles.
+packet resource scope and rejects `thread` endpoints; pass the endpoint or
+enclosing record directly to `async.send(handle, v)` (which encodes under a
+packet scope via `transfer.encode_message`, discards the encoded copy on
+pre-exchange rejection, and commits ownership once the atomic slot exchange
+succeeds) or `thread.channel`. Replace `ffi.free` with
+`transfer.discard_message`, which releases unclaimed endpoint attachments in C
+without Lua or decoder calls (while manual HTTP/TLS/WebSocket handoff payloads
+still need explicit `discard_transfer_payload`). Use
+`async.prepare_external_wait` / `wait_external` / `wait_external_native` /
+`wait_external_cleanup` over
+the Runtime's shared `uv.external_wake_t` (`:reserve` unreferenced, `:activate`
+referenced for active-wait loop liveness) instead of per-wait `uv.async_t`
+handles.
 
-**Fail:** Claim `async.Receiver` is FIFO, allow `ffi.free` on an
-`encode_message` packet, claim `discard_message` runs `from_transfer_payload`
-decoders, or use `external_wake_t:register` instead of `:reserve` + `:activate`.
+**Fail:** Claim `async.Receiver` is FIFO or returns a `TransferValue`, allow
+`ffi.free` on an `encode_message` packet, claim `discard_message` runs
+`from_transfer_payload` decoders, or use `external_wake_t:register` instead of
+`:reserve` + `:activate`.
 
 ## Source map
 
 - Issue and maintainer corrections: GitHub issue `#82`, “Overhaul the Titan
   programmer skill and its reference docs.”
-- Public Task, receiver, owned-packet, and external-wait contract:
+- Public Task, receiver, native-packet, and external-wait contract:
   `doc/language/async-io.md` and `doc/language/standard-library-transfer.md`.
 - Public timer contract: `doc/language/standard-library-timer.md`.
 - Public low-level coroutine contract: `doc/language/coroutines.md`.

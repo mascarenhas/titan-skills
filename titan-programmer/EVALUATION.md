@@ -344,49 +344,57 @@ Review a cross-thread worker draft that:
    `external_wake_t:register` method;
 5. uses `uv.mutex_t.lock_function()`, passes `mutex:borrow()` to
    `uv.native_mutex_destroy`, and holds a `uv.mutex_t` across `timer.sleep`; and
-6. consumes a `Packet:borrow_message()` pointer while the Packet still owns it,
-   or assumes assigning the Packet reference clones its ownership.
+6. wraps a raw `void *` packet slot in an ordinary helper before calling
+   `transfer.decode_message`, or retries `async.send` after a post-exchange
+   notification error.
 
 Require corrected code and exact explanations of:
-- packet-scoped resource attachment (`transfer.encode_message` / `decode_message`
-  and `transfer.Packet.from_value` / `Packet:decode`), with exact-top,
-  direction-specific authority in the current Lua execution, nested restoration,
-  and no implicit authority in another Task or child Coroutine; existing hooks
-  remain synchronous/nonyielding;
+- packet-scoped resource attachment (`transfer.encode_message` /
+  `decode_message`), with exact-top, direction-specific authority in the current
+  Lua execution, nested restoration, and no implicit authority in another Task
+  or child Coroutine; existing hooks remain synchronous/nonyielding;
 - `transfer.attach_resource` / `claim_resource` as ordinary stateful Titan
   APIs, native retain/release callbacks as the no-Lua path, four-byte
   little-endian packet-local indexes (not global anti-replay tokens), and
-  wrapper+finalizer setup before claim; standalone policy/protobuf helpers open
-  no scope but may reuse an existing matching exact-top scope for packet-owned
-  opaque/capture collaboration. Index bytes never become standalone reusable
-  ownership policies; independent Lua carriers still have no attachment table;
-- lossy coalescing `async.Receiver` (`mode = 0`, copies attachment-free
-  `TransferValue` policies) versus lossy coalescing `async.PacketReceiver`
-  (`mode = 1`, moves single-owner `transfer.Packet` values with pre-admission
-  preservation, post-exchange source consumption, and pre-check single-reader
-  reservation) versus lossless bounded FIFO `thread.channel<|T|>`;
-- Packet aliases sharing consumed state; a borrowed pointer neither rooting
-  the owner nor granting discard/decode/adoption authority, expiring on
-  close/decode/take/publication; `take_message()` transferring one sole raw
-  owner to exactly one consuming operation, never an ownership clone;
-- prepared `Packet.new()` / rooted `borrow_owner()` before native effects;
-  publication clears the source cell in the foreign commit interval, and receive
-  fills its prepared cell without a post-take ordinary adoption call; generated
-  entry stack/GC failure is not excluded by a body-only ownership guard;
-- raw foreign `decode_message(state, slot): int` consuming/clearing a true
-  caller-owned `void *` slot and returning normally, so the direct call commits
-  its mutable-address spill before error propagation; status `0` leaves one
-  result, positive Lua status one error, negative setup status no new value;
-  root and restore the stack, then propagate only status/error through
-  `raise_message_error`, never a fallible ordinary raw-slot wrapper;
-- native `adopt_into(owner, slot): int` with a rooted empty Packet/holder
-  prepared before raw acquisition; success stores/clears, rejection preserves
-  both cells (`-2` NULL owner/slot, `-4` occupied destination, `-5` NULL source).
-  Adoption has no allocation, throwing work, Lua entry, or stack result;
+  wrapper+finalizer setup before claim; each endpoint unit belongs to exactly
+  one live finalized wrapper or unconsumed in-flight native message entry
+  (adoption moves, native discard releases, close changes state only);
+  standalone policy/protobuf helpers open no scope but may reuse an existing
+  matching exact-top scope for packet-owned opaque/capture collaboration. Index
+  bytes never become standalone reusable ownership policies; independent Lua
+  carriers still have no attachment table;
+- lossy coalescing `async.Receiver` (encodes transferable values or explicit
+  `TransferValue` policies into native packets, preserves caller input on
+  pre-exchange rejection, commits ownership in one C interval on atomic slot
+  exchange before notification, reserves the single reader before slot
+  inspection, and decodes eagerly in `wait()` with `nil`/`false` as data and
+  consuming decode errors) versus lossless bounded FIFO `thread.channel<|T|>`;
+- ordinary `decode_message(slot: foreign *(*void)): value` taking the actual
+  guarded `foreign *void` local (`&raw`), consuming the packet and clearing the
+  slot before return or before any error propagates (one native `catch`, bare
+  re-raise preserving the original traceback, C-only scalar fast path first);
+  only its entry preamble can fail before ownership is taken, leaving the packet
+  to the caller's immediate `defer discard_message(raw)`; recovery-sensitive
+  non-GC scalars whose mutable C address is taken have one volatile home plus
+  a declaration-time compiler escape barrier, so decode's clear remains
+  visible even after an earlier protected assignment. The barrier keeps the
+  home escaped when ordinary callees are inlined; volatility alone is
+  insufficient. Decode's own `catch`/`setjmp` prevents supported GCC/Clang
+  inlining. The volatile-home/barrier guarantee is verified with GCC,
+  including LTO (production-provider evidence), and with Clang at `-O2`/`-O3`
+  without LTO. Clang LTO is not separately verified. This implementation
+  guarantee includes Windows Clang/MSYS2, with the ISO C 6.7.3p6 caveat for
+  unqualified access, not strict ISO-C safety. The caller never wraps the
+  slot in a fallible ordinary helper;
+- the scalar guarantee does not extend to aggregate byte spills: a normally
+  returning ordinary Titan callee currently does not commit a mutable aggregate
+  out-argument, so recovery can restore stale bytes if another protected
+  assignment made that object spill-tracked. Treat this as a known limitation,
+  not as aggregate coverage supplied by the scalar tests;
 - native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
-  the ordinary nonyielding `Packet:close()` facade, no-Lua endpoint release
-  callbacks surviving source-state close, last-Receiver drain pinning, and why
-  manual HTTP/TLS/WebSocket/TCP handoffs still need explicit payload disposal;
+  no-Lua endpoint release callbacks surviving source-state close, last-Receiver
+  drain pinning, and why manual HTTP/TLS/WebSocket/TCP handoffs still need
+  explicit payload disposal;
 - the Thread proxy retirement contract: no terminal outcome before child
   OS-thread completion, including pre-start cancellation and failure at
   Task-root/cleanup entry; a native completion gate must be accepted before
@@ -425,10 +433,11 @@ Require corrected code and exact explanations of:
   traced keepalive versus an independently retained cross-state native pin;
   native notification occurs only after monotonic retirement readiness, so
   post-notification retirement is success/error, never pending-with-no-new-wake;
-- `async.prepare_external_wait` / `wait_external` / `wait_external_cleanup` over
-  `uv.external_wake_t:reserve` (unreferenced) + `:activate` (referenced while
-  active waits require loop liveness) + `:unregister`, domain-to-wake-core lock
-  order, and bounded 64-identity ready-queue draining; and
+- `async.prepare_external_wait` / `wait_external` / `wait_external_native` /
+  `wait_external_cleanup` over `uv.external_wake_t:reserve` (unreferenced) +
+  `:activate` (referenced while active waits require loop liveness) +
+  `:unregister`, domain-to-wake-core lock order, and bounded 64-identity
+  ready-queue draining; and
 - direct public `uv.native_*` foreign entries replacing removed `*_function`
   getters, `mutex_t:borrow()` rooted owner lifetime versus
   `mutex_t.create_native()` + `native_mutex_destroy`, OS-thread-blocking mutexes
@@ -486,11 +495,11 @@ set for these queries:
 17. change the JSON module's Relabel grammar;
 18. add native JSON record/union mapping tests; and
 19. edit a JSON configuration file for an unrelated Python application;
-20. send a reply `thread.Sender` across `thread.channel` or `async.PacketReceiver`;
+20. send a reply `thread.Sender` across `thread.channel` or `async.Receiver`;
 21. call `uv.native_mutex_lock` from a source `foreign function` and manage
     `uv.mutex_t.create_native()` lifetime; and
 22. write native `titan.test` cases for `Thread:task()` pre-start cancellation
-    and `PacketReceiver` coalescing.
+    and `async.Receiver` coalescing.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -499,7 +508,7 @@ programmer cartridge for a Lua-only test, and no Titan networking/async/FFI
 cartridge for unrelated Python or C work; no JSON cartridge merely because
 a configuration file uses JSON. Ordinary JSON use selects programmer + json;
 JSON grammar changes add pegs, JSON tests add tester, and explicit reflection
-construction work adds reflect. Thread channel and `PacketReceiver` work selects
+construction work adds reflect. Thread channel and `async.Receiver` work selects
 programmer + thread + async (adding ffi when touching `transfer.discard_message`
 or raw C callbacks, and tester when writing native tests).
 Query 21 selects **programmer + ffi**; add async only when changing the

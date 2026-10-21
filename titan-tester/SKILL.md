@@ -1699,24 +1699,49 @@ ordering while state-owning reader cleanup is shielded on every parent exit.
 Use exact frozen input/provider evidence when a private build tests an evolving
 source tree; a passing old provider is not evidence for later edits.
 
-For packet ownership (`transfer.Packet`, thread endpoints,
-`async.PacketReceiver`), prepared external wakes, and direct `uv.native_*`
-synchronization, keep public behavior in `async.tests`, `thread.tests`, and
-`uv.public_tests`; use only test-owned failure fixtures. Check native
-`discard_message` without a Runtime and after source-state close, and the live
-Packet facade separately: both must release unclaimed attachments with zero
-decoder/module-loader calls. Cover alias consumed state and borrowed-pointer
-non-ownership; raw borrows must not be consumed while their Packet owns them.
-Raw decode regressions use a real uniquely owned `void *` slot passed directly
-to foreign `decode_message(state, slot): int`. Check normal return commits the
-cleared mutable-address spill before status/error propagation, including setup
-and worker-entry failures. Status `0` leaves one rooted result, positive status
-one error, and negative status no new value. Keep ordinary error helpers
-owner-free; an ordinary body-local raw guard is not entry-safe.
-For native `adopt_into(owner, slot)`, prepare/root the empty Packet and borrow
-its holder before raw acquisition. Verify success stores/clears with no Lua
-stack effect, while NULL arguments, occupied destination, and NULL source
-reject without changing either cell; rejected raw ownership remains guarded.
+For native packet ownership (`transfer.encode_message` / `decode_message` /
+`discard_message`, thread endpoints, and eager coalescing `async.Receiver`),
+prepared external wakes, and direct `uv.native_*` synchronization, keep public
+behavior in `async.tests`, `thread.tests`, and `uv.public_tests`; use only
+test-owned failure fixtures. Check native `discard_message` without a Runtime
+and after source-state close, plus `Receiver` overwrite and close disposal: all
+must release unclaimed attachments with zero decoder/module-loader calls.
+Raw decode regressions take a real uniquely owned packet into a `foreign *void`
+local guarded by `defer transfer.discard_message(raw)` and call
+`transfer.decode_message(raw)` directly, catching expected failures with
+`do ... catch`. Check the local is nil after success and after decoder, claim,
+partial-claim, nested-scope, module-load, OOM, and scalar-reservation errors,
+with unclaimed attachments released before GC. Pre-reserve the Lua stack before
+arming an allocator fault so it lands inside decode's body rather than its
+entry preamble, which leaves the packet to the guard. Cover a local assigned
+in an earlier protected region as well as a packet acquired in its own
+declaration. Recovery-sensitive non-GC scalars whose mutable C address is
+taken have one volatile home plus a declaration-time compiler escape barrier;
+a decoder that clears then raises must leave catch and the guard seeing nil,
+never a stale spill. Decode's own `catch`/`setjmp` prevents inlining by
+supported GCC/Clang: native decode coverage is not an inlining test. The
+volatile-home/barrier guarantee is verified with GCC, including LTO
+(production-provider evidence), and with Clang at `-O2`/`-O3` without LTO.
+Clang LTO is not separately verified. Separately exercise ordinary inlinable
+scalar callees at
+`-O2`/`-O3`, with no normal-path read: write through the address, then raise
+from a checked return conversion, while the protected body returns directly.
+This terminal error shape exposes GCC's dead-store deletion without a barrier.
+Also cover explicit `raise`, and check declaration barriers on locals, named
+parameters and lambda parameters. Volatility alone is insufficient.
+Cover production/optimized builds and `async.Receiver:wait`,
+not just validation/thread receives. This supported GCC/Clang guarantee
+(including Windows Clang/MSYS2) retains the ISO C 6.7.3p6 unqualified-access
+caveat, not strict ISO-C safety; see
+[recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
+Captured locals cannot supply mutable pointer storage; keep consuming decode in
+its owning function, or use a by-value `foreign *Slot` pointer to an array
+cell. Lua code in an independent state cannot call `decode_message`; use an
+ordinary test-support entry that asserts the borrowed lightuserdata slot.
+Attachment-count cases that must cross the scope's inline scratch, first heap
+spill, and spill growth derive their counts from
+`TITAN_TRANSFER_INLINE_RESOURCES` (`transfer_native.h`) instead of literals,
+so a capacity change cannot silently turn a spill case into an inline one.
 
 Exercise `run_with_cleanup`'s optional third argument through public behavior:
 require an unused/open/unbound same-Runtime `prepare_native_retirement`

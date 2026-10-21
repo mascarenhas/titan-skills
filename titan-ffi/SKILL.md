@@ -641,6 +641,17 @@ For an API-documented extended borrow into an owner, record, Array, Map, union,
 Interface, or function, keep the original Titan value reachable for the whole
 borrow. Retaining only the pointer does not retain the GC object.
 
+Compact byte decoders can retain a traced buffer owner beside native offsets
+instead of allocating one nominal object per field. `titan.protobuf` embeds its
+single directory entry, spills larger directories into counted owned C arrays,
+and keeps merge strings on the owning `Message`; raw-buffer callers still own
+their complete synchronous borrow. Entry pointers borrow that directory too:
+finish growth before exposing them, and retain the `Message` across nested
+decoding, custom hooks, and collection. Native offset/index arrays contain no GC
+references and need no finalizer. See the paired
+[`protobuf implementation`](../../../doc/implementation/protobuf-library.md#decoding)
+and [public contract](../../../doc/language/standard-library-protobuf.md#wire-mapping).
+
 The ordinary public `string -> char *` / `void *` contract remains call-only.
 Application code should make the native API copy the bytes or allocate an
 explicit native owner rather than retaining Titan's internal string pointer.
@@ -732,7 +743,10 @@ Automatic structs/unions/fixed arrays have ordinary C block lifetime and no
 escape analysis. They also cannot transitively contain GC-bearing FFI storage.
 The compiler spills automatic aggregate bytes across catchable Titan calls so
 mutation completed before a caught error stays visible; this does not extend
-lifetime.
+lifetime. Writes made through a raw pointer that C retained (callbacks, other
+threads, an ordinary Titan callee's `*void` context) are untracked: recovery
+reloads the last Titan-committed bytes over them. If a `defer`/`catch` must see
+such writes, use the storage only through a pointer local.
 
 ### Source-written owners
 
@@ -1508,7 +1522,7 @@ source-state root for a returned thread/userdata and keep native code loaded.
 Null C function arguments are rejected. `lua.Lua:run` and `Lua:run_async` use a
 separate `titan_lua_value` carrier that does **not** open a packet resource
 scope, so `thread.Sender` and `thread.Receiver` endpoints cannot be passed
-directly as `Lua:run*` arguments or results (pass a `PacketReceiver:handle()`
+directly as `Lua:run*` arguments or results (pass a `Receiver:handle()`
 or use `thread.spawn*` instead).
 
 `run` blocks its caller; `run_async` uses `async.run_foreign` inside a Task
@@ -1528,76 +1542,83 @@ normal 200-value limit. Even ignored returned values must be transferable.
 For the exact API and protected stack/packet ledger, read
 `doc/language/standard-library-lua.md` and `doc/implementation/lua-library.md`.
 
-`async.Receiver` (`mode = 0`) and `async.PacketReceiver` (`mode = 1`) are
-**lossy, coalescing latest-value** cross-state notification slots (never FIFO
-queues; use `thread.channel<|T|>` for lossless bounded FIFO streams). Create
-and retain the receiver in the destination state; `Receiver:handle()` and
-`PacketReceiver:handle()` export only an opaque borrowed `foreign *void` that is
-not a `uv.async_t`, a Titan record address to cast back, or a GC root.
+`async.Receiver` is a **lossy, coalescing latest-value** cross-state
+notification slot (never a FIFO queue; use `thread.channel<|T|>` for lossless
+bounded FIFO streams). Create and retain the receiver in the destination state;
+`Receiver:handle()` exports only an opaque borrowed `foreign *void` that is not
+a `uv.async_t`, a Titan record address to cast back, or a GC root.
 
-* `async.send(handle, data)` copies an attachment-free `async.TransferValue`
-  into a native packet (`transfer.copy_message`) and atomically replaces any
-  unread slot value, disposing the replaced packet via
-  `transfer.discard_message`.
-* `async.send_packet(handle, packet)` moves a single-owner `transfer.Packet`
-  created by `transfer.Packet.from_value`, whose encode scope authorizes
-  endpoint attachments. It clears the prepared source holder in the same
-  native interval as publication. `PacketReceiver:wait_packet()` prepares and
-  finalizes its destination Packet before the native take; the packet stays
-  slot-owned until that take, with no ordinary adoption entry after it.
-  Pre-admission failures (`NULL` handle, consumed/closed
-  packet, closed receiver, or `"receiver handle mode mismatch"`) leave `packet`
-  owned by the caller; once atomic slot exchange commits, the source `Packet` is
-  consumed even if the subsequent `uv_async_send` wake fails. Never pass an
-  `encode_message` pointer to raw `ffi.free`—use native `discard_message`,
-  protected slot-based decode, or adoption into a prepared empty Packet.
-  Packet aliases share consumed state. `borrow_message()` and `borrow_owner()`
-  are non-rooting borrows, not independent owners; do not discard, decode, or
-  adopt a raw message borrow while its Packet still owns it. `take_message()`
-  transfers one raw owner to exactly one consumer. Ordinary Packet methods can
-  fail in their generated entry before a body guard, so do not infer entry-OOM
-  safety or allocation freedom from a short body. Use the
-  [prepared-owner rules](../titan-async/SKILL.md#cross-state-receivers-and-owned-packets).
+* `async.send(handle, candidate)` encodes a transferable value or explicit
+  `async.TransferValue` policy into a guarded raw packet
+  (`transfer.encode_message`, whose encode scope authorizes endpoint
+  attachments). In one C interval (`receiver_send_native`), it checks `closed`,
+  atomically replaces any unread slot packet, clears the caller's raw local,
+  disposes the replaced packet via `transfer.discard_message`, and signals
+  `uv_async_send`. Pre-exchange rejections (`NULL` handle, encoding error, or
+  closed receiver) leave the slot untouched and discard any encoded copy via the
+  local guard. Caller-owned endpoint units and a retained `TransferValue` policy
+  remain available, but a direct manual-handoff hook may already have detached
+  its resource during encoding; rejection does not roll back hook side effects.
+  For a manual handoff that must be recoverable after send rejection, construct
+  and retain `TransferValue.from_value(resource)` first and send that policy.
+  Once the atomic exchange commits, the send is committed even if the subsequent
+  `uv_async_send` wake fails. Never pass an `encode_message` pointer to raw
+  `ffi.free`—use native `discard_message` or consuming slot-based `decode_message`.
+* `Receiver`'s libuv callback only wakes the reserved reader; the packet stays
+  slot-owned until `Receiver:wait()` takes it into a fresh raw local, guards it,
+  and returns `transfer.decode_message(raw)` directly. `wait()` reserves the single
+  reader before inspecting the slot, returns `nil` and `false` as ordinary data,
+  and consumes the packet on decode errors with no lazy retry. `is_lua_state`
+  and `is_pointer` policies both decode to lightuserdata, requiring an explicit
+  unsafe `as` cast to recover a typed pointer. See the
+  [receiver ownership rules](../titan-async/SKILL.md#cross-state-receivers-and-native-packet-ownership).
 
-For audited native packet integrations, use these entries and error helper:
+For audited native packet integrations, use this ordinary consuming decoder:
 
 ```text
-foreign function decode_message(state: *lua_State, slot: *(*void)): int
-foreign function adopt_into(raw_owner: *void, slot: *(*void)): int
-function raise_message_error(status: integer, failure: value)
+function decode_message(slot: foreign *(*void)): value
 ```
 
-Prepare and root an empty `Packet.new()` and borrow its holder before acquiring
-raw ownership. Direct `adopt_into(owner, slot)` then stores a real caller-owned
-`void *` slot into it and clears that slot on status `0`; rejection (`-2` NULL
-owner/slot, `-4` occupied holder, `-5` NULL source) leaves both unchanged.
-This pure native move never allocates, throws, enters Lua, or changes its stack.
-Keep the raw cleanup guard on rejection; never adopt a still-owned Packet borrow.
+`decode_message(slot)` decodes into the current state and returns the value.
+Once its body runs it consumes the packet and clears the slot before returning
+or before any error propagates with its original traceback; only its own entry
+preamble (Lua frame reservation) can fail first, leaving the packet for the
+caller's guard. A nil slot raises `"transfer: invalid packet owner slot"`; a
+failed scalar result reservation clears/disposes, then raises.
 
-`decode_message(state, slot)` is different: it requires a live Lua state,
-consumes/clears a valid caller-owned slot on all outcomes, and returns normally.
-Status `0` leaves one semantic value, positive Lua status one error, and negative
-status no new value (`-2` invalid slot; `-3` stack reservation failure).
+Pass the actual guarded `foreign *void` local: an exact pointer local supplied
+to the `foreign *(*void)` parameter passes `&local`. Captured locals cannot
+supply mutable pointer storage; keep consuming decode in its owning function
+(with `do ... catch` for expected failures), or pass a by-value `foreign *Slot`
+pointer to an array cell.
 
-The call must be direct at the actual guarded pointer local. Its normal return
-commits Titan's mutable-address spill before any raising ordinary operation;
-longjmp after changing only the spill would leave the caller owning stale
-storage. Never pass the raw slot through an ordinary helper whose generated
-entry can fail first. In the same native-call-owning function, copy a positive
-status's top error into a traced `value` before entering any ordinary helper:
-its preamble can change the stack top. Use nil for negative status, preserve
-stack restoration, and only then call
-`raise_message_error(status, rooted_error_or_nil)`. That ordinary helper takes
-no raw owner. Protected stateful decode is not a no-Lua release callback;
-`adopt_into` is a native move into a prepared empty holder, not a decoder or
-disposer. Keep the Packet rooted for the full holder borrow; ordinary wrapper
-preparation happens before raw acquisition or native ownership movement.
+Guard the local immediately after taking ownership with
+`defer transfer.discard_message(raw)`. Recovery-sensitive non-GC scalars whose
+mutable C address is taken have one volatile C home plus a declaration-time
+compiler escape barrier, not a separate snapshot. The empty GNU extended asm
+keeps that home escaped if an ordinary callee is inlined; volatility alone is
+insufficient. Indirect writes before an opaque raise remain visible to catch
+and deferred cleanup, including after an earlier protected assignment.
+`decode_message` itself contains a `catch`/`setjmp` and supported GCC/Clang do
+not inline it. The volatile-home/barrier guarantee is verified with GCC,
+including LTO (production-provider evidence), and with Clang at `-O2`/`-O3`
+without LTO. Clang LTO is not separately verified. This is a supported-toolchain
+guarantee (including Windows Clang/MSYS2), with the ISO C 6.7.3p6 caveat for
+unqualified access to a volatile object, not strict ISO-C safety. See
+[recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills)
+for the barrier/LTO assumptions and the separate known limitation: normally
+returning ordinary Titan callees do not commit aggregate out-argument byte
+spills. Untracked-alias/asynchronous C mutation remains outside the guarantee.
+Never pass the raw slot through an ordinary forwarding helper. Lua code cannot
+call `decode_message` (raw C pointer parameters have no dynamic Lua
+coercion). Stateful decode is not a no-Lua release callback; `discard_message`
+is C-only native disposal.
 
-Receiver and PacketReceiver construction can run outside a destination-state
-Task during a `Lua:run` or first `Lua:run_async` bootstrap; `Receiver:wait` and
-`PacketReceiver:wait_packet` need a Task in the destination Runtime. Keep the
-owner rooted there through every send. Close disables admission immediately and
-disposes any unread packet via `transfer.discard_message` (which releases
+Receiver construction can run outside a destination-state Task during a
+`Lua:run` or first `Lua:run_async` bootstrap; `Receiver:wait` needs a Task in
+the destination Runtime. Keep the owner rooted there through every send. Close
+disables admission immediately and disposes any unread packet via
+`transfer.discard_message` (which releases
 unclaimed `thread` endpoint attachments in C without entering Lua or running
 `from_transfer_payload` decoders; manual HTTP/TLS/WebSocket handoff byte strings
 still require explicit `discard_transfer_payload`),
@@ -2118,12 +2139,28 @@ searching by analogy.
   `titan/coroutine.titan` — private source foreign callbacks; study only with
   their ownership/runtime docs, not as generic application templates.
 * `titan/transfer.titan` and `titan/thread/*.titan` — C-ABI `foreign function`
-  entries such as `discard_message`, `copy_message`, `adopt_into`, and
+  entries such as `discard_message`, `copy_message`, and
   `channel_retain_*` / `channel_release_*` operate only on explicit native data
-  and do not require Lua or a Runtime. In contrast, `transfer_load_module` and
-  `decode_message` use a live Lua state through protected stack/registry
-  operations; a foreign declaration alone never proves state-independent
-  cleanup.
+  and do not require Lua or a Runtime. In contrast, foreign
+  `transfer_load_module` uses a live Lua state through protected stack/registry
+  operations, and ordinary `decode_message` runs Titan code in its caller's
+  state; a foreign declaration alone never proves state-independent cleanup.
+* The `titan_protobuf_buffer` writer primitives (SDK `transfer.h`, included by
+  `titan/protobuf/native.h`) and the raw-buffer collaboration entries in
+  `titan.protobuf` — the caller owns the live buffer descriptor, heap storage,
+  and any callback `context` owner; keep them rooted through synchronous
+  serialization and register heap cleanup immediately. Small writes grow through
+  power-of-two capacities from a 64-byte minimum. A single reservation larger
+  than four capacities grows to `needed + max(256, needed / 8)` (division rounds
+  down). Slack is at most 12.5% of `needed` at or above 2,048 bytes, or 256 bytes for
+  smaller bulk requests. If adding it would exceed `SIZE_MAX`, the request
+  stays at exactly `needed`. Normal growth after a bulk allocation starts
+  doubling from the largest power of two no greater than `max(capacity, 64)`,
+  rejoining that sequence unless doubling would overflow, when it requests
+  exactly `needed`. This proportional slack is independent of
+  transfer's initial 64-byte metadata credit. Transfer still reserves actual
+  metadata, alignment, and attachment entries before detachment and derives
+  interior pointers only after growth; never add a sizing pass that replays a hook.
 
 ## Focused specs
 
@@ -2312,8 +2349,8 @@ are always source-private. Review and correct it.
 `uv.native_mutex_destroy`, whereas `uv.mutex_t.create_native()` allocates a
 process-heap mutex that survives `lua_close` and is freed only by
 `uv.native_mutex_destroy` after quiescence; replaces `ffi.free` on a transfer
-packet with native `transfer.discard_message`, or `Packet:close()` while its
-Titan owner is live; the native disposer runs C-only release callbacks without
+packet with native `transfer.discard_message`; the native disposer runs C-only
+release callbacks without
 Lua. Unadorned exportable `foreign function` declarations are public across
 compiled imports (local ones need a direct `.titan` source import).
 Process-lifetime provider mapping keeps native callback code callable after
@@ -2324,6 +2361,34 @@ source-state close, but only an explicit no-Lua call chain is state-independent.
 transfer packet with `ffi.free`, requires a source import for a public foreign
 entry, or equates every `foreign function` with no-Lua cleanup (for example,
 `transfer_load_module` explicitly needs a live state).
+
+## Eval 12 — Caller-owned protobuf buffer growth
+
+**Prompt:** A public `protobuf.serialize_fields_to_buffer` caller supplies a
+native buffer with a C-only grow callback and a rooted counter array as its
+`context`. It writes one 64 KiB byte field followed by a 4 KiB byte field.
+Explain the buffer/context lifetimes, the intended bulk allocation behavior,
+and how a stream of small writes differs. A draft stores an interior data
+pointer before encoding and runs resource-attaching encoders twice to size the
+packet exactly.
+
+**Pass criteria:** keeps the buffer descriptor, storage, and context owner live
+through synchronous callback completion; registers the matching heap cleanup;
+does not retain an interior pointer across growth; describes the 64-byte minimum,
+power-of-two growth for small writes, and `needed + max(256, needed / 8)`
+(rounding down) for a reservation exceeding four capacities; explains how
+normal growth after a bulk allocation starts doubling from the largest power
+of two no greater than `max(capacity, 64)`, with an exact-need fallback if
+doubling would overflow; bounds slack at 12.5% of `needed`
+for requests of at least 2,048 bytes and 256 bytes for smaller bulk requests.
+If adding slack would exceed `SIZE_MAX`, the request is exactly `needed`.
+Recognizes one small allocation and one bulk growth for those two fields, not
+a second payload-sized realloc. Transfer's 64-byte initial metadata
+credit and exact pre-detach attachment-tail reservation remain distinct.
+Rejects replaying hooks in a sizing pass. Uses the public raw-buffer API for
+behavior coverage without private imports or production test hooks.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
 
 # Final boundary checklist
 

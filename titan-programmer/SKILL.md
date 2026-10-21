@@ -731,14 +731,19 @@ linear-use analysis proves the mutable allocation is unique and unaliased:
    references are non-escaping reads/writes (loops, `#`, indexing), with no
    closure captures, frozen in place at its terminal same-block cast or return.
 2. **Linear function returns:** When all return paths of a function return a
-   freshly constructed array or an unaliased local builder array, the function's
-   return type is marked linear. Callers directly assigning or casting the call
-   result to a `const` target (e.g. `local res: const { B } = map(xs, f)`)
-   freeze the returned array in place without memory allocation.
+   freshly constructed array, an unaliased local builder array, or an earlier
+   linear call's result, the function's return type is marked linear. Later
+   callers in the same module directly assigning or casting the call result to
+   a `const` target (e.g. `local res: const { B } = map(xs, f)`) freeze the
+   returned array in place without memory allocation.
 
 Passing, storing in an outer aggregate/container, aliasing, rebinding, or
-capturing the Array, or using the source afterward retains the copy. Code cannot
-observe which path was selected.
+capturing the Array, or using the source afterward retains the copy. The
+terminal cast must be the whole initializer of a one-name local or the whole
+returned expression: `local frozen = items as const { T }` followed by
+`consume(frozen)` freezes, while `consume(items as const { T })` or a returned
+cast that the sink then converts to `value` copies. Code cannot observe which
+path was selected.
 
 Container value types are de-optionized: `{integer?}` means `{integer}`, and
 `{string: integer?}` means `{string: integer}`. Nil means absence, not a stored
@@ -1903,16 +1908,25 @@ to the language rules:
   `Task:resume(token)` may wake only the matching `async.suspend(token, ...)`;
   do not paper over an early-resume bug with consumer-side generations.
 - **Keep packet disposal C-only and adopt resources only after finalizer
-  setup.** `transfer.discard_message` and the native retain/release callbacks
-  supplied to `transfer.attach_resource` are C-ABI `foreign function` entries
-  whose complete cleanup chain never enters Lua, runs `from_transfer_payload`
-  decoders, loads modules, or requires a Runtime. `attach_resource` and
-  `claim_resource` themselves are ordinary stateful Titan APIs, authorized only
-  by the exact top encode/decode scope in the current Lua execution. Never
-  raw-`ffi.free` an `encode_message` packet or assume packet discard cleans up
-  manual HTTP/TLS/WebSocket handoff byte strings. In `from_transfer_payload`,
-  construct the inert wrapper (`native = nil`) and register `gc.finalizable`
-  *before* claiming and assigning the native pointer.
+  setup.** Each endpoint reference unit is owned by either a live finalized
+  wrapper or an unconsumed in-flight native packet entry: adoption moves the
+  unit, native discard releases it, and `close()` changes state only.
+  `transfer.discard_message` and the native retain/release callbacks supplied to
+  `transfer.attach_resource` are C-ABI `foreign function` entries whose complete
+  cleanup chain never enters Lua, runs `from_transfer_payload` decoders, loads
+  modules, or requires a Runtime. `attach_resource` and `claim_resource`
+  themselves are ordinary stateful Titan APIs, authorized only by the exact top
+  encode/decode scope in the current Lua execution. Never raw-`ffi.free` an
+  `encode_message` packet or assume packet discard cleans up manual
+  HTTP/TLS/WebSocket handoff byte strings. In `from_transfer_payload`, construct
+  the inert wrapper (`native = nil`) and register `gc.finalizable` *before*
+  claiming and assigning the native pointer.
+- **Keep hot finalizer registration allocation-free.** `gc.finalizable` erases
+  its callback to `function (value): ()`; a callback whose parameter type is
+  not exactly `value` gets a fresh callable-adjustment closure on every call. For an owner constructed per
+  message or per clone, declare the finalizer `function (value): ()`, project
+  to the owner inside it, and call `gc.finalizable<|value|>(owner, finalizer)`,
+  as `titan.thread` endpoint wrappers do.
 
 The current filesystem watcher demonstrates the preferred local-method and
 dense-drain shape:

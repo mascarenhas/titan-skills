@@ -1,6 +1,6 @@
 ---
 name: titan-thread
-description: Write, review, and test multi-threaded Titan code with titan.thread OS threads, bounded cross-thread MPMC channels, structured thread groups, and packet-scoped endpoint transfer (titan.transfer). Use when spawning isolated OS threads with their own Lua/Titan state and async Runtime, sending/receiving values or nested Sender/Receiver endpoints across thread channels or PacketReceiver, composing Thread:task() with async combinators, or managing bounded concurrency and error propagation with thread.Group.
+description: Write, review, and test multi-threaded Titan code with titan.thread OS threads, bounded cross-thread MPMC channels, structured thread groups, and packet-scoped endpoint transfer (titan.transfer). Use when spawning isolated OS threads with their own Lua/Titan state and async Runtime, sending/receiving values or nested Sender/Receiver endpoints across thread channels or async.Receiver, composing Thread:task() with async combinators, or managing bounded concurrency and error propagation with thread.Group.
 ---
 
 # Titan thread
@@ -26,52 +26,100 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
 `Receiver<|T|>`)**:
 - Scalars, strings, public records/unions, Titan closures (whose captures are
   transferable), and records implementing `to_transfer_payload` /
-  `from_transfer_payload` cross thread boundaries safely.
+  `from_transfer_payload` cross thread boundaries safely. A `value` field (and
+  an erased generic field such as `Box<|T|>.item`) carries nil, a boolean,
+  integer, float, string, public nominal, or Titan Array as one `TitanValue`
+  message; callables, Maps, and Interfaces in it raise
+  `protobuf: unsupported dynamic value`. A nominal held there names its
+  declaring module, which the receiving packet decode loads on demand even in a
+  thread that never imported it; standalone protobuf and `:to_value()` outside
+  a packet load no module for it.
+- Eligible public records/unions (all-public, hook-free, at most 64 decoder
+  frame entries: record fields, or one selector plus the largest union
+  payload's parts, independent of variant count) use compiler-generated codecs with
+  the reflective codec's exact bytes, errors, hook calls, and attachment order;
+  Array, foreign, hooked, endpoint, and nominal/Array `value` fields still run
+  the reflective field codec. Do not design payloads around which path runs;
+  `protobuf.use_generated_codecs(false)` is only a differential-test diagnostic.
 - Passing a `Sender<|T|>` or `Receiver<|T|>` (at the root, nested in public
-  records/unions or their Array fields, inside opaque `to_transfer_payload`
-  hooks, or captured in a Titan closure) **retains a new endpoint reference per
-  occurrence** in the active packet's native resource table
-  (`transfer.attach_resource`) and serializes a 4-byte little-endian
-  packet-local slot index (`0xffffffff` is reserved invalid). Reconstruction
-  (`from_transfer_payload`) allocates the destination wrapper with `native = nil`
-  and registers its GC finalizer *before* claiming the slot via
-  `transfer.claim_resource` and assigning the native pointer without further
-  allocation or yielding.
+  records/unions or their Array fields, held by a `value` or erased generic
+  field, inside opaque `to_transfer_payload` hooks, or captured in a Titan
+  closure) **retains a new endpoint reference per
+  occurrence** in the active packet's native resource table and serializes a
+  4-byte little-endian packet-local slot index (`0xffffffff` is reserved
+  invalid). Root, nested structural, and `TransferValue.from_value` /
+  `:to_value()` policy conversions (including closure captures) dispatch through
+  the registered `ResourceCodec` capability (`transfer.register_resource` /
+  `protobuf.register_resource_codec`, keyed by canonical erased metatable
+  identity) before reflective hook lookup. The direct userdata route in
+  `from_value` requires a metatable with no metatable of its own; `:to_value`
+  resolves the capability by initialized nominal name. Custom user hooks can
+  still call `to_transfer_payload` / `from_transfer_payload`
+  (`transfer.attach_resource` / `transfer.claim_resource`). Both reconstruction
+  paths allocate the destination wrapper with `native = nil` and register its GC finalizer *before*
+  claiming the slot and assigning the native pointer without further allocation
+  or yielding.
+- Each endpoint reference unit is owned by **exactly one** of: a live finalized
+  wrapper, or an unconsumed in-flight native message entry. Adopting an entry
+  into a pre-finalized wrapper moves that unit; discarding an unconsumed packet
+  entry releases it natively; calling `close()` changes channel state only and
+  never decrements endpoint counts. Message bytes, wake targets, loop liveness,
+  and OS-thread retirement have separate lifetimes.
 - Endpoint hooks require an active packet encode/decode scope
-  (`transfer.encode_message` / `transfer.decode_message` and
-  `transfer.Packet.from_value` / `Packet:decode`, used by `Sender:send`,
+  (`transfer.encode_message` / `transfer.decode_message`, used by `Sender:send`,
   `Sender:try_send`, `thread.spawn*`, `Group:spawn*`, `Thread:cancel`, child
-  outcomes, and `async.PacketReceiver`). `TransferValue` and protobuf helpers
-  never manufacture a scope: endpoint hooks raise without a matching top encode
-  or decode scope. Opaque-hook and capture collaboration within an existing
-  packet may reuse its scope, but resulting index bytes do not become a reusable
-  ownership policy. Legacy `async.Receiver` and `lua.Lua:run*` have no packet
-  attachment transport.
+  outcomes, and `async.send` / `async.Receiver:wait`). `TransferValue` and
+  protobuf helpers never manufacture a scope: endpoint hooks raise without a
+  matching top encode or decode scope. Opaque-hook and capture collaboration
+  within an existing packet may reuse its scope, but resulting index bytes do
+  not become a reusable ownership policy. Independent `lua.Lua:run*` carriers
+  have no packet attachment transport.
   Authority belongs only to the exact top scope, in the matching direction,
-  for the current Lua-thread/coroutine execution. Nested packet operations
-  restore the enclosing scope on return/error; no older matching scope is
-  searched. Another Task or child Coroutine inherits no permission. Custom
-  `to_transfer_payload` and `from_transfer_payload` hooks remain synchronous
-  and **must not yield**; execution isolation is not permission to broaden that
-  hook contract.
+  for the current Lua-thread/coroutine execution. `ResourceScope` frames are
+  acquired from and retired to a bounded state-local pool (independent of
+  Task/coroutine identity so Task-per-message callers reuse retired frames),
+   while `execution` and the enclosing `previous` frame stay in lexical locals
+  and `resource_scopes[execution]` so idle pooled frames hold no authority or
+  thread references and abandoned active frames are never pooled (their GC
+  finalizer reclaims unfinished scratch units and decode packets natively).
+  A state-wide installed-frame count lets lookups answer "no scope" without
+  resolving the execution when it is zero; each entry point counts before
+  registering its retiring `defer`, so the count can only over-estimate (an
+  abandoned frame keeps it positive). Treat it purely as a fast negative: a
+  positive count never authorizes anything, and the exact-top lookup still runs.
+  Structural record/union and closure envelope codecs receive the packet's
+  already-resolved `ResourceScope` (`serialize_inspected_*_to_buffer`,
+  `deserialize_nominal_buffer_with_context`,
+  `serialize_fields_to_buffer_with_context`, and
+  `deserialize_fields_buffer_with_context`); the nominal decode also receives
+  the `reflect.NominalType?` that the worker's module-initializing lookup
+  already found, so no second registry lookup or `reflect.Type` wrapper runs.
+  Explicit nominal policies and
+  opaque custom-hook roots allocate their single heap packet directly
+  (`new_nominal_message`, with committed attachments stored in the aligned
+  packet tail). Nested packet operations restore the enclosing scope on
+  return/error; no older matching scope is searched. Another Task or child
+  Coroutine inherits no permission. Custom `to_transfer_payload` and
+  `from_transfer_payload` hooks remain synchronous and **must not yield**;
+  execution isolation is not permission to broaden that hook contract.
 - Claim validation checks exact 4-byte index width, active packet bounds,
   expected release callback (`Sender` cannot claim a `Receiver` slot or vice
-  versa), and unclaimed state before touching any native pointer; duplicate
-  claims raise `"transfer: resource attachment was already claimed"`. Index
-  bytes are not global anti-replay tokens: the same number can identify a
-  different valid entry in another packet. They cannot select an arbitrary
-  native pointer or adopt one current entry twice.
+  versa), and unclaimed state before touching any native pointer; a claimed
+  entry clears its resource pointer to `nil` as the consumed sentinel while
+  retaining its release callback so claiming an already-consumed slot with the
+  wrong resource kind still raises `"transfer: resource attachment kind mismatch"`
+  before `"transfer: resource attachment was already claimed"`. Index bytes are
+  not global anti-replay tokens: the same number can identify a different valid
+  entry in another packet. They cannot select an arbitrary native pointer or
+  adopt one current entry twice.
 
 Choose the right primitive for the job:
 - **`async.channel<|T|>`** — single-state, in-memory cooperative Task queue (no
   serialization, same `lua_State`).
-- **`async.Receiver`** — lossy, coalescing cross-state notification slot for
-  attachment-free `async.TransferValue` policies (latest value wins). It does
-  not accept `transfer.Packet` owners.
-- **`async.PacketReceiver`** — lossy, coalescing cross-state latest-packet slot
-  that moves single-owner `transfer.Packet` capabilities (including packets
-  carrying `Sender<|T|>` / `Receiver<|T|>` attachments) and disposes
-  overwritten/unread packets natively.
+- **`async.Receiver`** — lossy, coalescing cross-state latest-value slot that
+  encodes transferable values (including `Sender<|T|>` / `Receiver<|T|>`
+  attachments) or explicit `async.TransferValue` policies into native packets,
+  decodes eagerly in `wait()`, and disposes overwritten/unread packets natively.
 - **`thread.channel<|T|>`** — lossless, bounded FIFO cross-thread MPMC stream
   with backpressure, graceful close/drain, and transferable `Sender<|T|>` /
   `Receiver<|T|>` endpoints.
@@ -195,10 +243,19 @@ for the complete signature table. The main entry points are:
   satisfy it; a join failure raises `async.OperationError` (`thread.join`) and
   keeps the token for a retry, while a successful join consumes the token and
   latches joined state. The join takes no mutex across the native call and does
-  not yield. Channel send/receive and join waits all use
-  `async.wait_external` over the Runtime's one `uv.external_wake_t`; waiters
-  retain a `wake_target` per registration, inline readiness never links or
-  retains one, and `try_send`/`try_receive` prepare no wait.
+  not yield. Channel send/receive use `async.wait_external_native` with C-ABI
+  registrars and the traced endpoint owner; join uses `async.wait_external`.
+  Both use the Runtime's one `uv.external_wake_t`; waiters retain a
+  `wake_target` per registration, inline readiness never links or retains one,
+  and `try_send`/`try_receive` prepare no wait. Channel calls borrow an automatic
+  C context and embedded waiter in the suspended stackful frame, which stays
+  valid until synchronous cancellation/unwind unlink completes. Registrars
+  commit packet ownership in C before delivery can raise; immediate channel
+  paths allocate no registrar closures/capture boxes, and slow paths add no
+  context userdata. Titan code touches the cell only through a pointer local,
+  never as a by-value aggregate whose try-spill reload would roll back a
+  registrar's packet commit. Do not let that raw borrow escape the call or
+  mistake the traced endpoint for state-close protection.
   Requesting proxy cancellation while the proxy is not yet terminal, or dropping
   an unjoined handle (which best-effort detaches its token at native
   destruction), is not proof that the child retired; a terminal proxy status does
@@ -330,19 +387,20 @@ for the complete signature table. The main entry points are:
   and `TransferValue` calls create none and reject resource hooks without one.
   Within packet-owned opaque hooks/capture conversion they can reuse the
   existing scope; the resulting index bytes own nothing and are not reusable
-  standalone policies. Legacy `async.Receiver` and `lua.Lua:run*` do not transport
-  packet attachments; use thread channels/spawn or `async.PacketReceiver`.
+  standalone policies. Standalone `TransferValue` policies and `lua.Lua:run*` do
+  not transport packet attachments; pass endpoints through thread channels/spawn
+  or `async.send` / `async.Receiver`.
 - **Native resource moves need explicit ownership**: automatic packet discard
   (`transfer.discard_message`) only releases registered packet resource-table
   entries (initially `thread.Sender` and `thread.Receiver`). Sending an
   `http.Exchange`, `http.UpgradedStream`, `websocket.Connection`,
   `net.Connection`, `ssl.Connection`, or a transferable `uv.tcp_t`/`uv.pipe_t`
-  through a thread channel or PacketReceiver uses manual payload bytes, not a
+  through a thread channel or `async.Receiver` uses manual payload bytes, not a
   packet disposer. Native discard never runs decoders. Recover using the owning
   type's documented adoption/close procedure, or its `discard_transfer_payload`
   helper where one exists. Files, io/os streams and SQLite Connection have no
   such helper. Stop producers and recover/drain handoffs before closing either
-  `thread.Receiver` or `async.PacketReceiver`. Follow the
+  `thread.Receiver` or `async.Receiver`. Follow the
   [networking handoff contract](../titan-networking/SKILL.md#native-connection-and-http-handoff)
   and [WebSocket disposal guidance](../titan-websocket/SKILL.md#transferring-native-sessions).
 - **`Thread:cancel` targets the child's root `Task`**: if a worker thread
