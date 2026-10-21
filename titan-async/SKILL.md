@@ -617,9 +617,13 @@ after yield; unregister synchronously from cancellation or the Task's unwind):
 register returns `0` ready without admission, `1` linked with one retained
 target, or a negative rejection without a link/reference
 (`async.external_wait.register`). Unregister is synchronous, idempotent and
-called once on cancellation/registration failure, never normal notification or
-inline readiness. NULL callbacks raise before preparation. Completion/token
-identity, deferred delivery and target liveness are unchanged.
+called once on cancellation/registration failure, not on inline readiness or a
+normal notification-then-resume. A `Task:cancel` arriving after native
+notification but before the Task resumes still calls unregister: the native
+domain must pass the consumed wakeup to another eligible waiter when progress
+remains possible, as thread channels do with their wakeup baton. NULL callbacks
+raise before preparation. Completion/token identity, deferred delivery and
+target liveness are unchanged.
 Keep the context storage and every GC owner it references alive for the entire
 call. Channel code roots its endpoint and borrows one automatic C context plus
 embedded waiter in its stackful Task frame; cancellation/unwind unlinks before
