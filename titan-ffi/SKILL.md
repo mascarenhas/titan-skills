@@ -1600,7 +1600,9 @@ keeps that home escaped if an ordinary callee is inlined; volatility alone is
 insufficient. Indirect writes before an opaque raise remain visible to catch
 and deferred cleanup, including after an earlier protected assignment.
 `decode_message` itself contains a `catch`/`setjmp` and supported GCC/Clang do
-not inline it, including with Linux LTO. This is a supported-toolchain
+not inline it. The volatile-home/barrier guarantee is verified with GCC,
+including LTO (production-provider evidence), and with Clang at `-O2`/`-O3`
+without LTO. Clang LTO is not separately verified. This is a supported-toolchain
 guarantee (including Windows Clang/MSYS2), with the ISO C 6.7.3p6 caveat for
 unqualified access to a volatile object, not strict ISO-C safety. See
 [recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills)

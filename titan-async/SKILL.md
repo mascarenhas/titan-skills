@@ -212,9 +212,12 @@ declaration-time compiler escape barrier, so an indirect clear before an
 opaque raise is visible to catch/deferred cleanup. Earlier protected
 assignments leave no stale spill. The barrier preserves the home even if an
 ordinary callee is inlined; volatility alone is insufficient. Decode itself
-contains `catch`/`setjmp` and supported GCC/Clang do not inline it, including
-with Linux LTO. This supported-toolchain guarantee includes Windows
-Clang/MSYS2 but retains the ISO C 6.7.3p6 unqualified-access caveat; see
+contains `catch`/`setjmp` and supported GCC/Clang do not inline it. The
+volatile-home/barrier guarantee is verified with GCC, including LTO
+(production-provider evidence), and with Clang at `-O2`/`-O3` without LTO.
+Clang LTO is not separately verified. This supported-toolchain guarantee
+includes Windows Clang/MSYS2 but retains the ISO C 6.7.3p6 unqualified-access
+caveat; see
 [recovery storage and LTO](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
 Never wrap the raw slot in an ordinary forwarding helper: its own entry can
 fail before decode takes ownership.

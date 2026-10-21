@@ -1719,8 +1719,11 @@ declaration. Recovery-sensitive non-GC scalars whose mutable C address is
 taken have one volatile home plus a declaration-time compiler escape barrier;
 a decoder that clears then raises must leave catch and the guard seeing nil,
 never a stale spill. Decode's own `catch`/`setjmp` prevents inlining by
-supported GCC/Clang, including under Linux LTO: native decode coverage is not
-an inlining test. Separately exercise ordinary inlinable scalar callees at
+supported GCC/Clang: native decode coverage is not an inlining test. The
+volatile-home/barrier guarantee is verified with GCC, including LTO
+(production-provider evidence), and with Clang at `-O2`/`-O3` without LTO.
+Clang LTO is not separately verified. Separately exercise ordinary inlinable
+scalar callees at
 `-O2`/`-O3`, with no normal-path read: write through the address, then raise
 from a checked return conversion, while the protected body returns directly.
 This terminal error shape exposes GCC's dead-store deletion without a barrier.

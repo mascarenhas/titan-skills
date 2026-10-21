@@ -380,10 +380,12 @@ Require corrected code and exact explanations of:
   visible even after an earlier protected assignment. The barrier keeps the
   home escaped when ordinary callees are inlined; volatility alone is
   insufficient. Decode's own `catch`/`setjmp` prevents supported GCC/Clang
-  inlining, including under Linux LTO. This implementation guarantee includes
-  Windows Clang/MSYS2, with the ISO C 6.7.3p6 caveat for unqualified access,
-  not strict ISO-C safety. The caller never wraps the slot in a fallible
-  ordinary helper;
+  inlining. The volatile-home/barrier guarantee is verified with GCC,
+  including LTO (production-provider evidence), and with Clang at `-O2`/`-O3`
+  without LTO. Clang LTO is not separately verified. This implementation
+  guarantee includes Windows Clang/MSYS2, with the ISO C 6.7.3p6 caveat for
+  unqualified access, not strict ISO-C safety. The caller never wraps the
+  slot in a fallible ordinary helper;
 - the scalar guarantee does not extend to aggregate byte spills: a normally
   returning ordinary Titan callee currently does not commit a mutable aggregate
   out-argument, so recovery can restore stale bytes if another protected
