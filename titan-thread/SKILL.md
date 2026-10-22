@@ -243,19 +243,22 @@ for the complete signature table. The main entry points are:
   satisfy it; a join failure raises `async.OperationError` (`thread.join`) and
   keeps the token for a retry, while a successful join consumes the token and
   latches joined state. The join takes no mutex across the native call and does
-  not yield. Channel send/receive use `async.wait_external_native` with C-ABI
-  registrars and the traced endpoint owner; join uses `async.wait_external`.
-  Both use the Runtime's one `uv.external_wake_t`; waiters retain a
+  not yield. Channel send/receive and join use `async.wait_external_native`
+  with C-ABI registrars and the traced endpoint or `Thread` owner, over the
+  Runtime's one `uv.external_wake_t`; waiters retain a
   `wake_target` per registration, inline readiness never links or retains one,
-  and `try_send`/`try_receive` prepare no wait. Channel calls borrow an automatic
-  C context and embedded waiter in the suspended stackful frame, which stays
-  valid until synchronous cancellation/unwind unlink completes. Registrars
+  and `try_send`/`try_receive` prepare no wait. Channel and join calls borrow an
+  automatic C context and embedded waiter in the suspended stackful frame, which
+  stays valid until synchronous cancellation/unwind unlink completes. Registrars
   commit packet ownership in C before delivery can raise; immediate channel
   paths allocate no registrar closures/capture boxes, and slow paths add no
   context userdata. Titan code touches the cell only through a pointer local,
   never as a by-value aggregate whose try-spill reload would roll back a
-  registrar's packet commit. Do not let that raw borrow escape the call or
-  mistake the traced endpoint for state-close protection.
+  registrar's packet commit. Do not let that raw borrow escape the call. The
+  traced endpoint is not state-close protection: each registration pins the
+  channel or control block until its unregister or its own Task's next locked
+  retry acknowledges the wake (wakers never drop pins), and lua_close withdraws
+  parked native waits before destroying their coroutine stacks.
   Requesting proxy cancellation while the proxy is not yet terminal, or dropping
   an unjoined handle (which best-effort detaches its token at native
   destruction), is not proof that the child retired; a terminal proxy status does
