@@ -635,7 +635,10 @@ state closes with the Task parked, `lua_close` calls unregister before the
 coroutine stack is released (closure-registered waits are not withdrawn), and
 `owner` may already be finalized then, so the domain must pin its native object
 per registration until unregister or the woken Task's own next locked retry,
-never dropping the pin in the waker (thread channels and joins do). Channel
+never dropping the pin in the waker (thread channels and joins do). Because the
+parked Task's `defer` blocks never run at state close, unregister must also
+dispose of native data the context owns (a parked channel send discards its
+pending packet there, after releasing the domain mutex). Channel
 fast paths use no registrar closure or mutable capture box; do not replace these
 with a fresh per-wait userdata. When a `defer`/`catch` reads an automatic
 context after the wait raises, use it only through a `foreign *T` pointer local:
