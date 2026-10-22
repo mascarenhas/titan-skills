@@ -433,8 +433,8 @@ cancellation precedence over the recorded body success or error: a first
 explicit `Task:cancel` is accepted while the Task is unfinished, including
 during a pending native retirement. Terminal status still follows native
 retirement. The thread standard library binds this gate to
-`Thread:task()` and suspends its channel waits through
-`async.wait_external_native`, and ordinary join waits through `async.wait_external`.
+`Thread:task()` and suspends its channel and join waits through
+`async.wait_external_native`.
 
 Only that exact cleanup-policy operation, with the canonical private
 native-retirement registrar, may use the reserved last suspension epoch. Arbitrary
@@ -630,7 +630,15 @@ target liveness are unchanged.
 Keep the context storage and every GC owner it references alive for the entire
 call. Channel code roots its endpoint and borrows one automatic C context plus
 embedded waiter in its stackful Task frame; cancellation/unwind unlinks before
-the frame can leave. A borrowed pointer is not state-close protection. Channel
+the frame can leave. A borrowed pointer is not state-close protection: if the
+state closes with the Task parked, `lua_close` calls unregister before the
+coroutine stack is released (closure-registered waits are not withdrawn), and
+`owner` may already be finalized then, so the domain must pin its native object
+per registration until unregister or the woken Task's own next locked retry,
+never dropping the pin in the waker (thread channels and joins do). Because the
+parked Task's `defer` blocks never run at state close, unregister must also
+dispose of native data the context owns (a parked channel send discards its
+pending packet there, after releasing the domain mutex). Channel
 fast paths use no registrar closure or mutable capture box; do not replace these
 with a fresh per-wait userdata. When a `defer`/`catch` reads an automatic
 context after the wait raises, use it only through a `foreign *T` pointer local:

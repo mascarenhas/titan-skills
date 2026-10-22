@@ -1606,9 +1606,11 @@ without LTO. Clang LTO is not separately verified. This is a supported-toolchain
 guarantee (including Windows Clang/MSYS2), with the ISO C 6.7.3p6 caveat for
 unqualified access to a volatile object, not strict ISO-C safety. See
 [recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills)
-for the barrier/LTO assumptions and the separate known limitation: normally
-returning ordinary Titan callees do not commit aggregate out-argument byte
-spills. Untracked-alias/asynchronous C mutation remains outside the guarantee.
+for the barrier/LTO assumptions. Aggregates use byte spills instead: passing an
+aggregate's mutable address directly to a C or ordinary Titan call commits its
+spill only after that call returns normally, so a raising callee's partial
+writes are discarded. Untracked-alias/asynchronous C mutation remains outside
+the guarantee.
 Never pass the raw slot through an ordinary forwarding helper. Lua code cannot
 call `decode_message` (raw C pointer parameters have no dynamic Lua
 coercion). Stateful decode is not a no-Lua release callback; `discard_message`

@@ -386,11 +386,11 @@ Require corrected code and exact explanations of:
   guarantee includes Windows Clang/MSYS2, with the ISO C 6.7.3p6 caveat for
   unqualified access, not strict ISO-C safety. The caller never wraps the
   slot in a fallible ordinary helper;
-- the scalar guarantee does not extend to aggregate byte spills: a normally
-  returning ordinary Titan callee currently does not commit a mutable aggregate
-  out-argument, so recovery can restore stale bytes if another protected
-  assignment made that object spill-tracked. Treat this as a known limitation,
-  not as aggregate coverage supplied by the scalar tests;
+- the scalar guarantee is distinct from aggregate byte spills: an aggregate
+  whose mutable address is passed directly to a C or ordinary Titan call has
+  its spill committed only after that call returns normally, so recovery sees
+  a completed callee write but not the partial writes of a callee that raised.
+  Scalar tests do not supply aggregate coverage;
 - native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
   no-Lua endpoint release callbacks surviving source-state close, last-Receiver
   drain pinning, and why manual HTTP/TLS/WebSocket/TCP handoffs still need
