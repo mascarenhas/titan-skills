@@ -583,7 +583,7 @@ Therefore:
 
 The normative callback sequence is in `doc/language/async-io.md`, “The
 callback/continuation model,” and the non-reentrant invariant is explicit in
-`doc/implementation/libuv-runtime.md:29-44`.
+[driver and registration trampoline](../../../doc/implementation/libuv-runtime.md#driver-and-registration-trampoline).
 
 When a test deliberately produces uncaught Task diagnostics in the aggregate,
 use the owning context to bracket the expected raw region with flushed lines:
