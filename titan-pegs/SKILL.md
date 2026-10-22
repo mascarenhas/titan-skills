@@ -576,7 +576,8 @@ function(string): string                                           -- public gsu
 ```
 
 Authority: `doc/language/standard-library-peg.md:248-289`,
-`doc/implementation/lpeglabel-embedding.md:150-190,282-320`, and
+[typed folder-module boundary](../../../doc/implementation/lpeglabel-embedding.md#typed-folder-module-boundary),
+[stack, roots, callbacks, and errors](../../../doc/implementation/lpeglabel-embedding.md#stack-roots-callbacks-and-errors), and
 `spec/stdlib/titan/peg/tests/core_test.titan:467-560`.
 
 ## Labels, commitment, recovery, and good diagnostics
@@ -1085,7 +1086,10 @@ after `titan.peg` does not make its patterns compatible, and changing its stack
 limit does not change Titan's.
 
 Authority: `doc/language/standard-library-peg.md:358-400`,
-`doc/implementation/lpeglabel-embedding.md:47-107,109-230`, and
+[native namespace and registry identity](../../../doc/implementation/lpeglabel-embedding.md#native-namespace-and-registry-identity),
+[opening one private engine per Lua state](../../../doc/implementation/lpeglabel-embedding.md#opening-one-private-engine-per-lua-state),
+[typed folder-module boundary](../../../doc/implementation/lpeglabel-embedding.md#typed-folder-module-boundary),
+[construction accounting and string labels](../../../doc/implementation/lpeglabel-embedding.md#construction-accounting-and-string-labels), and
 `titan/peg/peg.titan:7-16,164-187,205-210`.
 
 ## Pitfall checklist for reviews
@@ -1335,7 +1339,14 @@ This cartridge was derived from the repository at commit
   lines 29-120 public types/constructors, 121-289 composition/captures,
   291-400 matching/limits, and 402-530 Relabel/search/diagnostics).
 * **Embedding and callback rationale:**
-  `doc/implementation/lpeglabel-embedding.md:47-107,109-230,231-383`.
+  [`doc/implementation/lpeglabel-embedding.md`](../../../doc/implementation/lpeglabel-embedding.md):
+  [native namespace and registry identity](../../../doc/implementation/lpeglabel-embedding.md#native-namespace-and-registry-identity),
+  [opening one private engine per Lua state](../../../doc/implementation/lpeglabel-embedding.md#opening-one-private-engine-per-lua-state),
+  [typed folder-module boundary](../../../doc/implementation/lpeglabel-embedding.md#typed-folder-module-boundary),
+  [construction accounting and string labels](../../../doc/implementation/lpeglabel-embedding.md#construction-accounting-and-string-labels),
+  [match adapter and failure positions](../../../doc/implementation/lpeglabel-embedding.md#match-adapter-and-failure-positions),
+  [stack, roots, callbacks, and errors](../../../doc/implementation/lpeglabel-embedding.md#stack-roots-callbacks-and-errors),
+  and [relabel translation](../../../doc/implementation/lpeglabel-embedding.md#relabel-translation).
 * **Exact public declarations and implementation boundary:**
   `titan/peg/peg.titan:66-111,115-212,218-503,508-623`.
 * **Relabel lexical grammar and suffix semantics:**
