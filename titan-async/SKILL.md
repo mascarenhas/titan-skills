@@ -287,7 +287,9 @@ Lua code cannot call `decode_message`. Decode is a stateful Lua operation;
   closed with an unretired Runtime anyway, its finalizer closes the remaining
   handles and the loop through public `uv.loop_abandon`, without delivering any
   user callback (even an already-requested close callback), resuming Tasks,
-  running domain unregister functions or notifying close listeners. Native
+  running domain unregister functions or notifying close listeners (parked
+  waits were already withdrawn while the suspended Tasks were unwound, before
+  that finalizer). Native
   owners captured by callbacks may already have been finalized; merely catching
   callback errors cannot make dispatch safe. UV clears callback slots once and
   keeps only internal native retirement handlers. Keep the Runtime active,
@@ -631,14 +633,16 @@ Keep the context storage and every GC owner it references alive for the entire
 call. Channel code roots its endpoint and borrows one automatic C context plus
 embedded waiter in its stackful Task frame; cancellation/unwind unlinks before
 the frame can leave. A borrowed pointer is not state-close protection: if the
-state closes with the Task parked, `lua_close` calls unregister before the
-coroutine stack is released (closure-registered waits are not withdrawn), and
-`owner` may already be finalized then, so the domain must pin its native object
+state closes with the Task parked, the Task is unwound, so `unregister` runs
+from the wait's own cleanup before the coroutine stack is released
+(closure-registered waits included), and `owner` may already be finalized
+then, so the domain must pin its native object
 per registration until unregister or the woken Task's own next locked retry,
-never dropping the pin in the waker (thread channels and joins do). Because the
-parked Task's `defer` blocks never run at state close, unregister must also
-dispose of native data the context owns (a parked channel send discards its
-pending packet there, after releasing the domain mutex). Channel
+never dropping the pin in the waker (thread channels and joins do). The Task's
+`defer` blocks run afterwards inside a finalizer and cannot await. Whatever
+`unregister` disposes of it must also clear, so that `defer` cannot dispose of
+it again (`channel_unregister_send_wait` clears `wait.message` and discards the
+pending packet outside the domain mutex). Channel
 fast paths use no registrar closure or mutable capture box; do not replace these
 with a fresh per-wait userdata. When a `defer`/`catch` reads an automatic
 context after the wait raises, use it only through a `foreign *T` pointer local:
@@ -1703,6 +1707,14 @@ Tags use raw equality. A tagged yield finds the nearest active resumer with the
 same tag; skipped inner coroutines become `stacked` until the suspended matching
 handler resumes. Status strings are `suspended`, `running`, `normal`, `stacked`,
 and `dead`.
+
+A suspended or stacked coroutine that becomes unreachable, or is still
+suspended when its state closes, is unwound: its `defer`s and generic-`for`
+closes run, its catches do not. That cleanup runs inside a finalizer, where
+`yield`, `resume`, `error` and therefore every `await` raise; at state close
+Task cleanup also runs outside the scheduler, `run`/`run_with_cleanup` raise
+`cannot start a Task during Lua state close`, and creating a Runtime raises.
+Graceful protocol shutdown that needs awaits belongs before the state closes.
 
 ```titan
 local coroutine = import "coroutine"

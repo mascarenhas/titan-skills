@@ -1334,7 +1334,9 @@ end
 ```
 
 A deferred statement cannot return from the enclosing function or break an
-outer loop.
+outer loop. Defers of a suspended coroutine that is collected or still suspended
+at state close also run, inside a finalizer where yield, resume and `await`
+raise; see [`coroutines.md`](../../../doc/language/coroutines.md#abandoned-coroutines).
 
 ## Core standard library
 
