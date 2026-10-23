@@ -1253,18 +1253,25 @@ record identity. A mismatch raises synchronously in the caller with this exact
 message: `Task resume token mismatch (expected source: <source>)`. A nil
 expected token or nil source is rendered as `unknown source`. The source does
 not participate in equality.
-A running Task is the exception. This includes a Task about to suspend whose
-suspension the Runtime has not registered yet, which is how a finalizer reaches
-a waiter just before it parks. Such a Task latches the supplied token instead
-of raising. Its next suspension consumes the latch: a `suspend` with that token
-returns at once, and any other suspension discards it, including a `suspend`
-with another token, a native wait, or a yield. When several calls arrive first,
-the latest token wins, and calls with the same token coalesce. Every other
-wrong-time call still raises with `unknown source`: a ready Task, an ordinary
-native wait, a queued yield, or terminal completion. It is never a no-op. A
-latch can also catch a running Task after its delivered suspension, so do not
-reuse a token across waits unless the waker clears its waiting flag before it
-resumes, as `Gate:open` below does.
+A running Task is the exception. `Task:resume(token)` on a Task that is
+running, or whose next wait the Runtime is still registering (how a finalizer
+reaches a waiter just before it parks), latches the token instead of raising;
+the latest call wins and the same token coalesces. The Task's immediately next
+suspension consumes the latch if it is `suspend` with that token, which then
+returns at once; any other next suspension (another token, a native or external
+wait, a yield) or the Task finishing discards it. Every other wrong-time call
+still raises with `unknown source`: a ready Task, an ordinary native wait, a
+queued yield, or terminal completion.
+
+A running Task cannot tell an early wake from a stale one, so every waker must
+hold a live registration. Make the waiter discoverable before the last check
+of its condition, then either clear the registration before `resume` (each
+wait gets at most one `resume`, as `Gate:open` below does) or recheck the
+condition after every return from `suspend` (as `Receiver:wait`'s loop does).
+Reuse one token across waits only under one of these disciplines; a fresh token
+per wait makes a stale latch unmatchable. Do not yield, await or suspend on
+anything else between the last check and `suspend`: an early wake meant for a
+later suspension is dropped silently.
 
 With the correct token, `resume`:
 
@@ -1280,19 +1287,23 @@ continuation must never observe or inherit the completed suspension's token or
 wake bit.
 
 Keep tokens private to the coordination abstraction. Share one record among all
-paths that own a single condition (for example one per channel), or create one
-fresh record per combinator invocation. Do not use a token as a general native-
+paths that own a single condition (for example one per channel, whose waiters
+recheck after every return), or create one fresh record per wait or combinator
+invocation. Do not use a token as a general native-
 wait capability: one-shot callbacks settle their exact await capability,
 while persistent sources publish through their subscription.
 
 The optional suspend cancellation action is for idempotently detaching the
-**exact** waiter. It runs synchronously only on cancellation, before the wake is
-scheduled with the token captured by the suspension. Ordinary correct-token
+**exact** waiter. It runs at most once, only on cancellation: synchronously in
+the canceller before the wake is scheduled with the token captured by the
+suspension, or, for a cancellation that arrives while the suspension is still
+registering, when the Runtime accepts it. Ordinary correct-token
 `resume` does not run it. It must not yield or raise. Always pair the
 registration with ordinary scope cleanup too.
 
 A long-lived single-reader owner may allocate its token and cancellation action
-once (as `async.Receiver` does on its first wait) instead of per wait. Reserve
+once (as `async.Receiver` does on its first wait) instead of per wait, provided
+its waiter rechecks its condition after every return from `suspend`. Reserve
 by storing the waiting Task, make the shared action clear that reservation
 unconditionally, and release on scope exit only when the stored Task is still
 the current one:
@@ -1327,11 +1338,14 @@ local function Gate:wait()
   if self.waiter then raise "Gate already has a waiting Task" end
 
   local current = async.running()
+  -- Publish the waiter, then check the condition again: an open() from a
+  -- finalizer before publication is seen here, and one after it is latched.
   self.waiter = current
   local detach = function ()
     if self.waiter == current then self.waiter = nil end
   end
   defer detach()
+  if self.opened then return end
 
   async.suspend(self.resume_token, detach)
 end
@@ -1347,8 +1361,9 @@ local function Gate:open()
 end
 ```
 
-`open` commits the monotonic condition before the only authorized normal wake,
-so a normal return from this single suspension already establishes `opened`.
+`open` commits the monotonic condition and clears the waiter before the only
+authorized normal wake, so a normal return from this single suspension already
+establishes `opened`, and the reused token never receives a stale wake.
 Cancellation unwinds instead, and the defer removes the waiter. A resettable
 level condition is different: recheck it after an authorized wake when other
 token-authorized code can legitimately make it false again before delivery.
@@ -1581,9 +1596,10 @@ by its send, receive, close, and cancellation paths. Opposite-side progress
 changes the buffer first, then calls the waiter's `resume(token)`; close commits
 terminal state before doing the same. The occupied waiter slot prevents another
 same-direction operation from stealing that progress before delivery. A
-blocking operation therefore suspends once: a normal return has its buffer
-postcondition or observes close, while a caller with another token cannot wake
-it.
+blocking operation publishes its slot and then suspends in a loop while the
+buffer is still full or empty and the channel is open, so a wake before
+publication or a stale latched wake on the shared token cannot return it
+early; a caller with another token cannot wake it.
 
 `close()` is synchronous and idempotent. It discards buffered values, wakes
 both waiter slots, and makes every later or woken send/receive raise
@@ -1860,6 +1876,10 @@ Before accepting Task/application code, verify:
   `Task resume token mismatch (expected source: <source>)`, with
   `unknown source` when no source is stored, except that a running Task latches
   the token for its next explicit suspension (latest wins).
+- Every waker holds a live registration: the waiter is published before the
+  last condition check, and the waker clears it before `resume` or the waiter
+  rechecks after every return from `suspend`; a token reused across waits
+  follows one of these, otherwise each wait gets a fresh token.
 - It preserves the delivery ordering: clear `suspended`, `resume_token`, and
   `resume_pending` before `advance_task` re-enters user code.
 - It uses `Task:resume(token)` only for the exact explicit
@@ -1965,7 +1985,7 @@ Task, such as one from a finalizer before its suspension registers, latches
 for its next `suspend`. The Runtime clears `suspended`, `resume_token`, and
 `resume_pending` before `advance_task` enters `target`.
 
-**Fail:** `before>target>after`, treat a wrong-time resume as a no-op, compare
+**Fail:** `before>target>after`, treat a wrong-time resume of a ready, waiting or finished Task as a no-op, compare
 token sources instead of identity, or claim a general native operation can be
 forced complete with `Task:resume(token)`.
 
