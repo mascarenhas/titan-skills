@@ -1253,10 +1253,18 @@ record identity. A mismatch raises synchronously in the caller with this exact
 message: `Task resume token mismatch (expected source: <source>)`. A nil
 expected token or nil source is rendered as `unknown source`. The source does
 not participate in equality.
-The check is unconditional: before suspension, after wake delivery until
-another explicit suspension, during an ordinary native wait, and after terminal
-completion the expected token is nil, so every supplied token mismatches
-instead of becoming a no-op.
+A running Task is the exception. This includes a Task about to suspend whose
+suspension the Runtime has not registered yet, which is how a finalizer reaches
+a waiter just before it parks. Such a Task latches the supplied token instead
+of raising. Its next suspension consumes the latch: a `suspend` with that token
+returns at once, and any other suspension discards it, including a `suspend`
+with another token, a native wait, or a yield. When several calls arrive first,
+the latest token wins, and calls with the same token coalesce. Every other
+wrong-time call still raises with `unknown source`: a ready Task, an ordinary
+native wait, a queued yield, or terminal completion. It is never a no-op. A
+latch can also catch a running Task after its delivered suspension, so do not
+reuse a token across waits unless the waker clears its waiting flag before it
+resumes, as `Gate:open` below does.
 
 With the correct token, `resume`:
 
@@ -1848,9 +1856,10 @@ Before accepting Task/application code, verify:
 - It creates a private nominal `ResumeToken`, passes the same record to
   `async.suspend(token, ...)` and every authorized `Task:resume(token)`, and
   treats `source` as diagnostic only.
-- It expects a wrong token—or any token at the wrong time—to raise in the
-  caller as `Task resume token mismatch (expected source: <source>)`, with
-  `unknown source` when no source is stored.
+- It expects a wrong token to raise in the caller as
+  `Task resume token mismatch (expected source: <source>)`, with
+  `unknown source` when no source is stored, except that a running Task latches
+  the token for its next explicit suspension (latest wins).
 - It preserves the delivery ordering: clear `suspended`, `resume_token`, and
   `resume_pending` before `advance_task` re-enters user code.
 - It uses `Task:resume(token)` only for the exact explicit
@@ -1950,9 +1959,10 @@ order is possible, and what does another token do?
 accepting the coalesced Runtime queue entry; it never enters target inline.
 Repeated correct-token requests coalesce and exact libuv iteration count is not
 promised. Another token raises in its caller as
-`Task resume token mismatch (expected source: <source>)`; after wake delivery
-and before another suspension—or after terminal completion—the expected source
-is `unknown source`. The Runtime clears `suspended`, `resume_token`, and
+`Task resume token mismatch (expected source: <source>)`; after terminal
+completion the expected source is `unknown source`. A resume of a running
+Task, such as one from a finalizer before its suspension registers, latches
+for its next `suspend`. The Runtime clears `suspended`, `resume_token`, and
 `resume_pending` before `advance_task` enters `target`.
 
 **Fail:** `before>target>after`, treat a wrong-time resume as a no-op, compare
