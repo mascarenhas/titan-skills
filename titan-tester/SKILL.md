@@ -883,6 +883,12 @@ cases, and the complete gate uses no filter. See
 `-f`, or use one carefully designed Lua pattern. The filter does not change the
 30-root compile.
 
+On Unix, several filtered `titan-stdlib-test-run` processes can share one
+built aggregate concurrently when each sets its own `TITAN_TEST_RUN_LOG` and
+`TMPDIR`; see [concurrent filtered
+runs](../../../doc/implementation/test-runner.md#concurrent-filtered-runs).
+`Makefile.win` runs of one workspace stay sequential.
+
 `BUSTED_FILTER` never filters Titan cases, and `TITAN_FILTER` never filters
 Busted. The LuaRocks command adapter also recognizes explicit
 `--busted-filter` and `--titan-filter` options; all other appended arguments go
