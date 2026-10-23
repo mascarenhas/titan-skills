@@ -362,7 +362,8 @@ function run_with_cleanup<|A, B|>(
     body: function (): (A),
     cleanup: function (CancellationReason<|B|>?): (),
     final_wait: ExternalWait?): Task<|A, B|>
-function run_foreign(f: foreign function (*void): void, arg: foreign *void)
+function run_foreign(f: foreign function (*void): void, arg: foreign *void,
+                     abandoned: foreign function (*void): void)
 function loop()
 function add_close_listener(listener: function (): ()): function (): ()
 function yield()
@@ -808,7 +809,7 @@ error and cancellation precedence before querying a shared reservation.
 
 ### Foreign blocking work is a narrow C-only boundary
 
-`async.run_foreign(f, arg)` submits exactly `f(arg)` to libuv's process-wide
+`async.run_foreign(f, arg, abandoned?)` submits exactly `f(arg)` to libuv's process-wide
 worker pool and suspends the current Task until the after-work callback returns
 to the event-loop thread. Ordinary applications use it for blocking calls
 into external C libraries; the independent-state Lua adapter is described
@@ -847,6 +848,18 @@ numerous jobs can delay unrelated I/O. A long-lived remote event loop still
 occupies its worker slot. Size `UV_THREADPOOL_SIZE` before first pool use and
 leave capacity for filesystem/DNS/SQLite work needed by those services; new
 Lua states do not get separate pools.
+
+A Lua state close unwinds a Task waiting in `run_foreign` before `f(arg)`
+returns, so its `defer`s run while the worker may still use `arg`; never free
+native state in such a `defer`. An `owned` argument is safe: the collector
+frees it only after the Runtime drains accepted work. For other native state
+pass the optional C-only `abandoned(arg)` release: the Runtime finalizer calls
+it on the closing thread once every accepted job has returned, and only when a
+state close abandoned the wait. Otherwise release after the call returns or in
+`catch`, and let the caller's `defer` skip it with a flag that only a normal
+return or `catch` clears, as `lua.Lua:run_async` does. Never release on the
+worker anything whose teardown waits for the pool. See
+[foreign work at state close](../../../doc/language/async-io.md#foreign-work-at-state-close).
 
 The portable raw-pointer signature is statically callable across compiled Titan
 modules. It does not create a dynamic Lua coercion for raw pointers or foreign
