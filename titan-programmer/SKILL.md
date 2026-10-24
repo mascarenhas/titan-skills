@@ -1334,7 +1334,9 @@ end
 ```
 
 A deferred statement cannot return from the enclosing function or break an
-outer loop.
+outer loop. Defers of a suspended coroutine that is collected or still suspended
+at state close also run, inside a finalizer where yield, resume and `await`
+raise; see [`coroutines.md`](../../../doc/language/coroutines.md#abandoned-coroutines).
 
 ## Core standard library
 
@@ -1623,8 +1625,9 @@ the module source they are written `File` and `Stat`.)
 Modes are the familiar `r`, `w`, `a`, and `+` families, with optional `b`.
 File contents are binary strings. `File:read()` defaults to 64 KiB and returns
 nil only when no bytes are available at EOF. `read_until` is delimiter-aware
-across chunks. Always close application-owned Files; Runtime teardown does not
-own operating-system file descriptors:
+across chunks. Always close application-owned Files: an async Runtime's
+teardown does not own operating-system file descriptors, and only closing the
+Lua state closes Files left open (except one with a request still in flight):
 
 ```titan
 local fs = import "fs"

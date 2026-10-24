@@ -287,7 +287,9 @@ Lua code cannot call `decode_message`. Decode is a stateful Lua operation;
   closed with an unretired Runtime anyway, its finalizer closes the remaining
   handles and the loop through public `uv.loop_abandon`, without delivering any
   user callback (even an already-requested close callback), resuming Tasks,
-  running domain unregister functions or notifying close listeners. Native
+  running domain unregister functions or notifying close listeners (parked
+  waits were already withdrawn while the suspended Tasks were unwound, before
+  that finalizer). Native
   owners captured by callbacks may already have been finalized; merely catching
   callback errors cannot make dispatch safe. UV clears callback slots once and
   keeps only internal native retirement handlers. Keep the Runtime active,
@@ -360,7 +362,8 @@ function run_with_cleanup<|A, B|>(
     body: function (): (A),
     cleanup: function (CancellationReason<|B|>?): (),
     final_wait: ExternalWait?): Task<|A, B|>
-function run_foreign(f: foreign function (*void): void, arg: foreign *void)
+function run_foreign(f: foreign function (*void): void, arg: foreign *void,
+                     abandoned: foreign function (*void): void)
 function loop()
 function add_close_listener(listener: function (): ()): function (): ()
 function yield()
@@ -631,14 +634,16 @@ Keep the context storage and every GC owner it references alive for the entire
 call. Channel code roots its endpoint and borrows one automatic C context plus
 embedded waiter in its stackful Task frame; cancellation/unwind unlinks before
 the frame can leave. A borrowed pointer is not state-close protection: if the
-state closes with the Task parked, `lua_close` calls unregister before the
-coroutine stack is released (closure-registered waits are not withdrawn), and
-`owner` may already be finalized then, so the domain must pin its native object
+state closes with the Task parked, the Task is unwound, so `unregister` runs
+from the wait's own cleanup before the coroutine stack is released
+(closure-registered waits included), and `owner` may already be finalized
+then, so the domain must pin its native object
 per registration until unregister or the woken Task's own next locked retry,
-never dropping the pin in the waker (thread channels and joins do). Because the
-parked Task's `defer` blocks never run at state close, unregister must also
-dispose of native data the context owns (a parked channel send discards its
-pending packet there, after releasing the domain mutex). Channel
+never dropping the pin in the waker (thread channels and joins do). The Task's
+`defer` blocks run afterwards inside a finalizer and cannot await. Whatever
+`unregister` disposes of it must also clear, so that `defer` cannot dispose of
+it again (`channel_unregister_send_wait` clears `wait.message` and discards the
+pending packet outside the domain mutex). Channel
 fast paths use no registrar closure or mutable capture box; do not replace these
 with a fresh per-wait userdata. When a `defer`/`catch` reads an automatic
 context after the wait raises, use it only through a `foreign *T` pointer local:
@@ -804,7 +809,7 @@ error and cancellation precedence before querying a shared reservation.
 
 ### Foreign blocking work is a narrow C-only boundary
 
-`async.run_foreign(f, arg)` submits exactly `f(arg)` to libuv's process-wide
+`async.run_foreign(f, arg, abandoned?)` submits exactly `f(arg)` to libuv's process-wide
 worker pool and suspends the current Task until the after-work callback returns
 to the event-loop thread. Ordinary applications use it for blocking calls
 into external C libraries; the independent-state Lua adapter is described
@@ -843,6 +848,18 @@ numerous jobs can delay unrelated I/O. A long-lived remote event loop still
 occupies its worker slot. Size `UV_THREADPOOL_SIZE` before first pool use and
 leave capacity for filesystem/DNS/SQLite work needed by those services; new
 Lua states do not get separate pools.
+
+A Lua state close unwinds a Task waiting in `run_foreign` before `f(arg)`
+returns, so its `defer`s run while the worker may still use `arg`; never free
+native state in such a `defer`. An `owned` argument is safe: the collector
+frees it only after the Runtime drains accepted work. For other native state
+pass the optional C-only `abandoned(arg)` release: the Runtime finalizer calls
+it on the closing thread once every accepted job has returned, and only when a
+state close abandoned the wait. Otherwise release after the call returns or in
+`catch`, and let the caller's `defer` skip it with a flag that only a normal
+return or `catch` clears, as `lua.Lua:run_async` does. Never release on the
+worker anything whose teardown waits for the pool. See
+[foreign work at state close](../../../doc/language/async-io.md#foreign-work-at-state-close).
 
 The portable raw-pointer signature is statically callable across compiled Titan
 modules. It does not create a dynamic Lua coercion for raw pointers or foreign
@@ -1236,10 +1253,25 @@ record identity. A mismatch raises synchronously in the caller with this exact
 message: `Task resume token mismatch (expected source: <source>)`. A nil
 expected token or nil source is rendered as `unknown source`. The source does
 not participate in equality.
-The check is unconditional: before suspension, after wake delivery until
-another explicit suspension, during an ordinary native wait, and after terminal
-completion the expected token is nil, so every supplied token mismatches
-instead of becoming a no-op.
+A running Task is the exception. `Task:resume(token)` on a Task that is
+running, or whose next wait the Runtime is still registering (how a finalizer
+reaches a waiter just before it parks), latches the token instead of raising;
+the latest call wins and the same token coalesces. The Task's immediately next
+suspension consumes the latch if it is `suspend` with that token, which then
+returns at once; any other next suspension (another token, a native or external
+wait, a yield) or the Task finishing discards it. Every other wrong-time call
+still raises with `unknown source`: a ready Task, an ordinary native wait, a
+queued yield, or terminal completion.
+
+A running Task cannot tell an early wake from a stale one, so every waker must
+hold a live registration. Make the waiter discoverable before the last check
+of its condition, then either clear the registration before `resume` (each
+wait gets at most one `resume`, as `Gate:open` below does) or recheck the
+condition after every return from `suspend` (as `Receiver:wait`'s loop does).
+Reuse one token across waits only under one of these disciplines; a fresh token
+per wait makes a stale latch unmatchable. Do not yield, await or suspend on
+anything else between the last check and `suspend`: an early wake meant for a
+later suspension is dropped silently.
 
 With the correct token, `resume`:
 
@@ -1255,19 +1287,23 @@ continuation must never observe or inherit the completed suspension's token or
 wake bit.
 
 Keep tokens private to the coordination abstraction. Share one record among all
-paths that own a single condition (for example one per channel), or create one
-fresh record per combinator invocation. Do not use a token as a general native-
+paths that own a single condition (for example one per channel, whose waiters
+recheck after every return), or create one fresh record per wait or combinator
+invocation. Do not use a token as a general native-
 wait capability: one-shot callbacks settle their exact await capability,
 while persistent sources publish through their subscription.
 
 The optional suspend cancellation action is for idempotently detaching the
-**exact** waiter. It runs synchronously only on cancellation, before the wake is
-scheduled with the token captured by the suspension. Ordinary correct-token
+**exact** waiter. It runs at most once, only on cancellation: synchronously in
+the canceller before the wake is scheduled with the token captured by the
+suspension, or, for a cancellation that arrives while the suspension is still
+registering, when the Runtime accepts it. Ordinary correct-token
 `resume` does not run it. It must not yield or raise. Always pair the
 registration with ordinary scope cleanup too.
 
 A long-lived single-reader owner may allocate its token and cancellation action
-once (as `async.Receiver` does on its first wait) instead of per wait. Reserve
+once (as `async.Receiver` does on its first wait) instead of per wait, provided
+its waiter rechecks its condition after every return from `suspend`. Reserve
 by storing the waiting Task, make the shared action clear that reservation
 unconditionally, and release on scope exit only when the stored Task is still
 the current one:
@@ -1302,11 +1338,14 @@ local function Gate:wait()
   if self.waiter then raise "Gate already has a waiting Task" end
 
   local current = async.running()
+  -- Publish the waiter, then check the condition again: an open() from a
+  -- finalizer before publication is seen here, and one after it is latched.
   self.waiter = current
   local detach = function ()
     if self.waiter == current then self.waiter = nil end
   end
   defer detach()
+  if self.opened then return end
 
   async.suspend(self.resume_token, detach)
 end
@@ -1322,8 +1361,9 @@ local function Gate:open()
 end
 ```
 
-`open` commits the monotonic condition before the only authorized normal wake,
-so a normal return from this single suspension already establishes `opened`.
+`open` commits the monotonic condition and clears the waiter before the only
+authorized normal wake, so a normal return from this single suspension already
+establishes `opened`, and the reused token never receives a stale wake.
 Cancellation unwinds instead, and the defer removes the waiter. A resettable
 level condition is different: recheck it after an authorized wake when other
 token-authorized code can legitimately make it false again before delivery.
@@ -1556,9 +1596,10 @@ by its send, receive, close, and cancellation paths. Opposite-side progress
 changes the buffer first, then calls the waiter's `resume(token)`; close commits
 terminal state before doing the same. The occupied waiter slot prevents another
 same-direction operation from stealing that progress before delivery. A
-blocking operation therefore suspends once: a normal return has its buffer
-postcondition or observes close, while a caller with another token cannot wake
-it.
+blocking operation publishes its slot and then suspends in a loop while the
+buffer is still full or empty and the channel is open, so a wake before
+publication or a stale latched wake on the shared token cannot return it
+early; a caller with another token cannot wake it.
 
 `close()` is synchronous and idempotent. It discards buffered values, wakes
 both waiter slots, and makes every later or woken send/receive raise
@@ -1704,6 +1745,14 @@ same tag; skipped inner coroutines become `stacked` until the suspended matching
 handler resumes. Status strings are `suspended`, `running`, `normal`, `stacked`,
 and `dead`.
 
+A suspended or stacked coroutine that becomes unreachable, or is still
+suspended when its state closes, is unwound: its `defer`s and generic-`for`
+closes run, its catches do not. That cleanup runs inside a finalizer, where
+`yield`, `resume`, `error` and therefore every `await` raise; at state close
+Task cleanup also runs outside the scheduler, `run`/`run_with_cleanup` raise
+`cannot start a Task during Lua state close`, and creating a Runtime raises.
+Graceful protocol shutdown that needs awaits belongs before the state closes.
+
 ```titan
 local coroutine = import "coroutine"
 
@@ -1823,9 +1872,14 @@ Before accepting Task/application code, verify:
 - It creates a private nominal `ResumeToken`, passes the same record to
   `async.suspend(token, ...)` and every authorized `Task:resume(token)`, and
   treats `source` as diagnostic only.
-- It expects a wrong token—or any token at the wrong time—to raise in the
-  caller as `Task resume token mismatch (expected source: <source>)`, with
-  `unknown source` when no source is stored.
+- It expects a wrong token to raise in the caller as
+  `Task resume token mismatch (expected source: <source>)`, with
+  `unknown source` when no source is stored, except that a running Task latches
+  the token for its next explicit suspension (latest wins).
+- Every waker holds a live registration: the waiter is published before the
+  last condition check, and the waker clears it before `resume` or the waiter
+  rechecks after every return from `suspend`; a token reused across waits
+  follows one of these, otherwise each wait gets a fresh token.
 - It preserves the delivery ordering: clear `suspended`, `resume_token`, and
   `resume_pending` before `advance_task` re-enters user code.
 - It uses `Task:resume(token)` only for the exact explicit
@@ -1925,12 +1979,13 @@ order is possible, and what does another token do?
 accepting the coalesced Runtime queue entry; it never enters target inline.
 Repeated correct-token requests coalesce and exact libuv iteration count is not
 promised. Another token raises in its caller as
-`Task resume token mismatch (expected source: <source>)`; after wake delivery
-and before another suspension—or after terminal completion—the expected source
-is `unknown source`. The Runtime clears `suspended`, `resume_token`, and
+`Task resume token mismatch (expected source: <source>)`; after terminal
+completion the expected source is `unknown source`. A resume of a running
+Task, such as one from a finalizer before its suspension registers, latches
+for its next `suspend`. The Runtime clears `suspended`, `resume_token`, and
 `resume_pending` before `advance_task` enters `target`.
 
-**Fail:** `before>target>after`, treat a wrong-time resume as a no-op, compare
+**Fail:** `before>target>after`, treat a wrong-time resume of a ready, waiting or finished Task as a no-op, compare
 token sources instead of identity, or claim a general native operation can be
 forced complete with `Task:resume(token)`.
 

@@ -501,9 +501,11 @@ function yield()
 `ResumeToken` compares by nominal record identity; its optional source is only
 diagnostic. A wrong token raises synchronously in the caller with this exact
 message: `Task resume token mismatch (expected source: <source>)`, using
-`unknown source` when the Task has no stored source. That includes every wrong-
-time call, because a Task outside the matching explicit suspension expects no
-token. Correct-token calls coalesce and wake on a deferred Task-owned timer.
+`unknown source` when the Task has no stored source. That includes wrong-time
+calls on a ready, natively waiting or finished Task, which expects no token. A
+running Task, including one about to suspend, latches the token for its next
+`suspend` instead (see the async skill). Correct-token calls coalesce and wake
+on a deferred Task-owned timer.
 Cancellation first runs the optional detach action, then wakes with the token
 captured by `suspend`.
 

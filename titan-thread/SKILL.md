@@ -336,7 +336,9 @@ for the complete signature table. The main entry points are:
   an already-terminal Task is accounted inline, and the group never respawns an
   admitted child. When `limit` is reached, `Group:spawn*` suspends the calling
   `async.Task` in a FIFO admission queue until a running thread finishes or the
-  group aborts. Only the monitor's terminal status (successful native OS join)
+  group aborts. Cancelling the queued Task withdraws its call: no thread
+  starts, and a slot already granted to it passes to the next queued call or is
+  released. Only the monitor's terminal status (successful native OS join)
   retires membership and releases the slot.
 - When `propagate_errors` is `true`, the first uncaught thread error cancels all
   currently running group threads and causes queued/subsequent `Group:spawn*`
