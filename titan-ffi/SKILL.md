@@ -1757,7 +1757,7 @@ callback/borrow audit.
 | `luaL_loadbufferx` / `luaL_loadstring` | pushes exactly one function on success or one error object on failure; may allocate/longjmp |
 | `lua_pcallk` | effect follows nargs/nresults and the error path; current-state use is the exact nonyieldable test helper factory; separate-state initialization/execution follows the [independent-state protected ledger](../../../doc/implementation/lua-library.md#protected-execution-and-stack-cleanup) |
 | `lua_setupvalue` | success installs/pops top value; missing upvalue returns null and leaves it |
-| `luaL_tolstring` | pushes one string; may call `__tostring`, allocate, or raise; trace before cleanup |
+| `luaL_tolstring` | pushes one string but transiently uses two more slots above the value (metatable + event, or callable + argument); a caller that also pushes the value reserves three with `lua_checkstack`; may call `__tostring`, allocate, or raise; trace before cleanup |
 | `lua_pushlstring` | pushes one copied byte string and may allocate/raise; the async Receiver keeps its detached native packet alive through the copy, traces the resulting string, then restores the saved top |
 | `lua_type` | net zero |
 | `lua_topointer` | net zero; returned address is identity-only, borrowed, never dereference it |
