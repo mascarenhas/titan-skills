@@ -1733,15 +1733,22 @@ changes and restore temporary state.
 
 Async/process APIs include `wait_signal`, graceful `exit`, `spawn`,
 `Process:wait/kill/is_running`, and `InputStream`/`OutputStream` operations.
-`spawn(file, args, ...: SpawnOption)` executes `file` directly; args omit
-`argv[0]`. By default it captures all three child descriptors. Options choose
-capture, parent inheritance, or merged output. `with_env(name, contents)` returns
-a `SpawnOption` that overrides one variable only in the child; all others are
-inherited, and the parent environment remains unchanged. Parent-facing `process.stdin`
-is an `OutputStream?`; stdout/stderr are `InputStream?`. Drain captured output
-concurrently with input and wait when pipe capacity can matter. Closing a
-process watcher does not kill or reap its child. Load **Titan async** for these
-ownership and cancellation rules.
+Parent `os.stdin`/`os.stdout`/`os.stderr` work whether descriptor 0/1/2 is a
+terminal, a pipe or Unix stream socket, or a file (regular file, `/dev/null`,
+Windows `NUL`); `stream:kind()` returns `"tty"`, `"pipe"`, or `"file"`
+(captured child endpoints are `"pipe"`), and `is_tty()` equals
+`kind() == "tty"`. Both need a running Task and raise on a closed or
+transferred captured endpoint. File-backed writes complete in call order even
+if the writer is cancelled; do not close or replace descriptors 0–2 while a
+Runtime uses them. `spawn(file, args, ...: SpawnOption)` executes `file`
+directly; args omit `argv[0]`. By default it captures all three child
+descriptors. Options choose capture, parent inheritance, or merged output.
+`with_env(name, contents)` returns a `SpawnOption` that overrides one variable
+only in the child; all others are inherited, and the parent environment remains
+unchanged. Parent-facing `process.stdin` is an `OutputStream?`; stdout/stderr
+are `InputStream?`. Drain captured output concurrently with input and wait when
+pipe capacity can matter. Closing a process watcher does not kill or reap its
+child. Load **Titan async** for these ownership and cancellation rules.
 
 ## Compile with `titanc`
 
