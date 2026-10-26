@@ -137,9 +137,18 @@ connect succeeds, only dialing and close are valid. Repeat/concurrent attempts
 fail; after a failed attempt close the endpoint. DNS cancellation requests
 native cancellation and drains its real callback, which can outlast a deadline.
 
-This is the complete current TCP surface. There is no UDP, Unix-domain socket,
+This is the complete current TCP surface in `net`. There is no UDP, Unix-domain
+socket, listener-adoption (`LISTEN_FDS` / `launch_activate_socket`),
 socket-option, local/peer-address, selected-ephemeral-port, read-size,
-`read_all`, per-operation timeout, or connection-pool API.
+`read_all`, per-operation timeout, or connection-pool API. A connected socket
+that inetd, systemd `Accept=yes` with `StandardInput=socket`, or launchd
+`inetdCompatibility` `Wait=false` supplies on descriptors 0–2 is not a
+`net.Connection`. On Linux and macOS it is `os.stdin`/`os.stdout`/`os.stderr`
+with `kind() == "tcp"`. Use `os.stdout:shutdown()` to half-close: it waits for
+accepted writes, ends output for every alias of the connection, leaves stdin
+readable, and returns at once when repeated. Parent `close()` never sends FIN.
+Windows rejects socket stdio with `stdio.parent.kind` `ENOTSUP`. See the
+[OS manual](../../../doc/language/standard-library-os.md#tcp-backed-parent-streams).
 
 ### TLS: `ssl`
 

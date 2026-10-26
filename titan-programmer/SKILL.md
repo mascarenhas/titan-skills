@@ -1730,13 +1730,23 @@ changes and restore temporary state.
 Async/process APIs include `wait_signal`, graceful `exit`, `spawn`,
 `Process:wait/kill/is_running`, and `InputStream`/`OutputStream` operations.
 Parent `os.stdin`/`os.stdout`/`os.stderr` work whether descriptor 0/1/2 is a
-terminal, a pipe or Unix stream socket, or a file (regular file, `/dev/null`,
-Windows `NUL`); `stream:kind()` returns `"tty"`, `"pipe"`, or `"file"`
-(captured child endpoints are `"pipe"`), and `is_tty()` equals
+terminal, a pipe or Unix stream socket, a file (regular file, `/dev/null`,
+Windows `NUL`), or, on Linux and macOS, a connected IPv4/IPv6 TCP socket from
+inetd, systemd `Accept=yes`, or launchd `inetdCompatibility`.
+`stream:kind()` returns `"tty"`, `"pipe"`, `"file"`, or `"tcp"`. Captured
+child endpoints are always `"pipe"`, and `is_tty()` equals
 `kind() == "tty"`. Both need a running Task and raise on a closed or
-transferred captured endpoint. File-backed writes complete in call order even
-if the writer is cancelled; do not close or replace descriptors 0–2 while a
-Runtime uses them. `spawn(file, args, ...: SpawnOption)` executes `file`
+transferred captured endpoint. Listening or unconnected TCP, UDP, and every
+Windows socket raise `stdio.parent.kind` `ENOTSUP` on first use. On a `"tcp"`
+output, `OutputStream:shutdown()` waits for accepted writes and then
+half-closes the connection while `os.stdin` stays readable. Later writes on
+that stream raise `stdio.write` `EPIPE`, and a repeated `shutdown()` returns at
+once. The half-close is connection-wide, so stdout, stderr, raw descriptors,
+and inheriting children all lose output. Other kinds raise `stdio.shutdown`
+`ENOTSUP`. Parent `close()` stays a no-op and never sends FIN. File-backed
+writes complete in call order even if the writer is cancelled; do not close
+or replace descriptors 0–2 while a Runtime uses them.
+`spawn(file, args, ...: SpawnOption)` executes `file`
 directly; args omit `argv[0]`. By default it captures all three child
 descriptors. Options choose capture, parent inheritance, or merged output.
 `with_env(name, contents)` returns a `SpawnOption` that overrides one variable
