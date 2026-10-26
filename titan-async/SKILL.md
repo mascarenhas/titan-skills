@@ -274,9 +274,9 @@ Lua code cannot call `decode_message`. Decode is a stateful Lua operation;
   `from_transfer_payload` decoders, or requiring a Runtime, and wakes any
   waiter with `"receiver is closed"`. Automatic packet discard only releases
   packet-registered resources (initially `thread.Sender` and
-  `thread.Receiver`); manual HTTP/TLS/WebSocket/TCP/pipe handoff byte strings
-  have no packet disposer and require explicit adoption or
-  `discard_transfer_payload`.
+  `thread.Receiver`); manual HTTP/TLS/WebSocket/TCP/pipe/process-stream
+  handoff byte strings have no packet disposer and require explicit adoption
+  or the owning type's `discard_transfer_payload` where one exists.
 - **Borrowed handle lifetime**: `:handle()` retains nothing. Keep the
   `Receiver` rooted and its Lua state open until the handle is withdrawn from
   every sender and every in-flight `send` has returned, then close the
@@ -1720,6 +1720,8 @@ function create(func: function (value): (value), default_tag: value): Coroutine
 function running(): Coroutine?
 function Coroutine:resume(arg: value, tag: value): value
 function Coroutine:error(err: value, tag: value): value
+function Coroutine:transfer(payload: value, tag: value,
+                            inject_error: boolean): (boolean, value, string?)
 function Coroutine:status(): string
 function yield(arg: value, tag: value): value
 function is_yieldable(tag: value): boolean
@@ -1748,10 +1750,31 @@ same tag; skipped inner coroutines become `stacked` until the suspended matching
 handler resumes. Status strings are `suspended`, `running`, `normal`, `stacked`,
 and `dead`.
 
+`co:transfer(payload, tag, inject_error)` switches exactly like
+`co:resume(payload, tag)` (`inject_error == false`) or `co:error(payload, tag)`
+(`true`; before the first resume the body is not called). It returns
+`false, value, nil` when the coroutine yields or returns, and
+`true, error, trace` when an uncaught error ends it. The first result means
+**failed**, not dead: use `status()` to tell a yield from a return, and never
+infer the outcome from a nil/false value or error. Raised nil still arrives as
+`"<no error object>"`. The trace is the callee's already captured traceback, an
+ordinary string the caller owns; nothing is left pending for the next raise.
+Success captures no trace and allocates no result object. A missing tag, a
+non-suspended coroutine, a finalizer switch, and native/stack/allocation
+failures still raise in the caller.
+
+Async drives Task roots through this public method (ordinary
+`import "coroutine"`): `resume_root` returns the tuple to `advance_task` and
+appends one driver propagation trace only for a failure it will report.
+Sticky cancellation and an already recorded `run_with_cleanup` body failure
+capture nothing extra; `task_test.titan` pins the counts at 1/2/1. Scheduler
+or adapter code needing a non-raising switch uses `transfer`; never import
+`coroutine.titan` or reach its private trace helpers.
+
 A suspended or stacked coroutine that becomes unreachable, or is still
 suspended when its state closes, is unwound: its `defer`s and generic-`for`
 closes run, its catches do not. That cleanup runs inside a finalizer, where
-`yield`, `resume`, `error` and therefore every `await` raise; at state close
+`yield`, `resume`, `error`, `transfer` and therefore every `await` raise; at state close
 Task cleanup also runs outside the scheduler, `run`/`run_with_cleanup` raise
 `cannot start a Task during Lua state close`, and creating a Runtime raises.
 Graceful protocol shutdown that needs awaits belongs before the state closes.
