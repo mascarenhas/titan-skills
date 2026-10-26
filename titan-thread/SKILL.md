@@ -403,9 +403,13 @@ for the complete signature table. The main entry points are:
   through a thread channel or `async.Receiver` uses manual payload bytes, not a
   packet disposer. Native discard never runs decoders. Recover using the owning
   type's documented adoption/close procedure, or its `discard_transfer_payload`
-  helper where one exists. Files, io/os streams and SQLite Connection have no
-  such helper. Stop producers and recover/drain handoffs before closing either
-  `thread.Receiver` or `async.Receiver`. Follow the
+  helper where one exists. `os.InputStream` and `os.OutputStream` have ordinary
+  Titan disposers requiring a live Lua state but no Task/Runtime; parent
+  descriptor identities are no-ops and a native close attempt consumes
+  ownership even on an error status. The shell `os.InputOutputStream`, Files,
+  and SQLite Connection have no public disposer. These manual capabilities are
+  not packet resources. Stop producers and recover/drain handoffs before
+  closing either `thread.Receiver` or `async.Receiver`. Follow the
   [networking handoff contract](../titan-networking/SKILL.md#native-connection-and-http-handoff)
   and [WebSocket disposal guidance](../titan-websocket/SKILL.md#transferring-native-sessions).
 - **`Thread:cancel` targets the child's root `Task`**: if a worker thread

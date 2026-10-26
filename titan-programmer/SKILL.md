@@ -1546,7 +1546,7 @@ function ipairs<|T|>(array: {T}):
 Types normally infer from the collection. Map traversal order is unspecified.
 See the generic-`for` and hole behavior above.
 
-### `io`: stream Interfaces, printing, lines, shell commands
+### `io`: stream Interfaces, printing, and lines
 
 Import `io` by its short name. Its seven type-only Interfaces are the useful
 vocabulary formed from these methods:
@@ -1582,15 +1582,10 @@ newline-delimited lines with the delimiter chopped, and closes after EOF,
 while the iterator owns it.
 
 `io.print(...: value)` converts with `string.tostring`, joins with tabs, appends
-a newline, and performs one `os.stdout` write. `io.popen(command)` intentionally
-runs `/bin/sh -c` on Linux and macOS or the system `cmd.exe /d /s /c` on
-Windows; commands use that shell's syntax. It gives writable stdin plus one
-readable byte stream merging stdout and stderr, and must be drained before
-waiting when output can fill a pipe. Use `os.spawn` for direct executable/argv
-control or separate stdout/stderr. Close and Task cancellation do not guarantee
-descendant termination.
-These operations may suspend; load **`titan-async`** for scheduling and process
-ownership.
+a newline, and performs one write through the current mutable `os.stdout`.
+Conversions finish before that late lookup and write. `io` imports only public
+`os` and `string`; concrete shell ownership belongs to `os.popen` below.
+These stream operations may suspend; load **`titan-async`** for scheduling.
 
 ### `fs`: files, paths, metadata, and watching
 
@@ -1750,6 +1745,24 @@ are `InputStream?`. Drain captured output concurrently with input and wait when
 pipe capacity can matter. Closing a process watcher does not kill or reap its
 child. Load **Titan async** for these ownership and cancellation rules.
 
+`os.popen(command): os.InputOutputStream` intentionally runs `/bin/sh -c` on
+Linux/macOS or the system `cmd.exe /d /s /c` on Windows. Commands use that
+shell's syntax; the facade owns writable stdin and one merged stdout/stderr
+byte stream. Drain output before waiting when it can fill a pipe. Use
+`os.spawn` for direct executable/argv control or separate stdout/stderr.
+`close` and Task cancellation do not guarantee descendant termination.
+The concrete nominal identity is `titan.os.InputOutputStream`; it satisfies all
+seven IO Interfaces at consumer conversion sites without an OS-to-IO import.
+
+`os.InputStream.discard_transfer_payload(payload)` and
+`os.OutputStream.discard_transfer_payload(payload)` retire an unadopted manual
+endpoint capability without a Task or Runtime, returning native close status.
+They still need a live Lua/Titan state and are not C-only release callbacks.
+Parent descriptor identities are no-ops, and a native close attempt consumes
+ownership even on negative status: never re-adopt or retry those bytes.
+The shell composite has no public disposer; recover it by adoption/close.
+None of these manual handoffs is automatically cleaned by native packet discard.
+
 ## Compile with `titanc`
 
 Use an installed ABI-matched Titan/Lua 5.5 toolchain. Run from the source-tree
@@ -1884,6 +1897,11 @@ to the language rules:
   import `uv.titan`, native libuv headers/types/helpers, or private Runtime
   state from another module. Do not add forwarding aliases, duplicate checks,
   or extra state fields merely to avoid the existing direct flow.
+- **Keep stdlib imports public.** Production `titan/` uses no terminal `.titan`
+  imports. Source async composes with compiled coroutine through the fixed
+  public `Coroutine:transfer` outcome/trace tuple; source IO composes with
+  compiled OS. This does not remove logical dependency ordering or implement
+  interface-based Make invalidation.
 - **Honor the supported trust/concurrency model.** Do not harden one imagined
   race when the API requires callers to serialize all mutations. Partial
   rechecks imply guarantees the rest of the object does not provide.

@@ -1720,6 +1720,8 @@ function create(func: function (value): (value), default_tag: value): Coroutine
 function running(): Coroutine?
 function Coroutine:resume(arg: value, tag: value): value
 function Coroutine:error(err: value, tag: value): value
+function Coroutine:transfer(payload: value, tag: value,
+                            inject_error: boolean): (boolean, value, string?)
 function Coroutine:status(): string
 function yield(arg: value, tag: value): value
 function is_yieldable(tag: value): boolean
@@ -1748,10 +1750,24 @@ same tag; skipped inner coroutines become `stacked` until the suspended matching
 handler resumes. Status strings are `suspended`, `running`, `normal`, `stacked`,
 and `dead`.
 
+`transfer` uses resume semantics when `inject_error` is false and error-injection
+semantics when true (before first entry the body is not called). It returns
+`false, payload, nil` for a yield or normal return and `true, error, trace` for
+an uncaught callee error. The first result means failed, not dead; nil/false are
+data and errors. The producer consumes its private pending trace and returns
+the already captured string as an ordinary rooted value. Successful switching
+allocates no outcome object and captures/copies no traceback. Invalid tags or
+states, finalizer misuse, native/stack/allocation failures still raise normally.
+Async uses ordinary `import "coroutine"` and passes this optional trace through
+`resume_root` to `advance_task`, appending one driver trace only for reportable
+failure. Sticky cancellation and already recorded cleanup-body failure add no
+propagation capture (native regression counts remain 1/2/1). Never call the
+coroutine's private registry staging or raising helpers from an adapter.
+
 A suspended or stacked coroutine that becomes unreachable, or is still
 suspended when its state closes, is unwound: its `defer`s and generic-`for`
 closes run, its catches do not. That cleanup runs inside a finalizer, where
-`yield`, `resume`, `error` and therefore every `await` raise; at state close
+`yield`, `resume`, `error`, `transfer` and therefore every `await` raise; at state close
 Task cleanup also runs outside the scheduler, `run`/`run_with_cleanup` raise
 `cannot start a Task during Lua state close`, and creating a Runtime raises.
 Graceful protocol shutdown that needs awaits belongs before the state closes.
