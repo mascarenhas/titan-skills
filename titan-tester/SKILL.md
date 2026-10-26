@@ -600,9 +600,9 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 
 ## 8. Repository-native test ownership and layout
 
-The aggregate currently has 30 explicit logical roots in
+The aggregate has 30 expected logical owners in
 `spec/support/stdlib_test_modules.mk:TITAN_STDLIB_TEST_ROOTS`, shared by Linux,
-macOS, and native Windows:
+macOS, and native Windows for runtime scheduling and reporting:
 
 ```text
 test.tests
@@ -637,10 +637,10 @@ protobuf.tests
 thread.tests
 ```
 
-Do not replace this manifest with an import-only aggregator. Making each owner
-an explicit `titanc --test` root keeps its test source authoritative and makes
-discovery see the intended source closure. `test.tests` is deliberately first
-and owns `out/tests/test/tests`, the aggregate executable.
+Do not replace these owners with an import-only aggregator. The compiler
+selects them through `--test-dir`; the manifest audits the expected inventory,
+not a module build graph. `test.tests` remains the explicit first root, and
+`--exe` preserves `out/tests/test/tests` as the POSIX aggregate executable.
 
 ### Where to put a new standard-library case
 
@@ -737,36 +737,56 @@ export PATH="$PREFIX/bin:$PATH"
 unset LUA_PATH LUA_CPATH LUA_PATH_5_5 LUA_CPATH_5_5
 ```
 
-From the source-tree root, pass dotted module names:
+From the source-tree root, always invoke the incremental compiler for the
+requested suite; it owns the import graph, object invalidation, and final-link
+reuse. Pass dotted logical module names and choose the runner path with `--exe`:
 
 ```sh
-titanc -o out --test --tree . calc_test
-./out/calc_test
+titanc --incremental --output build --test --tree . \
+  --exe build/calc-tests calc_test
+./build/calc-tests
 
-# Several unrelated test roots may share the first root's executable.
-titanc -o out --test --tree . calc_test parser_test
-./out/calc_test
+# Several unrelated test roots may share one explicitly named executable.
+titanc --incremental --output build --test --tree . \
+  --exe build/calc-tests calc_test parser_test
+./build/calc-tests
+
+# Discover conventionally named test owners instead of maintaining a root list.
+titanc --incremental --output build --test --tree . \
+  --exe build/project-tests --test-dir tests
+./build/project-tests
 ```
 
-The first requested root owns the executable path (including the normal folder
-module output rule). Test mode emits a standalone only—no provider pair or Lua
-shim—and gives adjacent synthetic artifacts reserved
-`__test_runner` and `__test_entrypoint` stems. `titan.test` remains an ordinary
-compiled dependency; no synthetic support module or installed source copy is
-required.
+Repeatable `--test-dir DIR` recursively selects flat or folder modules whose
+final logical component is `test`, `tests`, `spec`, `specs`, or ends in `_test`,
+`_tests`, `_spec`, or `_specs`. The directory must lie inside `--tree`;
+`--tree . --test-dir tests` keeps the `tests.*` namespace. Folder contributors
+are not separate roots. Add explicit roots for other names; repeatable
+`--test-exclude MODULE` removes exact automatic roots only, not explicit roots
+or imported dependencies. Root selection does not replace semantic `test_`
+function discovery. See the
+[test manual](../../../doc/language/standard-library-test.md#automatic-test-root-discovery).
 
-Pass `--output` for every test build, following the programmer skill.
-Generated C, objects, and headers recreate the source-root-relative hierarchy
-inside that directory; the native runner and executable also use it. Without
-the option, legacy generated C/object files remain beside their source.
-Application and test builds can share unchanged production objects when native
-flags, SDK, and resolved provider bindings match. Use distinct output directories
-for incompatible configurations, such as different toolchains.
-`--static` selects the standard archive normally; it remains a preference and
-may select a DSO when no compatible archive exists. If a selected provider is
-outside the runtime search path, set `TITAN_PATH_0_6` to its `lib/titan/0.6`
-directory. Assess an application's standalone deployment with its application
-executable and a relocated process test.
+Without `--exe`, the first resulting root owns the executable path (including
+the folder-module output rule); explicit roots precede sorted automatic roots.
+Test mode emits a standalone only—no library provider pair or Lua shim.
+Synthetic runner and entrypoint files are isolated per target under
+`build/.titan-links/`. `titan.test` remains an ordinary dependency; no synthetic
+support module or installed source copy is required. Windows retains the
+launcher/provider-DLL layout and appends `.exe` to `--exe` when absent.
+
+Application and test builds can share `--output build` safely on local
+filesystems: `titanc` locks the tree, isolates target-specific synthetic files,
+and reuses compatible production objects. Use distinct output directories for
+incompatible flags, SDKs, or toolchains. Add compiler `-v` for object/native/link
+hit and miss diagnostics; runner `-v` is a separate runtime option. Follow the
+[application build guidance](../titan-application/SKILL.md#establish-output-ownership-before-compiling)
+for always-invoked Make targets, native inputs, and jobserver policy.
+`--static` prefers the standard archive on Linux/macOS but may select a DSO;
+it is unsupported on Windows. If a selected provider is outside the runtime
+search path, set `TITAN_PATH_0_6` to its `lib/titan/0.6` directory. Assess
+standalone deployment with the application executable and a relocated process
+test.
 
 ### Generated runner options and statuses
 
@@ -804,16 +824,16 @@ Given `calc_test.test_twice` with children `positive` and `zero`:
 
 ```sh
 # Select the parent and every registered child by matching their common prefix.
-./out/calc_test --filter='^calc_test[.]test_twice'
+./build/calc-tests --filter='^calc_test[.]test_twice'
 
 # Exact parent only: it runs, registers children, but no child is selected.
-./out/calc_test --filter='^calc_test[.]test_twice$'
+./build/calc-tests --filter='^calc_test[.]test_twice$'
 
 # Wrong for a lone child: parent is filtered out, so the child is never created.
-./out/calc_test --filter='^calc_test[.]test_twice[.]zero$'
+./build/calc-tests --filter='^calc_test[.]test_twice[.]zero$'
 
 # Select exactly the parent plus exactly one child with two OR filters.
-./out/calc_test \
+./build/calc-tests \
   -f '^calc_test[.]test_twice$' \
   -f '^calc_test[.]test_twice[.]zero$'
 ```
@@ -822,8 +842,8 @@ A substring filter such as `test_twice` conveniently selects parent and
 children, but may also select an unrelated case. Prefer anchored patterns in
 CI or when diagnosing selection.
 
-Filtering is runtime-only. It does not avoid parsing, checking, generating, or
-compiling any requested root.
+Filtering is runtime-only and does not narrow the requested source graph.
+Incremental certification can reuse unchanged objects independently of filters.
 
 ## 10. Use the repository Make targets at their owned boundary
 
@@ -856,15 +876,16 @@ make rock-test \
 make test
 ```
 
-`make titan-stdlib-test-build` compiles test/helper modules and shared test
-support through separate `titanc -c --test --incremental` targets, then links
-once with `--test --incremental --no-uv-bootstrap`. Every compiler invocation
-runs from `out/tests/` with `--output .` and the same absolute
-`spec/stdlib/titan` tree.
-Make builds native fixtures separately and retains generated outputs for
-incremental reuse; explicit `make clean` removes them. The run target returns
-to the repository root because fixtures rely on that CWD. It supervises the
-aggregate in a separate process group with a default 600-second deadline for
+`make titan-stdlib-test-build` invokes one compiler-owned
+`--test --incremental --no-uv-bootstrap` build from `out/tests/` with
+`--output .`, the absolute `spec/stdlib/titan` tree, `--test-dir`, an explicit
+`test.tests` root, and `--exe` for the aggregate's stable path. The compiler
+discovers and schedules the module closure and certifies the final link.
+Aggregate C fixtures use `--c-source`; Make also prepares child-program
+fixtures and staged headers. Explicit `make clean` removes owned outputs.
+The run target returns to the repository root because fixtures rely on that
+CWD. It supervises the aggregate in a separate process group with a default
+600-second deadline for
 all 30 roots, including repeated fresh child-fixture compilation with O3/Linux
 LTO. It streams merged output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
@@ -872,9 +893,10 @@ retain their explicit 15-second limit.
 
 Native Windows exposes the same leaf names through `make -f Makefile.win`
 with `PREFIX` selecting the validated SDK and `TITAN_TEST_BUILD_DIR` selecting a
-marked disposable local NTFS workspace. It copies the SDK, builds every root
-serially, then runs with the existing Job Object supervisor and concurrent pipe
-draining. Keep the full Windows exit status. `TITAN_FILTER` selects only runtime
+marked disposable local NTFS workspace. It copies the SDK and invokes one
+compiler-owned `--test-dir` build under the local `TITAN_JOBS` cap, then runs
+with the existing Job Object supervisor and concurrent pipe draining.
+Keep the full Windows exit status. `TITAN_FILTER` selects only runtime
 cases, and the complete gate uses no filter. See
 [Windows commands](../../../doc/implementation/windows-build.md#shared-native-standard-library-tests).
 
@@ -1569,8 +1591,8 @@ treats `make titan-stdlib-test-run` as a build; ignores current provider.
 - contributors are not importable submodules and their filenames do not appear
   in case names;
 - public `test_*` functions can live in contributors;
-- keep the existing explicit `http.tests` root rather than new aggregator-only
-  modules or named native groups;
+- keep the compiler-discovered `http.tests` owner rather than new
+  aggregator-only modules or named native groups;
 - only main may own the final root initializer;
 - all new behaviors remain filterable by their function/subtest names.
 

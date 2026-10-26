@@ -1811,7 +1811,7 @@ end
 Compile and run on Linux or macOS:
 
 ```sh
-(cd scratch && titanc -o out check && ./out/check)
+(cd scratch && titanc --incremental --output out check && ./out/check)
 ```
 
 The exact exported `main(args: {string}): integer` makes a standalone
@@ -1822,20 +1822,22 @@ Without an exact `main`, a single root on Linux or macOS builds paired
 shared/static providers and a Lua shim:
 
 ```sh
-(cd scratch && titanc -o out calc)
+(cd scratch && titanc --incremental --output out calc)
 (cd scratch && LUA_PATH='out/?.lua;;' LUA_CPATH='out/?.so;;' \
   lua -e 'assert(require("calc").twice(21) == 42)')
 ```
 
 Experimental Windows library builds emit DLL providers and Lua shims, with no paired
 Titan archive; `--static` and selected Titan archive providers are unsupported.
-`--jobs` also bounds generated-C compilation on Windows. The `check` program
-above produces `out/bin/check.exe` and `out/lib/titan/0.6/check.dll`; `--launcher-name`
-changes only the launcher basename. Windows uses the matched controlled Lua DLL
-and its SDK, not an ordinary stock Windows Lua build. Keep that Lua DLL beside
-the Lua interpreter, compiler frontend, and application launcher EXEs. Follow
-the [Windows build guide](../../../doc/implementation/windows-build.md) for
-toolchain, layout, native dependencies, and experimental limitations.
+`--jobs` bounds frontend workers and native compilation on Windows as well.
+The `check` program above produces `out/bin/check.exe` and
+`out/lib/titan/0.6/check.dll` on Windows. `--exe out/bin/custom.exe` selects
+the launcher destination without moving the provider DLL; `.exe` is appended
+when absent. Windows uses the matched controlled Lua DLL and its SDK, not an
+ordinary stock Windows Lua build. Keep that Lua DLL beside the Lua interpreter,
+compiler frontend, and application launcher EXEs. Follow the
+[Windows build guide](../../../doc/language/windows-build.md) for toolchain,
+layout, native dependencies, and experimental limitations.
 
 Use the matched installed `lua`. A dotted module maps dots to directories;
 `titanc app.check` finds folder `app/check/check.titan` before flat
@@ -1844,37 +1846,47 @@ include:
 
 ```text
 -o DIR / --output DIR directory for all generated files (created if needed)
--j N / --jobs N       bound generated-C object compilation
+-j N / --jobs N       bound frontend workers and native compilation
+--incremental         certify objects and final links; compile/link only misses
 --static              Linux/macOS: prefer Titan .a dependencies; not linker -static
---launcher-name NAME  Windows standalone/test EXE basename
+--exe PATH            standalone/test executable destination, relative to cwd
 --test                build a native Titan test executable
+--test-dir DIR        discover conventionally named test roots under DIR
 --no-uv-bootstrap     explicit standalone/test Runtime ownership mode
--v                    show safely quoted native tool commands
+-v                    show native commands and object/native/link hit/miss reasons
 --pretty-print         opt in to clang-format for generated C/headers
 ```
 
 `--tree` selects source lookup and `--output` selects generated files
 independently. Generated C, objects, and FFI headers recreate the selected
 source root's hierarchy under the output directory; final providers, loaders,
-executables, and temporary compiler files also live there. For example,
+default executables, and temporary compiler files also live there. `--exe PATH`
+selects a standalone/test executable destination relative to the working
+directory, not to `--output`. For example,
 `titanc --tree /project/src -o out app.main` writes `out/app/main.c`, never
 `/project/src/app/main.c`. Authored quoted headers and source diagnostics still
 use the original source location. Output routing does not add a binary search
 root: use `TITAN_PATH_0_6` for previously built providers and Lua's paths for
 generated loaders. Omitting `--output` retains legacy source-adjacent outputs.
 
-Pass the same output directory throughout separate/incremental compilation.
-Object lookup and generated-header restoration use that tree. Application and
-test builds can reuse unchanged production objects when native flags, SDK, and
-resolved provider bindings match; `--test` alone does not require a second
-object tree. Use separate output directories for incompatible configurations
-and let the build system own invalidation. See
-[`output directories`](../../../doc/language/output-directory.md). For a standalone delivery claim, check a relocated
-executable with the compiler and Titan provider unavailable. `--static` is a preference and can still select a
-DSO, so successful compilation alone does not prove provider independence.
+Always invoke `--incremental` builds; the compiler owns source/header/interface,
+compiler/SDK, native-flag, and final-link certification, not an external Make
+module graph. Plain `-c` forces source-closure compilation; `-c --incremental`
+certifies requested roots too. Pass the same output directory throughout
+related builds. Application and test builds safely share its lock and reuse
+unchanged production objects when native flags, SDK, and resolved provider
+bindings match; `--test` alone does not require a second object tree. Use
+separate directories for incompatible configurations. See
+[`incremental compilation`](../../../doc/language/incremental-compilation.md)
+and [`output directories`](../../../doc/language/output-directory.md), or the
+[application build pattern](../titan-application/SKILL.md#establish-output-ownership-before-compiling).
+For a standalone delivery claim, check a relocated executable with the compiler
+and Titan provider unavailable. `--static` is a preference and can still select
+a DSO, so successful compilation alone does not prove provider independence.
 
-The compiler typechecks all requested roots and transitive dependencies before
-emitting C. Explicit command-line roots are selected from source; ordinary
+The compiler checks source misses in dependency order; certified objects
+restore unchanged modules without parsing or typechecking. Explicit
+command-line roots are selected from source; ordinary
 dependencies prefer compiled providers, then source, but expose only their
 public interfaces either way. `--test` deliberately changes ordinary dependency
 lookup to source-first with compiled fallback on a clean miss; it does not

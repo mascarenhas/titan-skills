@@ -52,19 +52,21 @@ custom Runtime ownership, or shutdown behavior.
 
 ## Establish output ownership before compiling
 
-Pass an application-owned output directory to every compiler invocation, such
-as `titanc --output build main`. Titan creates missing directories and writes
-generated C, objects, headers, runners, and final native outputs there,
-preserving the source hierarchy relative to the selected source root. `--tree`
-selects the original authored source tree independently of `--output`; output
-isolation needs no source copies. Keep generated files outside the installed
-SDK.
+Always invoke `titanc --incremental --output build` for the application and
+its `--test` build. Titan owns the source import graph, dependency-order
+scheduling, object certification, and final-link reuse; a build tool that skips
+the invocation cannot detect changes through the compiler. Do not maintain
+per-module `.o` rules, import/header inventories, or compiler/SDK/configuration
+stamps to decide whether Titan needs to run.
 
-Use the same output directory for incremental object compilation and final
-linking. Application and test builds can share unchanged production objects
-when native flags, SDK, and resolved provider bindings match. Test mode alone
-does not require separate production objects. Use separate output directories
-for incompatible native flags or SDKs/toolchains.
+Titan creates missing output directories and writes generated C, objects,
+headers, runners, and native outputs there, preserving the selected source
+hierarchy. `--tree` selects authored sources independently; no source copies
+are needed. Keep generated files outside the installed SDK. Application and
+test builds can share this output tree safely on local filesystems: `titanc`
+locks it through certification and publication. Unchanged production objects
+are shared when native flags, SDK, and resolved provider bindings match.
+Use separate output directories for incompatible configurations.
 
 The compiler separates coverage objects from ordinary objects in `.coverage`
 subdirectories inside the output tree. Independent coverage executables or
@@ -74,14 +76,51 @@ each execution resets its own counters. See the tester skill's
 Only delete output directories that the build owns; authored sources stay
 outside them.
 
-Pair `--incremental` with build-system dependency tracking for imports, foreign
-headers, folder-module inventories, compiler/SDK/provider changes, native
-payloads, and flags. The compiler's object cache covers only its documented
-local conditions. Compile affected owning modules before linking their
-consumers, and clean an owned output tree when a configuration change is not
-covered by the invalidation graph. See
+Use `--exe build/app` and `--exe build/app-tests` for exact executable
+destinations, relative to the working directory, rather than moving a compiler
+output afterward. Windows appends `.exe` when absent and keeps the application
+provider DLL under the output tree; preserve the documented payload layout.
+
+Pass native inputs directly: `-I DIR` and `-D NAME=VALUE` for headers/defines,
+`-L DIR` and `-l LIB` for linking, and repeatable single-argument
+`--cflag=ARG` / `--ldflag=ARG` for other native switches. Translate other
+`pkg-config` tokens through those phase-specific switches, not as bare
+`titanc` options. Pass app-owned C helpers with `--c-source app/native_helper.c`;
+Titan compiles and certifies them and their header inputs. Custom generators,
+third-party native-library builds, environment checks, packaging, test
+execution, and coverage output-root policy remain build-tool work.
+
+A short Linux/macOS Makefile can follow this shape:
+
+```make
+TITANC ?= titanc
+TITAN_JOBS ?= 4
+BUILD_FLAGS = --incremental --output build --static -j $(TITAN_JOBS)
+
+.PHONY: all build/app build/app-tests test
+all: build/app
+
+build/app:
+	+$(TITANC) $(BUILD_FLAGS) --exe $@ main
+
+build/app-tests:
+	+$(TITANC) $(BUILD_FLAGS) --test --tree . --test-dir tests --exe $@
+
+test: build/app build/app-tests
+	build/app-tests
+```
+
+The phony image targets always ask the compiler to certify; unchanged links
+are reused. The `+` recipes pass GNU Make's jobserver. GNU Make 4.4 or newer's
+FIFO jobserver shares its pool with Titan's frontend/native jobs. Older pipe
+jobservers that cannot be shared, including stock macOS Make, use Titan's own
+`-j` / `TITAN_JOBS` cap; Linux can also share privately reopened pipe
+descriptors. Native Windows uses the local cap and omits `--static`.
+Add `-v` to see object/native/link hits and miss reasons. Consult
 [incremental compilation](../../../doc/language/incremental-compilation.md)
-for the existing compile/link contract and Make pattern.
+for certification boundaries and
+[output directories](../../../doc/language/output-directory.md) for native
+switches, executable destinations, and locking.
 
 ## Create the initial `.gitignore`
 
@@ -135,14 +174,18 @@ than an ignore rule.
 
 ## Connect native tests and delivery
 
-Add native `titan.test` roots and a repeatable `titanc --output build --test`
-command using the project's selected source tree. The first requested root
-determines the runner's logical output path on POSIX; copy or name the
-deliverable explicitly instead of guessing it from the common namespace. Read the tester skill's
+Use `--test-dir tests` instead of maintaining a root list when test owners
+follow the naming rule: their final logical component is `test`, `tests`,
+`spec`, `specs`, or ends in `_test`, `_tests`, `_spec`, or `_specs`. The directory
+must be inside the selected `--tree`; with `--tree .`, `tests/` retains the
+`tests.*` namespace. Add explicit logical roots for other names.
+`--test-exclude tests.platform_test` removes an exact automatic root, not an
+explicit root or a module imported by another selected root. `--exe` keeps the
+runner destination independent of root order. Read the tester skill's
 [project build guidance](../titan-tester/SKILL.md#9-compile-run-and-filter-a-project-suite)
-for synthetic modules, filters, and installed provider selection. Run a known
-test and inspect the selected count: a successful empty filtered run is not
-test evidence.
+for discovery, synthetic modules, filters, and installed provider selection.
+Run a known test and inspect the selected count: a successful empty filtered
+run is not test evidence.
 
 The generated runner uses the same compiled `titan.test` provider as ordinary
 imports, through public `Case.new` and `run`; it needs no private test source
