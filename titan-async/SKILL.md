@@ -274,9 +274,9 @@ Lua code cannot call `decode_message`. Decode is a stateful Lua operation;
   `from_transfer_payload` decoders, or requiring a Runtime, and wakes any
   waiter with `"receiver is closed"`. Automatic packet discard only releases
   packet-registered resources (initially `thread.Sender` and
-  `thread.Receiver`); manual HTTP/TLS/WebSocket/TCP/pipe handoff byte strings
-  have no packet disposer and require explicit adoption or
-  `discard_transfer_payload`.
+  `thread.Receiver`); manual HTTP/TLS/WebSocket/TCP/pipe/process-stream
+  handoff byte strings have no packet disposer and require explicit adoption
+  or the owning type's `discard_transfer_payload` where one exists.
 - **Borrowed handle lifetime**: `:handle()` retains nothing. Keep the
   `Receiver` rooted and its Lua state open until the handle is withdrawn from
   every sender and every in-flight `send` has returned, then close the
@@ -1750,21 +1750,26 @@ same tag; skipped inner coroutines become `stacked` until the suspended matching
 handler resumes. Status strings are `suspended`, `running`, `normal`, `stacked`,
 and `dead`.
 
-`transfer` uses resume semantics when `inject_error` is false and error-injection
-semantics when true (before first entry the body is not called). It returns
-`false, payload, nil` for a yield or normal return and `true, error, trace` for
-an uncaught callee error. The first result means failed, not dead; nil/false are
-data and errors. Raising nil retains Lua 5.5's `"<no error object>"`
-normalization, just as `resume`/`error` do. The producer consumes its private
-pending trace and returns the already captured string as an ordinary rooted value.
-Successful switching allocates no outcome object and captures/copies no
-traceback. Invalid tags or states, finalizer misuse, native/stack/allocation
-failures still raise normally.
-Async uses ordinary `import "coroutine"` and passes this optional trace through
-`resume_root` to `advance_task`, appending one driver trace only for reportable
-failure. Sticky cancellation and already recorded cleanup-body failure add no
-propagation capture (native regression counts remain 1/2/1). Never call the
-coroutine's private registry staging or raising helpers from an adapter.
+`co:transfer(payload, tag, inject_error)` switches exactly like
+`co:resume(payload, tag)` (`inject_error == false`) or `co:error(payload, tag)`
+(`true`; before the first resume the body is not called). It returns
+`false, value, nil` when the coroutine yields or returns, and
+`true, error, trace` when an uncaught error ends it. The first result means
+**failed**, not dead: use `status()` to tell a yield from a return, and never
+infer the outcome from a nil/false value or error. Raised nil still arrives as
+`"<no error object>"`. The trace is the callee's already captured traceback, an
+ordinary string the caller owns; nothing is left pending for the next raise.
+Success captures no trace and allocates no result object. A missing tag, a
+non-suspended coroutine, a finalizer switch, and native/stack/allocation
+failures still raise in the caller.
+
+Async drives Task roots through this public method (ordinary
+`import "coroutine"`): `resume_root` returns the tuple to `advance_task` and
+appends one driver propagation trace only for a failure it will report.
+Sticky cancellation and an already recorded `run_with_cleanup` body failure
+capture nothing extra; `task_test.titan` pins the counts at 1/2/1. Scheduler
+or adapter code needing a non-raising switch uses `transfer`; never import
+`coroutine.titan` or reach its private trace helpers.
 
 A suspended or stacked coroutine that becomes unreachable, or is still
 suspended when its state closes, is unwound: its `defer`s and generic-`for`

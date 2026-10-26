@@ -399,17 +399,17 @@ for the complete signature table. The main entry points are:
   (`transfer.discard_message`) only releases registered packet resource-table
   entries (initially `thread.Sender` and `thread.Receiver`). Sending an
   `http.Exchange`, `http.UpgradedStream`, `websocket.Connection`,
-  `net.Connection`, `ssl.Connection`, or a transferable `uv.tcp_t`/`uv.pipe_t`
-  through a thread channel or `async.Receiver` uses manual payload bytes, not a
-  packet disposer. Native discard never runs decoders. Recover using the owning
+  `net.Connection`, `ssl.Connection`, `os.InputStream`, `os.OutputStream`,
+  `os.InputOutputStream`, or a transferable `uv.tcp_t`/`uv.pipe_t` through a
+  thread channel or `async.Receiver` uses manual payload bytes, not a packet
+  disposer. Native discard never runs decoders. Recover using the owning
   type's documented adoption/close procedure, or its `discard_transfer_payload`
-  helper where one exists. `os.InputStream` and `os.OutputStream` have ordinary
-  Titan disposers requiring a live Lua state but no Task/Runtime; parent
-  descriptor identities are no-ops and a native close attempt consumes
-  ownership even on an error status. The shell `os.InputOutputStream`, Files,
-  and SQLite Connection have no public disposer. These manual capabilities are
-  not packet resources. Stop producers and recover/drain handoffs before
-  closing either `thread.Receiver` or `async.Receiver`. Follow the
+  where one exists: the networking types and `os.InputStream`/`os.OutputStream`
+  have one (an ordinary Titan function needing a live Lua state but no
+  Task/Runtime; a close attempt consumes the payload even on an error status),
+  while `os.InputOutputStream`, `fs.File`, and `sqlite3.Connection` do not.
+  Stop producers and recover/drain handoffs before closing either
+  `thread.Receiver` or `async.Receiver`. Follow the
   [networking handoff contract](../titan-networking/SKILL.md#native-connection-and-http-handoff)
   and [WebSocket disposal guidance](../titan-websocket/SKILL.md#transferring-native-sessions).
 - **`Thread:cancel` targets the child's root `Task`**: if a worker thread

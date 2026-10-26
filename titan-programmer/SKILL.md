@@ -1582,10 +1582,11 @@ newline-delimited lines with the delimiter chopped, and closes after EOF,
 while the iterator owns it.
 
 `io.print(...: value)` converts with `string.tostring`, joins with tabs, appends
-a newline, and performs one write through the current mutable `os.stdout`.
-Conversions finish before that late lookup and write. `io` imports only public
-`os` and `string`; concrete shell ownership belongs to `os.popen` below.
-These stream operations may suspend; load **`titan-async`** for scheduling.
+a newline, and performs one write through the current mutable `os.stdout`;
+every conversion finishes before that lookup and write. Concrete streams live
+with their owners (`os`, `fs`, `net`, ...); `io` holds only the Interfaces,
+`print`, and `lines`. These stream operations may suspend; load
+**`titan-async`** for scheduling.
 
 ### `fs`: files, paths, metadata, and watching
 
@@ -1748,20 +1749,21 @@ child. Load **Titan async** for these ownership and cancellation rules.
 `os.popen(command): os.InputOutputStream` intentionally runs `/bin/sh -c` on
 Linux/macOS or the system `cmd.exe /d /s /c` on Windows. Commands use that
 shell's syntax; the facade owns writable stdin and one merged stdout/stderr
-byte stream. Drain output before waiting when it can fill a pipe. Use
-`os.spawn` for direct executable/argv control or separate stdout/stderr.
-`close` and Task cancellation do not guarantee descendant termination.
-The concrete nominal identity is `titan.os.InputOutputStream`; it satisfies all
-seven IO Interfaces at consumer conversion sites without an OS-to-IO import.
+byte stream, and `wait` caches the `ExitStatus`. Drain output before waiting
+when it can fill a pipe. Use `os.spawn` for direct executable/argv control or
+separate stdout/stderr. `close` and Task cancellation do not guarantee
+descendant termination. The record converts to all seven `io` Interfaces at
+the conversion site.
 
 `os.InputStream.discard_transfer_payload(payload)` and
-`os.OutputStream.discard_transfer_payload(payload)` retire an unadopted manual
-endpoint capability without a Task or Runtime, returning native close status.
-They still need a live Lua/Titan state and are not C-only release callbacks.
-Parent descriptor identities are no-ops, and a native close attempt consumes
-ownership even on negative status: never re-adopt or retry those bytes.
-The shell composite has no public disposer; recover it by adoption/close.
-None of these manual handoffs is automatically cleaned by native packet discard.
+`os.OutputStream.discard_transfer_payload(payload)` release an unadopted
+payload from that same type's `to_transfer_payload` and return the native close
+status. They need a live Lua state but no Task or Runtime, never touch the
+originating Process, and treat parent `stdin`/`stdout`/`stderr` identities as
+no-ops. Once a close is attempted the bytes are consumed even on a negative
+status: never adopt, retry, or dispose of them again. Wrong-type payloads are
+not reliably detected. `os.InputOutputStream` has no disposer; recover it by
+adopting and closing. Native packet discard never runs any of these.
 
 ## Compile with `titanc`
 
@@ -1897,11 +1899,11 @@ to the language rules:
   import `uv.titan`, native libuv headers/types/helpers, or private Runtime
   state from another module. Do not add forwarding aliases, duplicate checks,
   or extra state fields merely to avoid the existing direct flow.
-- **Keep stdlib imports public.** Production `titan/` uses no terminal `.titan`
-  imports. Source async composes with compiled coroutine through the fixed
-  public `Coroutine:transfer` outcome/trace tuple; source IO composes with
-  compiled OS. This does not remove logical dependency ordering or implement
-  interface-based Make invalidation.
+- **Keep stdlib imports public.** Production `titan/` modules never use an
+  explicit `.titan` source import, so each source module compiles against
+  compiled-only providers. Put behavior with the owner of its state (the shell
+  facade is in `os`) or export one complete operation (`Coroutine:transfer`
+  for async). The Make import lists still order the build.
 - **Honor the supported trust/concurrency model.** Do not harden one imagined
   race when the API requires callers to serialize all mutations. Partial
   rechecks imply guarantees the rest of the object does not provide.
