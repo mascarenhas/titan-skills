@@ -1689,17 +1689,22 @@ reorder other registrations' events. Keep exactly one raw event to one public
 event and put recoverable mapping errors in the event payload.
 
 Parent stdio classification belongs to `os`, using public UV operations plus
-unrelated platform FFI. Preserve known TTY/pipe/file classifications, connected
-IPv4/IPv6 TCP parent stdio (`kind() == "tcp"`) on Linux/macOS with listening and
-unconnected TCP rejected, Windows Winsock pre-pipe rejection of socket-valued
-CRT handles (`WSAENOTSOCK` preserving genuine pipes), close-on-exec duplicates
-for TTY/pipe/TCP owners, borrowed (never closed) descriptors 0–2 for file owners
-driven by thread-pool `uv.fs_read`/`uv.fs_write` at offset -1 with one in-flight
-request per direction, independent socket family/type evidence, immediately
-captured errno, and the exact `stdio.parent.kind` diagnostics. Only denied
-`AF_UNIX` metadata may use the launcher's strict `TITAN_STDIO_PIPE_FDS`
-fallback; observed incompatible metadata still rejects. See the OS manual and
-implementation chapter.
+unrelated platform FFI, and finishes before any descriptor is duplicated.
+Preserve known TTY/pipe/file classifications. A Unix `UV_TCP` guess is
+accepted as `"tcp"` only when connected; a listening or unconnected socket is
+rejected. On Windows, ask Winsock about pipe and unknown handles first:
+`WSAENOTSOCK` keeps genuine pipes, and any socket is rejected. The Runtime's
+`uv_loop_init` has already initialized Winsock. Keep close-on-exec duplicates
+for TTY/pipe/TCP owners. File owners borrow descriptors 0–2 without closing
+them and drive thread-pool `uv.fs_read`/`uv.fs_write` at offset -1, with one
+in-flight request per direction. Keep independent socket family/type
+evidence, immediately captured errno, and the exact `stdio.parent.kind`
+diagnostics. Only denied `AF_UNIX` metadata may use the launcher's strict
+`TITAN_STDIO_PIPE_FDS` fallback; observed incompatible metadata still rejects.
+TCP shutdown uses ordinary `await_with` with libuv's writable flag as its only
+state, as `net.Connection:shutdown` does. Do not add a shutdown flag. An
+accepted shutdown counts as pending output until its callback. See the OS
+manual and implementation chapter.
 
 Native cancellation is optional and operation-specific. Ordinary await retains
 accepted work through its callback; cancellable await requests cancellation

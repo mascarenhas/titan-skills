@@ -140,11 +140,15 @@ native cancellation and drains its real callback, which can outlast a deadline.
 This is the complete current TCP surface in `net`. There is no UDP, Unix-domain
 socket, listener-adoption (`LISTEN_FDS` / `launch_activate_socket`),
 socket-option, local/peer-address, selected-ephemeral-port, read-size,
-`read_all`, per-operation timeout, or connection-pool API. Inherited connected
-IPv4/IPv6 TCP sockets on parent descriptors 0–2 (inetd, systemd
-`StandardInput=socket`, launchd `inetdCompatibility` `Wait=false`) are supported
-on Linux and macOS through `os.stdin`/`os.stdout`/`os.stderr` (`kind() ==
-"tcp"`, `OutputStream:shutdown()`), not by wrapping `net.Connection`.
+`read_all`, per-operation timeout, or connection-pool API. A connected socket
+that inetd, systemd `Accept=yes` with `StandardInput=socket`, or launchd
+`inetdCompatibility` `Wait=false` supplies on descriptors 0–2 is not a
+`net.Connection`. On Linux and macOS it is `os.stdin`/`os.stdout`/`os.stderr`
+with `kind() == "tcp"`. Use `os.stdout:shutdown()` to half-close: it waits for
+accepted writes, ends output for every alias of the connection, leaves stdin
+readable, and returns at once when repeated. Parent `close()` never sends FIN.
+Windows rejects socket stdio with `stdio.parent.kind` `ENOTSUP`. See the
+[OS manual](../../../doc/language/standard-library-os.md#tcp-backed-parent-streams).
 
 ### TLS: `ssl`
 
