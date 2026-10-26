@@ -1730,13 +1730,19 @@ changes and restore temporary state.
 Async/process APIs include `wait_signal`, graceful `exit`, `spawn`,
 `Process:wait/kill/is_running`, and `InputStream`/`OutputStream` operations.
 Parent `os.stdin`/`os.stdout`/`os.stderr` work whether descriptor 0/1/2 is a
-terminal, a pipe or Unix stream socket, or a file (regular file, `/dev/null`,
-Windows `NUL`); `stream:kind()` returns `"tty"`, `"pipe"`, or `"file"`
-(captured child endpoints are `"pipe"`), and `is_tty()` equals
-`kind() == "tty"`. Both need a running Task and raise on a closed or
-transferred captured endpoint. File-backed writes complete in call order even
-if the writer is cancelled; do not close or replace descriptors 0–2 while a
-Runtime uses them. `spawn(file, args, ...: SpawnOption)` executes `file`
+terminal, a pipe or Unix stream socket, a file (regular file, `/dev/null`,
+Windows `NUL`), or (on Linux and macOS) a connected IPv4/IPv6 TCP socket;
+`stream:kind()` returns `"tty"`, `"pipe"`, `"file"`, or `"tcp"` (captured child
+endpoints are `"pipe"`), and `is_tty()` equals `kind() == "tty"`. Windows
+rejects socket-valued parent stdio handles with `stdio.parent.kind: ENOTSUP`
+before the named-pipe path. `OutputStream:shutdown()` half-closes the write
+side of a TCP-backed parent stream (affecting all descriptors/children sharing
+that socket) while leaving `os.stdin` readable, and raises `stdio.shutdown:
+ENOTSUP` on non-TCP backings; parent `close()` stays a no-op. Both `kind()` and
+`is_tty()` need a running Task and raise on a closed or transferred captured
+endpoint. File-backed writes complete in call order even if the writer is
+cancelled; do not close or replace descriptors 0–2 while a Runtime uses them.
+`spawn(file, args, ...: SpawnOption)` executes `file`
 directly; args omit `argv[0]`. By default it captures all three child
 descriptors. Options choose capture, parent inheritance, or merged output.
 `with_env(name, contents)` returns a `SpawnOption` that overrides one variable

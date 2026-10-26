@@ -137,9 +137,14 @@ connect succeeds, only dialing and close are valid. Repeat/concurrent attempts
 fail; after a failed attempt close the endpoint. DNS cancellation requests
 native cancellation and drains its real callback, which can outlast a deadline.
 
-This is the complete current TCP surface. There is no UDP, Unix-domain socket,
+This is the complete current TCP surface in `net`. There is no UDP, Unix-domain
+socket, listener-adoption (`LISTEN_FDS` / `launch_activate_socket`),
 socket-option, local/peer-address, selected-ephemeral-port, read-size,
-`read_all`, per-operation timeout, or connection-pool API.
+`read_all`, per-operation timeout, or connection-pool API. Inherited connected
+IPv4/IPv6 TCP sockets on parent descriptors 0–2 (inetd, systemd
+`StandardInput=socket`, launchd `inetdCompatibility` `Wait=false`) are supported
+on Linux and macOS through `os.stdin`/`os.stdout`/`os.stderr` (`kind() ==
+"tcp"`, `OutputStream:shutdown()`), not by wrapping `net.Connection`.
 
 ### TLS: `ssl`
 
