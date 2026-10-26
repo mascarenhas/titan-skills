@@ -1754,10 +1754,12 @@ and `dead`.
 semantics when true (before first entry the body is not called). It returns
 `false, payload, nil` for a yield or normal return and `true, error, trace` for
 an uncaught callee error. The first result means failed, not dead; nil/false are
-data and errors. The producer consumes its private pending trace and returns
-the already captured string as an ordinary rooted value. Successful switching
-allocates no outcome object and captures/copies no traceback. Invalid tags or
-states, finalizer misuse, native/stack/allocation failures still raise normally.
+data and errors. Raising nil retains Lua 5.5's `"<no error object>"`
+normalization, just as `resume`/`error` do. The producer consumes its private
+pending trace and returns the already captured string as an ordinary rooted value.
+Successful switching allocates no outcome object and captures/copies no
+traceback. Invalid tags or states, finalizer misuse, native/stack/allocation
+failures still raise normally.
 Async uses ordinary `import "coroutine"` and passes this optional trace through
 `resume_root` to `advance_task`, appending one driver trace only for reportable
 failure. Sticky cancellation and already recorded cleanup-body failure add no
