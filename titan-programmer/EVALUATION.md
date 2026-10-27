@@ -744,11 +744,16 @@ and direct native switches/`--c-source`. The fixture's external object consumer
 must capture `-c --c-source FILE --print-c-objects`: one absolute certified path
 per argument on stdout, with verbose commands and diagnostics on stderr. That
 capture takes only compile-phase switches (`-I`, `-D`, `--cflag`); link
-switches belong to the final images, because `-c` rejects them. When tests in
-`tests/` import modules from `src/`, require one ordered root list such as
-`--tree 'src;tests'` that keeps both logical namespaces. Reject guessed cache
-paths, globs, stale `.parts` inventories, a shared complete native argument
-list, and a second Make-owned invalidation graph.
+switches belong to the final images, because `-c` rejects them. A
+caller-configurable `CC` must reach `titanc` unchanged (for example through
+`export CC`): `titanc` parses it as shell words, so recipe re-quoting such as
+`CC="$(CC)"` breaks a valid quoted path. When tests in `tests/` import modules
+from `src/`, require one ordered root list such as `--tree 'src;tests'` that
+keeps both logical namespaces. Reject guessed cache paths, globs, stale
+`.parts` inventories, a shared complete native argument list, and a second
+Make-owned invalidation graph. Score the complete proposed Makefile, not only
+its Titan-specific parts: a recipe that breaks a valid caller configuration
+fails the case.
 
 Ask about shared application/test outputs, synthetic runner paths, an identical
 SDK republish, and changing only source-root spelling. Require output locking,
@@ -774,10 +779,11 @@ republication as unknown, could not let `tests/` import `src` modules under one
 switches to the `--print-c-objects` capture with stderr kept separate. It used
 `--tree 'src;tests'` to keep `demo.main` and `runner`, shared a compatible
 output tree, and kept the Windows and jobserver distinctions. It repeated the
-then-unqualified republication claim. The third, at `1f16c45`, passed every
-required item, including the qualified rule: an identical republication hits
-only for an otherwise cacheable build, while opaque native mechanisms and
+then-unqualified republication claim. The third, at `1f16c45`, met every
+Titan-specific item, including the qualified rule: an identical republication
+hits only for an otherwise cacheable build, while opaque native mechanisms and
 uncertified toolchains still run. It forwarded `-I`/`-D` as single `--cflag`
-arguments rather than the documented direct switches. That is a valid ordered
-compile argument rather than a rubric failure, but direct `-I`/`-D` remains the
-preferred spelling.
+arguments, which is valid but not the preferred direct spelling. It did not
+pass overall: its recipes re-quoted `CC="$(CC)"`, which breaks a valid quoted
+compiler path such as one under `C:/Program Files`. The skills then gained the
+`export CC` rule, which a fourth fresh run must confirm.

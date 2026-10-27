@@ -138,6 +138,11 @@ do not reuse one complete native argument list for both. Do not glob
 and holds one node per C source. Prefer passing `--c-source` directly to the
 final Titan build when no external object consumer is needed.
 
+`titanc` parses `CC` as shell words, so a valid value can quote an executable
+path that contains spaces, such as `CC='"C:/Program Files/LLVM/bin/clang.exe"'`.
+Forward a caller-configurable compiler unchanged with `export CC` rather than
+re-quoting it as `CC="$(CC)"` inside a recipe.
+
 Custom generators, third-party native-library builds, environment checks,
 packaging, test execution, and coverage output-root policy remain build-tool
 work.
