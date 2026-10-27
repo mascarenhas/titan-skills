@@ -786,4 +786,17 @@ uncertified toolchains still run. It forwarded `-I`/`-D` as single `--cflag`
 arguments, which is valid but not the preferred direct spelling. It did not
 pass overall: its recipes re-quoted `CC="$(CC)"`, which breaks a valid quoted
 compiler path such as one under `C:/Program Files`. The skills then gained the
-`export CC` rule, which a fourth fresh run must confirm.
+`export CC` rule, which a fourth fresh run had to confirm.
+
+The fourth run, at `8758e92`, passed the case, scored on its whole Makefile. It
+exported `CC` unchanged with the shell-word reason. It gave both images
+always-invoked `+` recipes with exact `--exe` paths, and kept the generator
+rule, packaging, and runtime test execution. It translated `CPPFLAGS`/`CFLAGS`
+into direct `-I`/`-D` plus `--cflag`, and `LDFLAGS`/`LDLIBS` into direct
+`-L`/`-l` plus `--ldflag`, preserving shell-word boundaries and rejecting a
+dangling operand. The `--print-c-objects` capture got only the compile
+switches, and it consumed each returned line separately with stderr kept
+apart. It also used `--tree 'src;tests'` for `runner`, a shared default
+output tree, the qualified republication rule, and the source-spelling,
+split-path, jobserver, Windows payload, and staging distinctions. No
+skill-caused or generic Make/shell defect was found.
