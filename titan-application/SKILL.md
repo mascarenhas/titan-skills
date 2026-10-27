@@ -108,7 +108,7 @@ the actual object path for a copy or another tool, capture stdout from
 The flag requires `-c` and at least one `--c-source`; it prints one absolute
 certified object path per C-source argument, in argument order, one per line.
 Do not glob `build/.native/*.o`: that cache can retain nodes from older source
-locations or other targets. Prefer passing `--c-source` directly to the final
+locations and holds one node per C source. Prefer passing `--c-source` directly to the final
 Titan build when no external object consumer is needed.
 
 Custom generators, third-party native-library builds, environment checks,

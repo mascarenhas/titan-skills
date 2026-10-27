@@ -754,7 +754,7 @@ hint, content-based certification, and legitimate source-path-spelling misses.
 Require reserved split-part paths and separate incompatible configurations.
 Stock macOS Make uses the local cap for unshareable pipe jobservers; GNU Make
 4.4's FIFO pool and Linux's private pipe reopen can share tokens. Windows uses
-the local cap, `--exe` (with automatic `.exe`), and the provider DLL layout,
-not `--static` or the removed launcher-name option.
+the local cap, `--exe` (with automatic `.exe`), and the provider DLL layout;
+reject `--static` and any separate launcher-name option, which `titanc` lacks.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.

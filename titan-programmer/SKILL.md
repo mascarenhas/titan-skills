@@ -1882,9 +1882,10 @@ go to stderr, including with `-v`; do not merge stderr into a captured path list
 Split outputs reserve `<stem>.partN.c` and `<stem>.partN.o` for
 `1 <= N < --c-parts`, even if code generation emits fewer parts.
 
-Always invoke `--incremental` builds; the compiler owns source/header/interface,
-compiler/SDK, native-flag, and final-link certification, not an external Make
-module graph. Plain `-c` forces source-closure compilation; `-c --incremental`
+Always run `titanc --incremental` rather than deciding in Make whether it is
+needed: the compiler certifies sources, C headers, dependency interfaces, the
+compiler/SDK, native flags, and final links itself, so no external Make module
+graph is needed. Plain `-c` recompiles the whole source closure; `-c --incremental`
 certifies requested roots too. Pass the same output directory throughout
 related builds. Application and test builds safely share its lock and reuse
 unchanged production objects when native flags, SDK, and resolved provider
