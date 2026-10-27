@@ -774,5 +774,10 @@ republication as unknown, could not let `tests/` import `src` modules under one
 switches to the `--print-c-objects` capture with stderr kept separate. It used
 `--tree 'src;tests'` to keep `demo.main` and `runner`, shared a compatible
 output tree, and kept the Windows and jobserver distinctions. It repeated the
-then-unqualified republication claim; this revision limits it to otherwise
-cacheable builds and needs another fresh run.
+then-unqualified republication claim. The third, at `1f16c45`, passed every
+required item, including the qualified rule: an identical republication hits
+only for an otherwise cacheable build, while opaque native mechanisms and
+uncertified toolchains still run. It forwarded `-I`/`-D` as single `--cflag`
+arguments rather than the documented direct switches. That is a valid ordered
+compile argument rather than a rubric failure, but direct `-I`/`-D` remains the
+preferred spelling.
