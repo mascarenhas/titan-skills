@@ -755,11 +755,24 @@ SDK republish, and changing only source-root spelling. Require output locking,
 compatible production-object reuse, target-private
 `.titan-links/<key>/synthetic/`, the disposable `.titan/digests` precise-stat
 hint, content-based certification that makes an identical SDK republish at
-unchanged resolved paths a full hit, and legitimate source-path-spelling misses.
+unchanged resolved paths a full hit for an otherwise cacheable build (opaque
+or uncertified native mechanisms still miss either way), and legitimate
+source-path-spelling misses.
 Require reserved split-part paths and separate incompatible configurations.
 Stock macOS Make uses the local cap for unshareable pipe jobservers; GNU Make
 4.4's FIFO pool and Linux's private pipe reopen can share tokens. Windows uses
 the local cap, `--exe` (with automatic `.exe`), and the provider DLL layout;
 reject `--static` and any separate launcher-name option, which `titanc` lacks.
 
-This case is intentionally unscored until run in a fresh cartridge-only context.
+Fresh cartridge-only runs on 2026-10-27 (read-only build plans; nothing was
+executed). The first, given the skills at `b01ae48`, left identical SDK
+republication as unknown, could not let `tests/` import `src` modules under one
+`--tree`, and reused link options in the `-c` object capture. The second, at
+`0357943`, passed every required item above. It wrote phony always-invoked
+`+` recipes with exact `--exe` paths, translated `CPPFLAGS`/`CFLAGS` and
+`LDFLAGS`/`LDLIBS` into phase-specific switches, and passed only compile
+switches to the `--print-c-objects` capture with stderr kept separate. It used
+`--tree 'src;tests'` to keep `demo.main` and `runner`, shared a compatible
+output tree, and kept the Windows and jobserver distinctions. It repeated the
+then-unqualified republication claim; this revision limits it to otherwise
+cacheable builds and needs another fresh run.

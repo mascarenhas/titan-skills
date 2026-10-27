@@ -89,12 +89,16 @@ spelling can legitimately miss because source paths appear in generated code
 and diagnostics, even when the files are the same.
 
 Reinstalling or republishing a byte-identical Titan compiler and SDK is a hit
-when its headers and providers still resolve to the same paths and the options
-and native toolchain are unchanged: every object, native C node, and final link
-is reused, and `titanc` compiles and links nothing despite new timestamps and
-inodes. The digest cache may rehash those files first. Moving the SDK so its
-headers or providers resolve to a different physical path, or retargeting a
-symlink, can legitimately miss.
+for an otherwise cacheable build whose outputs and certificates are still valid,
+when the SDK's headers and providers resolve to the same paths and all other
+inputs, options, and the native toolchain are unchanged: every object, native
+C node, and final link is reused, and `titanc` compiles and links nothing
+despite new timestamps and inodes. The digest cache may rehash those files
+first. Moving the SDK so its headers or providers resolve to a different
+physical path, or retargeting a symlink, can legitimately miss. Opaque native
+mechanisms (`@file` arguments, `-fplugin`, `-specs`, `-wrapper`, `-Xclang` or
+`-Xlinker`) or an uncertified toolchain make the affected native C nodes or
+final link uncacheable, so they run on every build, republished or not.
 
 Titan keeps a disposable digest cache at `build/.titan/digests`. It reuses
 hashes only when precise device/inode, size, mode, and nanosecond mtime/ctime

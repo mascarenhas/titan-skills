@@ -1897,12 +1897,15 @@ related builds. Application and test builds safely share its lock and reuse
 unchanged production objects when native flags, SDK, and resolved provider
 bindings match; `--test` alone does not require a second object tree. Use
 separate directories for incompatible configurations. A byte-identical Titan
-compiler and SDK reinstall or republication hits when its headers and providers
-still resolve to the same paths and the options and native toolchain are
-unchanged: objects, native C nodes, and final links are reused, with no
-compilation or linking despite new timestamps and inodes. The digest cache may
-rehash first; an SDK moved to a different physical path or a retargeted
-symlink can legitimately miss.
+compiler and SDK reinstall or republication hits for an otherwise cacheable
+build with valid outputs and certificates, when the SDK's headers and providers
+still resolve to the same paths and all other inputs, options, and the native
+toolchain are unchanged: objects, native C nodes, and final links are reused,
+with no compilation or linking despite new timestamps and inodes. The digest
+cache may rehash first; an SDK moved to a different physical path or a
+retargeted symlink can legitimately miss. Opaque native mechanisms (`@file`,
+`-fplugin`, `-specs`, `-wrapper`, `-Xclang`, `-Xlinker`) or an uncertified
+toolchain keep the affected native nodes or final link uncacheable either way.
 
 Keep the source-path spelling stable: `--tree src` and an absolute spelling
 can produce different code locations and legitimately miss. Equivalent
