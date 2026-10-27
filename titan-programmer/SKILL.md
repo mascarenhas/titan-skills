@@ -1852,8 +1852,10 @@ include:
 --exe PATH            standalone/test executable destination, relative to cwd
 --test                build a native Titan test executable
 --test-dir DIR        discover conventionally named test roots under DIR
+--c-source FILE       compile/certify an authored C helper; repeatable
+--print-c-objects     with -c and --c-source: absolute certified paths on stdout
 --no-uv-bootstrap     explicit standalone/test Runtime ownership mode
--v                    show native commands and object/native/link hit/miss reasons
+-v                    native commands and object/native/link decisions on stderr
 --pretty-print         opt in to clang-format for generated C/headers
 ```
 
@@ -1869,6 +1871,17 @@ use the original source location. Output routing does not add a binary search
 root: use `TITAN_PATH_0_6` for previously built providers and Lua's paths for
 generated loaders. Omitting `--output` retains legacy source-adjacent outputs.
 
+Target-specific runner and entrypoint files live under
+`out/.titan-links/<key>/synthetic/`; authored C helpers passed with `--c-source`
+use `out/.native/`. Do not reconstruct these cache paths. If an external Make
+rule needs a C helper's object, use `-c --incremental --c-source FILE
+--print-c-objects`: stdout contains one absolute certified path per C-source
+argument in argument order, one per line. The flag requires both `-c` and at
+least one `--c-source`. Native command echoes, worker output, and diagnostics
+go to stderr, including with `-v`; do not merge stderr into a captured path list.
+Split outputs reserve `<stem>.partN.c` and `<stem>.partN.o` for
+`1 <= N < --c-parts`, even if code generation emits fewer parts.
+
 Always invoke `--incremental` builds; the compiler owns source/header/interface,
 compiler/SDK, native-flag, and final-link certification, not an external Make
 module graph. Plain `-c` forces source-closure compilation; `-c --incremental`
@@ -1876,8 +1889,19 @@ certifies requested roots too. Pass the same output directory throughout
 related builds. Application and test builds safely share its lock and reuse
 unchanged production objects when native flags, SDK, and resolved provider
 bindings match; `--test` alone does not require a second object tree. Use
-separate directories for incompatible configurations. See
-[`incremental compilation`](../../../doc/language/incremental-compilation.md)
+separate directories for incompatible configurations.
+
+Keep the source-path spelling stable: `--tree src` and an absolute spelling
+can produce different code locations and legitimately miss. Equivalent
+`--output` and `--exe` spellings do not themselves invalidate reuse. With
+`--output`, the compiler keeps a disposable precise-stat digest cache at
+`<output>/.titan/digests`, separate from the certificates. Matching device/inode,
+size, mode, and nanosecond mtime/ctime observations allow hash reuse; otherwise
+inputs are read again. Missing or malformed cache data is ignored, and the
+coordinator atomically saves it under the output lock. No persistent digest
+cache is used without `--output`.
+
+See [`incremental compilation`](../../../doc/language/incremental-compilation.md)
 and [`output directories`](../../../doc/language/output-directory.md), or the
 [application build pattern](../titan-application/SKILL.md#establish-output-ownership-before-compiling).
 For a standalone delivery claim, check a relocated executable with the compiler

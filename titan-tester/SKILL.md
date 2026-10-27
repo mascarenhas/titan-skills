@@ -771,15 +771,16 @@ Without `--exe`, the first resulting root owns the executable path (including
 the folder-module output rule); explicit roots precede sorted automatic roots.
 Test mode emits a standalone only—no library provider pair or Lua shim.
 Synthetic runner and entrypoint files are isolated per target under
-`build/.titan-links/`. `titan.test` remains an ordinary dependency; no synthetic
-support module or installed source copy is required. Windows retains the
-launcher/provider-DLL layout and appends `.exe` to `--exe` when absent.
+`build/.titan-links/<key>/synthetic/`. `titan.test` remains an ordinary dependency;
+no synthetic support module or installed source copy is required. Windows
+retains the launcher/provider-DLL layout and appends `.exe` to `--exe` when absent.
 
 Application and test builds can share `--output build` safely on local
 filesystems: `titanc` locks the tree, isolates target-specific synthetic files,
 and reuses compatible production objects. Use distinct output directories for
-incompatible flags, SDKs, or toolchains. Add compiler `-v` for object/native/link
-hit and miss diagnostics; runner `-v` is a separate runtime option. Follow the
+incompatible flags, SDKs, or toolchains. Add compiler `-v` for native command
+echoes and object/native/link hit and miss diagnostics on stderr; worker output
+also goes to stderr. Runner `-v` is a separate runtime option. Follow the
 [application build guidance](../titan-application/SKILL.md#establish-output-ownership-before-compiling)
 for always-invoked Make targets, native inputs, and jobserver policy.
 `--static` prefers the standard archive on Linux/macOS but may select a DSO;
@@ -882,14 +883,22 @@ make test
 `test.tests` root, and `--exe` for the aggregate's stable path. The compiler
 discovers and schedules the module closure and certifies the final link.
 Aggregate C fixtures use `--c-source`; Make also prepares child-program
-fixtures and staged headers. Explicit `make clean` removes owned outputs.
+fixtures and staged headers. Rules needing a fixture object path capture
+`-c --c-source FILE --print-c-objects`, not a glob of `.native/*.o`. That stdout
+contains one absolute certified path per C-source argument in argument order;
+verbose commands and worker diagnostics stay on stderr. The Windows harness
+uses the same path contract with Bash-3-compatible array handling. Explicit
+`make clean` removes owned outputs.
 The run target returns to the repository root because fixtures rely on that
 CWD. It supervises the aggregate in a separate process group with a default
 600-second deadline for
 all 30 roots, including repeated fresh child-fixture compilation with O3/Linux
 LTO. It streams merged output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
-retain their explicit 15-second limit.
+retain their explicit 15-second limit. The sanitizer Runtime gate derives its
+parent-case inventory from the built owner's object metadata and runs each
+parent subtree within the unchanged per-run deadline, rather than maintaining
+a second case list or extending the deadline for fresh child compilation.
 
 Native Windows exposes the same leaf names through `make -f Makefile.win`
 with `PREFIX` selecting the validated SDK and `TITAN_TEST_BUILD_DIR` selecting a

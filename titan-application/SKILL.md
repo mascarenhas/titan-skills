@@ -60,13 +60,29 @@ per-module `.o` rules, import/header inventories, or compiler/SDK/configuration
 stamps to decide whether Titan needs to run.
 
 Titan creates missing output directories and writes generated C, objects,
-headers, runners, and native outputs there, preserving the selected source
-hierarchy. `--tree` selects authored sources independently; no source copies
-are needed. Keep generated files outside the installed SDK. Application and
-test builds can share this output tree safely on local filesystems: `titanc`
-locks it through certification and publication. Unchanged production objects
-are shared when native flags, SDK, and resolved provider bindings match.
-Use separate output directories for incompatible configurations.
+headers, and native outputs there, preserving the selected source hierarchy.
+`--tree` selects authored sources independently; no source copies are needed.
+Keep generated files outside the installed SDK. Target-specific runner and
+entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
+helpers live under `build/.native/`. Treat these as compiler-owned inventories,
+not paths to reconstruct or glob. Split outputs reserve `<stem>.partN.c` and
+`<stem>.partN.o` for `1 <= N < --c-parts`, even when fewer parts are emitted;
+do not place authored files or other targets at those paths.
+
+Application and test builds can share this output tree safely on local
+filesystems: `titanc` locks it through certification and publication. Unchanged
+production objects are shared when native flags, SDK, and resolved provider
+bindings match. Use separate output directories for incompatible configurations.
+Keep source-path spelling stable too: changing `--tree src` to an absolute
+spelling can legitimately miss because source paths appear in generated code
+and diagnostics, even when the files are the same.
+
+Titan keeps a disposable digest cache at `build/.titan/digests`. It reuses
+hashes only when precise device/inode, size, mode, and nanosecond mtime/ctime
+observations match; otherwise it reads and hashes the input again. Missing or
+malformed cache data is ignored. The coordinator loads and atomically saves
+this hint under the output lock; no persistent digest cache is used without
+`--output`. This is separate from object and final-link certificates.
 
 The compiler separates coverage objects from ordinary objects in `.coverage`
 subdirectories inside the output tree. Independent coverage executables or
@@ -86,9 +102,18 @@ Pass native inputs directly: `-I DIR` and `-D NAME=VALUE` for headers/defines,
 `--cflag=ARG` / `--ldflag=ARG` for other native switches. Translate other
 `pkg-config` tokens through those phase-specific switches, not as bare
 `titanc` options. Pass app-owned C helpers with `--c-source app/native_helper.c`;
-Titan compiles and certifies them and their header inputs. Custom generators,
-third-party native-library builds, environment checks, packaging, test
-execution, and coverage output-root policy remain build-tool work.
+Titan compiles and certifies them and their header inputs. If a Make rule needs
+the actual object path for a copy or another tool, capture stdout from
+`titanc -c --incremental --output build --c-source app/native_helper.c --print-c-objects`.
+The flag requires `-c` and at least one `--c-source`; it prints one absolute
+certified object path per C-source argument, in argument order, one per line.
+Do not glob `build/.native/*.o`: that cache can retain nodes from older source
+locations or other targets. Prefer passing `--c-source` directly to the final
+Titan build when no external object consumer is needed.
+
+Custom generators, third-party native-library builds, environment checks,
+packaging, test execution, and coverage output-root policy remain build-tool
+work.
 
 A short Linux/macOS Makefile can follow this shape:
 
@@ -116,7 +141,10 @@ FIFO jobserver shares its pool with Titan's frontend/native jobs. Older pipe
 jobservers that cannot be shared, including stock macOS Make, use Titan's own
 `-j` / `TITAN_JOBS` cap; Linux can also share privately reopened pipe
 descriptors. Native Windows uses the local cap and omits `--static`.
-Add `-v` to see object/native/link hits and miss reasons. Consult
+Add `-v` to see native command echoes and object/native/link hits and miss
+reasons on stderr; worker output and diagnostics also go there, leaving
+`--print-c-objects` stdout as paths only. Capture both streams for a build log
+(`2>&1`), but leave stderr separate when capturing object paths. Consult
 [incremental compilation](../../../doc/language/incremental-compilation.md)
 for certification boundaries and
 [output directories](../../../doc/language/output-directory.md) for native

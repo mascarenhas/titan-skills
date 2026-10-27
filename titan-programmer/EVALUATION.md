@@ -729,3 +729,32 @@ reports, removed mandatory Python/gcovr and merge processing, and identified the
 renderer-specific assertion change. With aggregation and rich formats explicitly
 requested, it allowed the optional external tooling. This was a read-only build
 plan evaluation; it did not execute the application.
+
+## Compiler-owned application builds
+
+Give a fresh agent an application Makefile with a per-module import graph,
+compiler/SDK/configuration stamps, generated source mirrors, a moved test
+runner, and a C fixture rule that globs `.native/*.o`. Ask it to use the
+installed compiler's incremental build contract for application and test
+images, preserving a custom generator, packaging, and runtime test execution.
+
+Require always-invoked `--incremental --output` image recipes with `+` for
+Make's jobserver, exact `--exe` destinations relative to the working directory,
+and direct native switches/`--c-source`. The fixture's external object consumer
+must capture `-c --c-source FILE --print-c-objects`: one absolute certified path
+per argument on stdout, with verbose commands and diagnostics on stderr.
+Reject guessed cache paths, globs, stale `.parts` inventories, and a second
+Make-owned invalidation graph.
+
+Ask about shared application/test outputs, synthetic runner paths, an identical
+SDK republish, and changing only source-root spelling. Require output locking,
+compatible production-object reuse, target-private
+`.titan-links/<key>/synthetic/`, the disposable `.titan/digests` precise-stat
+hint, content-based certification, and legitimate source-path-spelling misses.
+Require reserved split-part paths and separate incompatible configurations.
+Stock macOS Make uses the local cap for unshareable pipe jobservers; GNU Make
+4.4's FIFO pool and Linux's private pipe reopen can share tokens. Windows uses
+the local cap, `--exe` (with automatic `.exe`), and the provider DLL layout,
+not `--static` or the removed launcher-name option.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
