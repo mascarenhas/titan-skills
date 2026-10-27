@@ -67,7 +67,13 @@ entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
 helpers live under `build/.native/`. Treat these as compiler-owned inventories,
 not paths to reconstruct or glob. Split outputs reserve `<stem>.partN.c` and
 `<stem>.partN.o` for `1 <= N < --c-parts`, even when fewer parts are emitted;
-do not place authored files or other targets at those paths.
+do not place authored files or other targets at those paths. On native
+Windows, links also stage each launcher and provider DLL in a sibling
+`<file>.stage.tmp.<suffix>` directory. A later link removes a leftover one, but
+fails with `refusing to retire stale Windows staging` and deletes nothing if it
+holds a build input or if Titan cannot identify every native input and tool
+(an uncertified compiler or uninterpretable linker flags). Keep authored files
+out of those directories, and inspect and delete a reported leftover yourself.
 
 Application and test builds can share this output tree safely on local
 filesystems: `titanc` locks it through certification and publication. Unchanged
