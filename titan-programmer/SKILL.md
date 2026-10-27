@@ -1860,7 +1860,10 @@ include:
 ```
 
 `--tree` selects source lookup and `--output` selects generated files
-independently. Generated C, objects, and FFI headers recreate the selected
+independently. `--tree` takes an ordered, semicolon-separated root list, quoted
+for the shell (`--tree 'src;tests'`); each logical module is looked up in the
+roots in order, and the default is `.` (there is no source-path environment
+variable). Generated C, objects, and FFI headers recreate the selected
 source root's hierarchy under the output directory; final providers, loaders,
 default executables, and temporary compiler files also live there. `--exe PATH`
 selects a standalone/test executable destination relative to the working
@@ -1877,10 +1880,13 @@ use `out/.native/`. Do not reconstruct these cache paths. If an external Make
 rule needs a C helper's object, use `-c --incremental --c-source FILE
 --print-c-objects`: stdout contains one absolute certified path per C-source
 argument in argument order, one per line. The flag requires both `-c` and at
-least one `--c-source`. Native command echoes, worker output, and diagnostics
-go to stderr, including with `-v`; do not merge stderr into a captured path list.
-Split outputs reserve `<stem>.partN.c` and `<stem>.partN.o` for
-`1 <= N < --c-parts`, even if code generation emits fewer parts.
+least one `--c-source`, and `-c` rejects link-phase options (`-l`, `-L`,
+`--ldflag`, `-X`, `--exe`, `--no-uv-bootstrap`): pass only `-I`, `-D`, and
+`--cflag` there, and add link switches to the final image build. Native
+command echoes, worker output, and diagnostics go to stderr, including with
+`-v`; do not merge stderr into a captured path list. Split outputs reserve
+`<stem>.partN.c` and `<stem>.partN.o` for `1 <= N < --c-parts`, even if code
+generation emits fewer parts.
 
 Always run `titanc --incremental` rather than deciding in Make whether it is
 needed: the compiler certifies sources, C headers, dependency interfaces, the
@@ -1890,7 +1896,13 @@ certifies requested roots too. Pass the same output directory throughout
 related builds. Application and test builds safely share its lock and reuse
 unchanged production objects when native flags, SDK, and resolved provider
 bindings match; `--test` alone does not require a second object tree. Use
-separate directories for incompatible configurations.
+separate directories for incompatible configurations. A byte-identical Titan
+compiler and SDK reinstall or republication hits when its headers and providers
+still resolve to the same paths and the options and native toolchain are
+unchanged: objects, native C nodes, and final links are reused, with no
+compilation or linking despite new timestamps and inodes. The digest cache may
+rehash first; an SDK moved to a different physical path or a retargeted
+symlink can legitimately miss.
 
 Keep the source-path spelling stable: `--tree src` and an absolute spelling
 can produce different code locations and legitimately miss. Equivalent

@@ -759,7 +759,9 @@ titanc --incremental --output build --test --tree . \
 
 Repeatable `--test-dir DIR` recursively selects flat or folder modules whose
 final logical component is `test`, `tests`, `spec`, `specs`, or ends in `_test`,
-`_tests`, `_spec`, or `_specs`. The directory must lie inside `--tree`;
+`_tests`, `_spec`, or `_specs`. The directory must lie inside a `--tree` root
+(an ordered, quoted list such as `--tree 'src;tests'` is allowed), and the
+first listed root containing it supplies the logical prefix:
 `--tree . --test-dir tests` keeps the `tests.*` namespace. Folder contributors
 are not separate roots. Add explicit roots for other names; repeatable
 `--test-exclude MODULE` removes exact automatic roots only, not explicit roots

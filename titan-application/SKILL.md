@@ -62,6 +62,11 @@ stamps to decide whether Titan needs to run.
 Titan creates missing output directories and writes generated C, objects,
 headers, and native outputs there, preserving the selected source hierarchy.
 `--tree` selects authored sources independently; no source copies are needed.
+It takes an ordered, semicolon-separated list of roots, quoted for the shell:
+`--tree 'src;tests'` looks up each logical module in `src` first, then in
+`tests`, so a runner under `tests/` imports `src` modules by their usual names
+(`demo.main`) while keeping its own (`runner`). Omitting `--tree` means `.`;
+there is no source-path environment variable.
 Keep generated files outside the installed SDK. Target-specific runner and
 entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
 helpers live under `build/.native/`. Treat these as compiler-owned inventories,
@@ -82,6 +87,14 @@ bindings match. Use separate output directories for incompatible configurations.
 Keep source-path spelling stable too: changing `--tree src` to an absolute
 spelling can legitimately miss because source paths appear in generated code
 and diagnostics, even when the files are the same.
+
+Reinstalling or republishing a byte-identical Titan compiler and SDK is a hit
+when its headers and providers still resolve to the same paths and the options
+and native toolchain are unchanged: every object, native C node, and final link
+is reused, and `titanc` compiles and links nothing despite new timestamps and
+inodes. The digest cache may rehash those files first. Moving the SDK so its
+headers or providers resolve to a different physical path, or retargeting a
+symlink, can legitimately miss.
 
 Titan keeps a disposable digest cache at `build/.titan/digests`. It reuses
 hashes only when precise device/inode, size, mode, and nanosecond mtime/ctime
@@ -113,9 +126,13 @@ the actual object path for a copy or another tool, capture stdout from
 `titanc -c --incremental --output build --c-source app/native_helper.c --print-c-objects`.
 The flag requires `-c` and at least one `--c-source`; it prints one absolute
 certified object path per C-source argument, in argument order, one per line.
-Do not glob `build/.native/*.o`: that cache can retain nodes from older source
-locations and holds one node per C source. Prefer passing `--c-source` directly to the final
-Titan build when no external object consumer is needed.
+`-c` rejects link-phase options (`-l`, `-L`, `--ldflag`, `-X`, `--exe`, and
+`--no-uv-bootstrap`), so give that capture only the compile-phase switches
+(`-I`, `-D`, `--cflag`) and add the link switches to the final image commands;
+do not reuse one complete native argument list for both. Do not glob
+`build/.native/*.o`: that cache can retain nodes from older source locations
+and holds one node per C source. Prefer passing `--c-source` directly to the
+final Titan build when no external object consumer is needed.
 
 Custom generators, third-party native-library builds, environment checks,
 packaging, test execution, and coverage output-root policy remain build-tool
@@ -211,8 +228,10 @@ than an ignore rule.
 Use `--test-dir tests` instead of maintaining a root list when test owners
 follow the naming rule: their final logical component is `test`, `tests`,
 `spec`, `specs`, or ends in `_test`, `_tests`, `_spec`, or `_specs`. The directory
-must be inside the selected `--tree`; with `--tree .`, `tests/` retains the
-`tests.*` namespace. Add explicit logical roots for other names.
+must lie inside a `--tree` root, and the first listed root containing it
+supplies the logical prefix: with `--tree .`, `tests/` retains the `tests.*`
+namespace; with `--tree 'src;tests'`, its modules are top-level names such as
+`router_test`. Add explicit logical roots for other names.
 `--test-exclude tests.platform_test` removes an exact automatic root, not an
 explicit root or a module imported by another selected root. `--exe` keeps the
 runner destination independent of root order. Read the tester skill's

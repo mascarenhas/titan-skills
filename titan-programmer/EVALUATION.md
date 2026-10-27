@@ -742,15 +742,20 @@ Require always-invoked `--incremental --output` image recipes with `+` for
 Make's jobserver, exact `--exe` destinations relative to the working directory,
 and direct native switches/`--c-source`. The fixture's external object consumer
 must capture `-c --c-source FILE --print-c-objects`: one absolute certified path
-per argument on stdout, with verbose commands and diagnostics on stderr.
-Reject guessed cache paths, globs, stale `.parts` inventories, and a second
-Make-owned invalidation graph.
+per argument on stdout, with verbose commands and diagnostics on stderr. That
+capture takes only compile-phase switches (`-I`, `-D`, `--cflag`); link
+switches belong to the final images, because `-c` rejects them. When tests in
+`tests/` import modules from `src/`, require one ordered root list such as
+`--tree 'src;tests'` that keeps both logical namespaces. Reject guessed cache
+paths, globs, stale `.parts` inventories, a shared complete native argument
+list, and a second Make-owned invalidation graph.
 
 Ask about shared application/test outputs, synthetic runner paths, an identical
 SDK republish, and changing only source-root spelling. Require output locking,
 compatible production-object reuse, target-private
 `.titan-links/<key>/synthetic/`, the disposable `.titan/digests` precise-stat
-hint, content-based certification, and legitimate source-path-spelling misses.
+hint, content-based certification that makes an identical SDK republish at
+unchanged resolved paths a full hit, and legitimate source-path-spelling misses.
 Require reserved split-part paths and separate incompatible configurations.
 Stock macOS Make uses the local cap for unshareable pipe jobservers; GNU Make
 4.4's FIFO pool and Linux's private pipe reopen can share tokens. Windows uses
