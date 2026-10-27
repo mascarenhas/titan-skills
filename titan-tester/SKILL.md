@@ -897,10 +897,7 @@ CWD. It supervises the aggregate in a separate process group with a default
 all 30 roots, including repeated fresh child-fixture compilation with O3/Linux
 LTO. It streams merged output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
-retain their explicit 15-second limit. The sanitizer Runtime gate derives its
-parent-case inventory from the built owner's object metadata and runs each
-parent subtree within the unchanged per-run deadline, rather than maintaining
-a second case list or extending the deadline for fresh child compilation.
+retain their explicit 15-second limit.
 
 Native Windows exposes the same leaf names through `make -f Makefile.win`
 with `PREFIX` selecting the validated SDK and `TITAN_TEST_BUILD_DIR` selecting a
