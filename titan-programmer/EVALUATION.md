@@ -729,3 +729,74 @@ reports, removed mandatory Python/gcovr and merge processing, and identified the
 renderer-specific assertion change. With aggregation and rich formats explicitly
 requested, it allowed the optional external tooling. This was a read-only build
 plan evaluation; it did not execute the application.
+
+## Compiler-owned application builds
+
+Give a fresh agent an application Makefile with a per-module import graph,
+compiler/SDK/configuration stamps, generated source mirrors, a moved test
+runner, and a C fixture rule that globs `.native/*.o`. Ask it to use the
+installed compiler's incremental build contract for application and test
+images, preserving a custom generator, packaging, and runtime test execution.
+
+Require always-invoked `--incremental --output` image recipes with `+` for
+Make's jobserver, exact `--exe` destinations relative to the working directory,
+and direct native switches/`--c-source`. The fixture's external object consumer
+must capture `-c --c-source FILE --print-c-objects`: one absolute certified path
+per argument on stdout, with verbose commands and diagnostics on stderr. That
+capture takes only compile-phase switches (`-I`, `-D`, `--cflag`); link
+switches belong to the final images, because `-c` rejects them. A
+caller-configurable `CC` must reach `titanc` unchanged (for example through
+`export CC`): `titanc` parses it as shell words, so recipe re-quoting such as
+`CC="$(CC)"` breaks a valid quoted path. When tests in `tests/` import modules
+from `src/`, require one ordered root list such as `--tree 'src;tests'` that
+keeps both logical namespaces. Reject guessed cache paths, globs, stale
+`.parts` inventories, a shared complete native argument list, and a second
+Make-owned invalidation graph. Score the complete proposed Makefile, not only
+its Titan-specific parts: a recipe that breaks a valid caller configuration
+fails the case.
+
+Ask about shared application/test outputs, synthetic runner paths, an identical
+SDK republish, and changing only source-root spelling. Require output locking,
+compatible production-object reuse, target-private
+`.titan-links/<key>/synthetic/`, the disposable `.titan/digests` precise-stat
+hint, content-based certification that makes an identical SDK republish at
+unchanged resolved paths a full hit for an otherwise cacheable build (opaque
+or uncertified native mechanisms still miss either way), and legitimate
+source-path-spelling misses.
+Require reserved split-part paths and separate incompatible configurations.
+Stock macOS Make uses the local cap for unshareable pipe jobservers; GNU Make
+4.4's FIFO pool and Linux's private pipe reopen can share tokens. Windows uses
+the local cap, `--exe` (with automatic `.exe`), and the provider DLL layout;
+reject `--static` and any separate launcher-name option, which `titanc` lacks.
+
+Fresh cartridge-only runs on 2026-10-27 (read-only build plans; nothing was
+executed). The first, given the skills at `b01ae48`, left identical SDK
+republication as unknown, could not let `tests/` import `src` modules under one
+`--tree`, and reused link options in the `-c` object capture. The second, at
+`0357943`, passed every required item above. It wrote phony always-invoked
+`+` recipes with exact `--exe` paths, translated `CPPFLAGS`/`CFLAGS` and
+`LDFLAGS`/`LDLIBS` into phase-specific switches, and passed only compile
+switches to the `--print-c-objects` capture with stderr kept separate. It used
+`--tree 'src;tests'` to keep `demo.main` and `runner`, shared a compatible
+output tree, and kept the Windows and jobserver distinctions. It repeated the
+then-unqualified republication claim. The third, at `1f16c45`, met every
+Titan-specific item, including the qualified rule: an identical republication
+hits only for an otherwise cacheable build, while opaque native mechanisms and
+uncertified toolchains still run. It forwarded `-I`/`-D` as single `--cflag`
+arguments, which is valid but not the preferred direct spelling. It did not
+pass overall: its recipes re-quoted `CC="$(CC)"`, which breaks a valid quoted
+compiler path such as one under `C:/Program Files`. The skills then gained the
+`export CC` rule, which a fourth fresh run had to confirm.
+
+The fourth run, at `8758e92`, passed the case, scored on its whole Makefile. It
+exported `CC` unchanged with the shell-word reason. It gave both images
+always-invoked `+` recipes with exact `--exe` paths, and kept the generator
+rule, packaging, and runtime test execution. It translated `CPPFLAGS`/`CFLAGS`
+into direct `-I`/`-D` plus `--cflag`, and `LDFLAGS`/`LDLIBS` into direct
+`-L`/`-l` plus `--ldflag`, preserving shell-word boundaries and rejecting a
+dangling operand. The `--print-c-objects` capture got only the compile
+switches, and it consumed each returned line separately with stderr kept
+apart. It also used `--tree 'src;tests'` for `runner`, a shared default
+output tree, the qualified republication rule, and the source-spelling,
+split-path, jobserver, Windows payload, and staging distinctions. No
+skill-caused or generic Make/shell defect was found.
