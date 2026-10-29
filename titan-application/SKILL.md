@@ -193,7 +193,8 @@ check-delivery:
 	@if env -i PATH='$(DELIVERY_PATH)' sh -c 'command -v titanc || command -v lua'; \
 	then echo 'DELIVERY_PATH must not reach titanc or lua' >&2; exit 1; fi
 	@tmp=$$(mktemp -d) && cp -Rp dist/. "$$tmp" && \
-	env -i HOME="$$tmp" PATH='$(DELIVERY_PATH)' "$$tmp/bin/app" $(SMOKE_ARGS); \
+	( cd "$$tmp" && env -i HOME="$$tmp" PATH='$(DELIVERY_PATH)' \
+	  "$$tmp/bin/app" $(SMOKE_ARGS) ); \
 	status=$$?; rm -rf "$$tmp"; exit $$status
 ```
 
@@ -224,7 +225,8 @@ switches, executable destinations, and locking.
 
 `check-delivery` must not depend on the phony images, a generator, or
 `package`: each would invoke `titanc` or the SDK's `lua`, which the check
-keeps out of reach. It runs the packaged copy from a temporary directory under
+keeps out of reach. It runs the packaged copy with the temporary deployment as
+its working directory, so nothing resolves against the source tree, under
 `env -i`, which clears `TITAN_ROOT`, `TITANC`, `TITAN_PATH_0_6`, `TITAN_PATH`,
 `LUA_PATH`, `LUA_CPATH`, and dynamic-loader variables such as
 `LD_LIBRARY_PATH`, and it refuses a
