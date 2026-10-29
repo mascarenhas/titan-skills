@@ -1266,16 +1266,25 @@ owner and borrowed-lifetime contract.
 
 ## The ordinary Lua boundary is already powerful
 
-A compiled Titan library is required from Lua as a module userdata:
+A compiled Titan library is required from Lua as a module userdata. A plain
+Lua host first loads Titan's support module, which installs Titan's package
+searcher; compiled programs, `lua.new()` states, and thread children already
+have it:
 
 ```lua
-local mod = require "app.widget"
+require "titan"                     -- installs the Titan package searcher
+local mod = require "app.widget"    -- found along the Titan path
 local answer = mod.compute(21)
 ```
 
 Lua must use qualified standard-module names such as `require "titan.lua"`,
 `require "titan.fs"`, and `require "titan.string"`. Bare `require "titan"`
-returns native support, not the standard modules. A Titan import is different:
+returns the native support table and installs the searcher; it does not load
+or initialize any standard module. The searcher finds providers in the
+directories of `TITAN_PATH_0_6`/`TITAN_PATH`, by default the host executable's
+directory and `../lib/titan/0.6` beside it, then the installed SDK. Never put
+provider directories on `LUA_CPATH`: Lua's C searchers run first and would
+bypass the ABI check. A Titan import is different:
 `local fs = import "fs"` uses compiler sugar for `titan.fs`, and the same
 applies to all the other stdlib modules.
 
@@ -1443,9 +1452,10 @@ inside an async Task/Runtime.
 
 `titan.lua.require` uses Lua's registry-backed `package.loaded` table. It
 preserves preload searcher 1, replaces blocking source searcher slot 2 with an
-asynchronous `package.path` pass, and then calls searchers 3 onward. The source
-pass can load Lua source and generated Titan shims; C modules use Lua's C
-searchers. Searchers and loaders themselves run through Titan's non-yieldable
+asynchronous `package.path` pass, and then calls searchers 3 onward, which
+normally end with Titan's package searcher. The source pass loads Lua source;
+C modules use Lua's C searchers and compiled Titan modules the Titan searcher.
+Searchers and loaders themselves run through Titan's non-yieldable
 Lua-callable path and must not attempt to yield.
 
 A truthy cached value returns immediately. A loader's nonnil result is stored;

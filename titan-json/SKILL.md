@@ -294,7 +294,7 @@ width and nested capture recursion are separate test dimensions.
 Public JSON behavior belongs in `spec/stdlib/titan/json/tests/`, the explicit
 `json.tests` native root, outside LuaCov. Only Titan's short-import normalization
 belongs in the compiler parser spec. Packaging specs own provider inventories,
-metadata/shims, and rollback. After refreshing the canonical provider, run:
+metadata, the support module, and rollback. After refreshing the canonical provider, run:
 
 ```sh
 make titan-stdlib-test TITAN_FILTER='^json[.]tests[.]'

@@ -173,6 +173,11 @@ FIFO jobserver shares its pool with Titan's frontend/native jobs. Older pipe
 jobservers that cannot be shared, including stock macOS Make, use Titan's own
 `-j` / `TITAN_JOBS` cap; Linux can also share privately reopened pipe
 descriptors. Native Windows uses the local cap and omits `--static`.
+Keep `TITANC` a single program name or path: compiled programs and Lua hosts
+read an environment variable of the same name for their SDK fallback, start it
+without a shell as `$TITANC --print-root`, and GNU Make exports a command-line
+`TITANC` into recipes such as `build/app-tests`. Give a compiler command with
+arguments or a wrapper another variable name.
 Add `-v` to see native command echoes and object/native/link hits and miss
 reasons on stderr; worker output and diagnostics also go there, leaving
 `--print-c-objects` stdout as paths only. Capture both streams for a build log
@@ -254,9 +259,14 @@ imports, through public `Case.new` and `run`; it needs no private test source
 installation. On Linux/macOS, `--static` prefers Titan archives and can fall
 back to DSOs; it does not request a fully static system executable. Validate
 the delivery claim with a relocated application in a temporary directory and
-an environment without compiler or SDK search paths. Check its native dependencies and whether
-it can still locate Titan providers at their original paths; clearing `PATH`
-alone does not rule out embedded absolute paths. Use a bounded smoke test that
+an environment without compiler or SDK search paths: unset `TITAN_ROOT`,
+`TITANC`, `TITAN_PATH_0_6`, and `TITAN_PATH`, and keep `titanc` off `PATH`.
+A program searches its selected DSOs only in its own directory and in
+`../lib/titan/0.6` beside it, then asks the installed SDK (through `TITAN_ROOT`
+or `titanc --print-root`) once per Lua state, so a passing run with `titanc`
+still reachable can hide a missing provider. Deploy dynamic providers in one of
+those two directories. Check its native dependencies; clearing `PATH` alone
+does not rule out embedded absolute paths. Use a bounded smoke test that
 exercises the application's entry point and representative functionality.
 
 When Windows is part of the requested target, follow the

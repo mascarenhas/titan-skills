@@ -718,7 +718,8 @@ cannot replace them. Record the tested macOS architecture explicitly.
 ### Treat shared build products as read-only
 
 Native and Busted helpers must not clean or rebuild the Makefile-owned
-`out/titan.so`, `out/titan.a`, `titan-runtime/libtitan.a`, generated standard shims, or
+`out/titan.so`, `out/titan.a`, `titan-runtime/libtitan.a`, the support module
+`titan-runtime/bootstrap/titan.so`, or
 private dependency archives. Generated test cleanup is deliberately bounded:
 `out/tests/` is owned wholesale, source-adjacent `.o` files below `spec/`
 are generated, and a `.c` below `spec/` is removed only when a same-stem
@@ -771,7 +772,7 @@ function discovery. See the
 
 Without `--exe`, the first resulting root owns the executable path (including
 the folder-module output rule); explicit roots precede sorted automatic roots.
-Test mode emits a standalone only—no library provider pair or Lua shim.
+Test mode emits a standalone only—no library provider pair.
 Synthetic runner and entrypoint files are isolated per target under
 `build/.titan-links/<key>/synthetic/`. `titan.test` remains an ordinary dependency;
 no synthetic support module or installed source copy is required. Windows
@@ -786,8 +787,11 @@ also goes to stderr. Runner `-v` is a separate runtime option. Follow the
 [application build guidance](../titan-application/SKILL.md#establish-output-ownership-before-compiling)
 for always-invoked Make targets, native inputs, and jobserver policy.
 `--static` prefers the standard archive on Linux/macOS but may select a DSO;
-it is unsupported on Windows. If a selected provider is outside the runtime
-search path, set `TITAN_PATH_0_6` to its `lib/titan/0.6` directory. Assess
+it is unsupported on Windows. At run time a selected DSO is searched in the
+executable's directory, then `../lib/titan/0.6` beside it, then once per Lua
+state in the installed SDK (`TITAN_ROOT`, or `titanc --print-root` from
+`PATH`/`TITANC`), never in the working directory. For a provider elsewhere,
+set `TITAN_PATH_0_6` to its directory, plus `;;` to keep the default. Assess
 standalone deployment with the application executable and a relocated process
 test.
 
@@ -936,13 +940,14 @@ to Busted (`spec/support/run_rock_tests.sh`).
 - The explicit `busted --run=checkout` profile loads edited checkout Lua
   compiler modules through `.busted`, which prepends `./?.lua;./?/init.lua`
   after the LuaRocks launcher. Pair it with command-scoped
-  `TITAN_ROCKS_ROOT="$PREFIX"` to keep installed headers and runtime libraries
-  selected. The C module path stays unchanged. An ambient checkout-first
+  `TITAN_ROOT="$PREFIX"` to keep installed headers and runtime libraries
+  selected. The C module path stays unchanged, so the installed support module
+  still loads. An ambient checkout-first
   `LUA_PATH` alone cannot override the launcher. This profile does not refresh
   installed compiler, SDK, or provider artifacts.
 - The profile's standard Busted helper prepares the existing driver layout and
   direct checker C-header configuration through one resolver context, then
-  closes it. A missing `TITAN_ROCKS_ROOT` fails before tests run.
+  closes it. A missing or empty `TITAN_ROOT` fails before tests run.
 - The native aggregate's production standard modules also come from the
   prepared canonical provider. Reinstall after changing standard-library
   source before trusting a focused leaf run.
@@ -951,20 +956,20 @@ to Busted (`spec/support/run_rock_tests.sh`).
 - Compiler specs deliberately disable persistent C-probe results because
   fixtures reuse header pathnames. The Make Busted adapter exports
   `TITAN_PROBE_CACHE_DISABLE=1`; do the same for a direct invocation.
-- A canonical full run should not inherit ambient `ROCKS_TREE`,
-  `TITAN_ROCKS_ROOT`, `TITAN_EXTRA_CPPFLAGS`, or
-  `TITAN_NO_LINE_DIRECTIVES`. They alter provider selection, probe/generated-C
-  context, or source attribution.
+- A canonical full run should not inherit ambient `ROCKS_TREE`, `TITAN_ROOT`,
+  `TITANC`, `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_EXTRA_CPPFLAGS`, or
+  `TITAN_NO_LINE_DIRECTIVES`. They alter SDK/provider selection, the run-time
+  SDK fallback, probe/generated-C context, or source attribution.
 
 Useful focused checkout commands with a prepared, ABI-matched installation:
 
 ```sh
-TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   busted --run=checkout spec/test_runner_spec.lua
-TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   busted --run=checkout spec/checker/unions_spec.lua \
   --filter='case bindings'
-TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   busted --run=checkout spec/coder/test_runner_spec.lua \
   --filter='filters descendants'
 ```
@@ -1475,7 +1480,7 @@ file family:
 2. checker admits a hidden union variant;
 3. generated union payload is collected too early;
 4. `titan.url.parse` normalizes the wrong public host;
-5. installed standard shim is missing after publication;
+5. installed support module is missing from `lib/lua/5.5` after publication;
 6. `titan.os` standalone exit behavior differs in a child process;
 7. test-runner discovery sorts cases nondeterministically.
 
@@ -1567,7 +1572,7 @@ inspects generated C instead of child behavior; deletes broad artifacts.
 
 - default Busted can test the installed compiler snapshot;
 - explicit `--run=checkout` selects edited compiler Lua; command-scoped
-  `TITAN_ROCKS_ROOT="$PREFIX"` keeps installed headers and runtime libraries;
+  `TITAN_ROOT="$PREFIX"` keeps installed headers and runtime libraries;
 - the profile leaves the C module path unchanged;
 - native stdlib tests depend on the prepared canonical provider;
 - `luarocks test` and the run-only target do not rebuild;
@@ -1703,7 +1708,7 @@ make titan-stdlib-test-build
 make titan-stdlib-test-run TITAN_FILTER='<anchored-owner-pattern>'
 
 # Correct compiler layer when applicable.
-TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   busted --run=checkout <topical-spec> --filter='<focused text>'
 ```
 
