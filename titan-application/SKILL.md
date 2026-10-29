@@ -136,7 +136,10 @@ certified object path per C-source argument, in argument order, one per line.
 do not reuse one complete native argument list for both. Do not glob
 `build/.native/*.o`: that cache can retain nodes from older source locations
 and holds one node per C source. Prefer passing `--c-source` directly to the
-final Titan build when no external object consumer is needed.
+final Titan build when no external object consumer is needed. Capturing an
+object links nothing by itself: every image that needs the helper still gets
+it, either through its own `--c-source` or by linking the captured object with
+`-X`.
 
 `titanc` parses `CC` as shell words, so a valid value can quote an executable
 path that contains spaces, such as `CC='"C:/Program Files/LLVM/bin/clang.exe"'`.
@@ -147,28 +150,60 @@ Custom generators, third-party native-library builds, environment checks,
 packaging, test execution, and coverage output-root policy remain build-tool
 work.
 
-A short Linux/macOS Makefile can follow this shape:
+A short Linux/macOS Makefile can follow this shape. Here another tool also
+reads the C helper's object, so the rule captures it once and both images link
+those bytes:
 
 ```make
 TITANC ?= titanc
 TITAN_JOBS ?= 4
 BUILD_FLAGS = --incremental --output build --static -j $(TITAN_JOBS)
+NATIVE_COMPILE = -I native -D APP_HELPER=1
+NATIVE_LINK = -l m
+HELPER = build/c-objects/helper.o
+DELIVERY_PATH ?= /usr/bin:/bin
+SMOKE_ARGS ?= --self-test
 
-.PHONY: all build/app build/app-tests test
+.PHONY: all $(HELPER) build/app build/app-tests test package check-delivery
 all: build/app
 
-build/app:
-	+$(TITANC) $(BUILD_FLAGS) --exe $@ main
+$(HELPER):
+	+@object=$$($(TITANC) -c --incremental --output build -j $(TITAN_JOBS) \
+	  $(NATIVE_COMPILE) --c-source native/helper.c --print-c-objects) && \
+	mkdir -p $(@D) && { cmp -s "$$object" $@ || cp -p "$$object" $@; }
 
-build/app-tests:
-	+$(TITANC) $(BUILD_FLAGS) --test --tree . --test-dir tests --exe $@
+build/app: $(HELPER)
+	+$(TITANC) $(BUILD_FLAGS) $(NATIVE_COMPILE) $(NATIVE_LINK) \
+	  -X $(HELPER) --exe $@ main
+
+build/app-tests: $(HELPER)
+	+$(TITANC) $(BUILD_FLAGS) $(NATIVE_COMPILE) $(NATIVE_LINK) \
+	  --test --tree . --test-dir tests -X $(HELPER) --exe $@
 
 test: build/app build/app-tests
 	build/app-tests
+
+# Also copy any provider DSO the image selected to dist/bin or dist/lib/titan/0.6.
+package: build/app
+	rm -rf dist && mkdir -p dist/bin && cp -p build/app dist/bin/
+
+# Run after `make package`; no prerequisites, so it never runs titanc or lua.
+check-delivery:
+	@test -x dist/bin/app || { echo 'run make package first' >&2; exit 1; }
+	@if env -i PATH='$(DELIVERY_PATH)' sh -c 'command -v titanc || command -v lua'; \
+	then echo 'DELIVERY_PATH must not reach titanc or lua' >&2; exit 1; fi
+	@tmp=$$(mktemp -d) && cp -Rp dist/. "$$tmp" && \
+	env -i HOME="$$tmp" PATH='$(DELIVERY_PATH)' "$$tmp/bin/app" $(SMOKE_ARGS); \
+	status=$$?; rm -rf "$$tmp"; exit $$status
 ```
 
 The phony image targets always ask the compiler to certify; unchanged links
-are reused. The `+` recipes pass GNU Make's jobserver. GNU Make 4.4 or newer's
+are reused. The helper rule is phony too: it always asks `titanc` for the
+certified object, captures only stdout, and copies the object only when its
+bytes change. `-X` takes several payloads, so give it the object and then
+another option (`--exe`) before any module name. The final-link certificate
+digests `-X` payloads, so an unchanged helper still hits.
+The `+` recipes pass GNU Make's jobserver. GNU Make 4.4 or newer's
 FIFO jobserver shares its pool with Titan's frontend/native jobs. Older pipe
 jobservers that cannot be shared, including stock macOS Make, use Titan's own
 `-j` / `TITAN_JOBS` cap; Linux can also share privately reopened pipe
@@ -187,6 +222,15 @@ for certification boundaries and
 [output directories](../../../doc/language/output-directory.md) for native
 switches, executable destinations, and locking.
 
+`check-delivery` must not depend on the phony images, a generator, or
+`package`: each would invoke `titanc` or the SDK's `lua`, which the check
+keeps out of reach. It runs the packaged copy from a temporary directory under
+`env -i`, which clears `TITAN_ROOT`, `TITANC`, `TITAN_PATH_0_6`, `TITAN_PATH`,
+`LUA_PATH`, `LUA_CPATH`, and dynamic-loader variables such as
+`LD_LIBRARY_PATH`, and it refuses a
+`DELIVERY_PATH` that still finds `titanc` or `lua`. `SMOKE_ARGS` selects a
+bounded mode of the application, so the check finishes on its own.
+
 ## Create the initial `.gitignore`
 
 For the output layout above, start with:
@@ -194,6 +238,9 @@ For the output layout above, start with:
 ```gitignore
 # All configured build modes and their generated outputs.
 /build/
+
+# Packaged delivery copy made by `make package`.
+/dist/
 
 # Workspace language-server cache.
 .titan-ls/
@@ -260,7 +307,9 @@ installation. On Linux/macOS, `--static` prefers Titan archives and can fall
 back to DSOs; it does not request a fully static system executable. Validate
 the delivery claim with a relocated application in a temporary directory and
 an environment without compiler or SDK search paths: unset `TITAN_ROOT`,
-`TITANC`, `TITAN_PATH_0_6`, and `TITAN_PATH`, and keep `titanc` off `PATH`.
+`TITANC`, `TITAN_PATH_0_6`, and `TITAN_PATH`, and keep `titanc` and the SDK's
+`lua` off `PATH`. Run the check against an already packaged copy, with no
+build step in it, as `check-delivery` above does.
 A program searches its selected DSOs only in its own directory and in
 `../lib/titan/0.6` beside it, then asks the installed SDK (through `TITAN_ROOT`
 or `titanc --print-root`) once per Lua state, so a passing run with `titanc`
