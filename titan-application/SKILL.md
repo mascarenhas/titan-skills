@@ -213,7 +213,11 @@ Keep `TITANC` a single program name or path: compiled programs and Lua hosts
 read an environment variable of the same name for their SDK fallback, start it
 without a shell as `$TITANC --print-root`, and GNU Make exports a command-line
 `TITANC` into recipes such as `build/app-tests`. Give a compiler command with
-arguments or a wrapper another variable name.
+arguments or a wrapper another variable name. On Windows the compiler is the
+native `titanc.exe`; the fallback looks up a name without a directory (the
+default `titanc`, or `TITANC=titanc`) only in the `PATH` entries, adding `.exe`
+when it has no extension, so the same `TITANC ?= titanc` works there. The
+fallback query never inherits `LUA_INIT` or `LUA_INIT_5_5`.
 Add `-v` to see native command echoes and object/native/link hits and miss
 reasons on stderr; worker output and diagnostics also go there, leaving
 `--print-c-objects` stdout as paths only. Capture both streams for a build log
