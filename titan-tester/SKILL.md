@@ -980,6 +980,12 @@ to Busted (`spec/support/run_rock_tests.sh`).
   `LUA_PATH`/`LUA_CPATH` and their `_5_5` forms too, so the default C module
   path selects the installed support module; a leftover `TITAN_ROCKS_ROOT` is
   inert but should be removed.
+- Make itself sets `TITAN_ROOT` to the SDK that `TEST_LUA` selects for the
+  native suite's builds, fixture compiles, and runs. The aggregate and its
+  fresh children live outside an SDK `bin`, so this keeps a `titanc` earlier on
+  `PATH` from supplying their provider. This is Make's own selection; it does
+  not make an ambient `TITAN_ROOT` acceptable in a canonical run.
+  `TITAN_TEST_SDK_ROOT` is helper metadata and selects nothing at run time.
 
 Useful focused checkout commands with a prepared, ABI-matched installation:
 
