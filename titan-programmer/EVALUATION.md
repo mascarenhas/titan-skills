@@ -614,6 +614,33 @@ case where injected text supplied a case-specific fact. These contexts were
 still not hermetic, so they do not strictly satisfy the rule that answers come
 from the cartridges alone.
 
+**Rerun at `abd3fcb`.** Fresh evaluators reran T-E13 and the application-build
+case against the fixed skills, with the same rubrics, authority tree, and
+compile pattern. Both still failed, for reasons the cartridges do not cause:
+
+- Application build: every rubric item passed by execution. Both images
+  linked the captured helper with `-X`, and the same link without it failed
+  with an undefined reference to the helper. `check-delivery` passed with
+  `PATH=/usr/bin:/bin`, where neither `titanc` nor `lua` is reachable. The
+  case failed on the evaluator's own `TREE := src;gen;tests    # …` line:
+  Make keeps the spaces before an inline comment, so the quoted
+  `--tree 'src;gen;tests    '` no longer contained `tests`, and `make test`
+  stopped with `--test-dir 'tests' is outside every --tree source root`.
+  With the comment moved to its own line, the suite built and passed. The
+  `titan-application` snippet has no inline comment after a variable value,
+  so this was an authoring slip in the answer.
+- T-E13: the answer still omitted the bullet saying that the installed support
+  module in `lib/lua/5.5` still loads because the C module path is unchanged.
+  It said `TITAN_ROCKS_ROOT` "is removed and silently ignored" but not what
+  follows from that: a fallback to the running interpreter's prefix, and a
+  checkout profile that stops for the missing `TITAN_ROOT`. The answer was
+  written a minute after the fix commits. Its "silently ignored" wording,
+  however, appears only in the fixed `titan-tester` text. The evaluator
+  therefore likely read that text, so this omission cannot be blamed on a
+  stale revision. The cartridge now states both items in the environment
+  section and in Eval 13; the case remains failed until a fresh run includes
+  them.
+
 ## Mechanical gates
 
 For every update:
