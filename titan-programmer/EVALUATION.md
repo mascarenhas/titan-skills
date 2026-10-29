@@ -641,6 +641,24 @@ compile pattern. Both still failed, for reasons the cartridges do not cause:
   section and in Eval 13; the case remains failed until a fresh run includes
   them.
 
+**T-E13 third run (`8ef926f`): pass; the second run's omission was evaluator
+variance.** `8ef926f` changed only this file, so the third evaluator read the
+same `titan-tester` text as the second. This time the answer met every
+must-hit item:
+
+- The checkout profile keeps the installed support module through Lua's default
+  C module path. Canonical validation clears `LUA_PATH`/`LUA_CPATH` "so the
+  default C module path selects the installed support module".
+- A stale `TITAN_ROCKS_ROOT` is silently ignored, the checkout profile then
+  stops for the missing `TITAN_ROOT`, and a leftover setting should be removed.
+- The rebuild, reinstall, run-only, `make test`, ambient-variable, and
+  focused-to-broad items were all correct.
+
+One detail is thinner than the cartridge: the answer calls the old variable
+inert but does not name the fallback to the running interpreter's prefix that
+`titanc` and default Busted use. The application-build rerun's only failure
+remains the evaluator's own Makefile line described above.
+
 ## Mechanical gates
 
 For every update:
