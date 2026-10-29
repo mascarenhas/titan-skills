@@ -473,8 +473,9 @@ native/platform/benchmark evidence.
 
 ## Frontmatter-only routing set
 
-Read only each skill's YAML `name` and `description`, then choose the minimal
-set for these queries:
+Read only each skill's YAML `name` and `description`. Answer `none` when no
+cartridge applies; `UNKNOWN` is not a routing answer. Choose the minimal set for
+these queries:
 
 1. edit an ordinary record method in a `.titan` file;
 2. add native Titan subtests;
