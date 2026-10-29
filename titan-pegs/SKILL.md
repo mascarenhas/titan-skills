@@ -1146,8 +1146,8 @@ titanc assignment
 ```
 
 For a library module, omit `main`, compile with `titanc my.parser`, and test its
-public boundary from another Titan module or the generated Lua shim as
-appropriate. Do not execute `.titan` files with `lua`.
+public boundary from another Titan module, or from Lua with ordinary `require`
+after `require "titan"`, as appropriate. Do not execute `.titan` files with `lua`.
 
 ### Prefer focused native Titan tests
 

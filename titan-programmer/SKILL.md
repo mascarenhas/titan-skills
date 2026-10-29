@@ -1818,16 +1818,22 @@ The exact exported `main(args: {string}): integer` makes a standalone
 executable. `args[1]` is the first user argument; there is no index 0 entry.
 Any other `main` signature is an ordinary library function.
 
-Without an exact `main`, a single root on Linux or macOS builds paired
-shared/static providers and a Lua shim:
+Without an exact `main`, a single root on Linux or macOS builds a paired
+shared/static provider. Lua loads it with ordinary `require` after
+`require "titan"` installs Titan's package searcher, which finds providers
+along the Titan path (directories, not `?` templates):
 
 ```sh
 (cd scratch && titanc --incremental --output out calc)
-(cd scratch && LUA_PATH='out/?.lua;;' LUA_CPATH='out/?.so;;' \
-  lua -e 'assert(require("calc").twice(21) == 42)')
+(cd scratch && TITAN_PATH_0_6='out;;' \
+  lua -e 'require "titan"; assert(require("calc").twice(21) == 42)')
 ```
 
-Experimental Windows library builds emit DLL providers and Lua shims, with no paired
+Titan generates no Lua loader files. Do not put provider directories on
+`LUA_CPATH`: Lua's own C searchers run before Titan's searcher and would open
+a provider without its ABI check.
+
+Experimental Windows library builds emit DLL providers with no paired
 Titan archive; `--static` and selected Titan archive providers are unsupported.
 `--jobs` bounds frontend workers and native compilation on Windows as well.
 The `check` program above produces `out/bin/check.exe` and
@@ -1871,8 +1877,8 @@ directory, not to `--output`. For example,
 `titanc --tree /project/src -o out app.main` writes `out/app/main.c`, never
 `/project/src/app/main.c`. Authored quoted headers and source diagnostics still
 use the original source location. Output routing does not add a binary search
-root: use `TITAN_PATH_0_6` for previously built providers and Lua's paths for
-generated loaders. Omitting `--output` retains legacy source-adjacent outputs.
+root: use `TITAN_PATH_0_6` for previously built providers, for both `titanc`
+and Lua hosts. Omitting `--output` retains legacy source-adjacent outputs.
 
 Target-specific runner and entrypoint files live under
 `out/.titan-links/<key>/synthetic/`; authored C helpers passed with `--c-source`
@@ -1937,7 +1943,7 @@ dependency as `import "name.titan"`; that import requires source and exposes loc
 changing the logical name. Command-line roots themselves remain unsuffixed
 logical names. To test compiler Lua edits without reinstalling them, run the
 prefix's `busted --run=checkout` from the repository root with command-scoped
-`TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1`. The `.busted`
+`TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1`. The `.busted`
 profile selects checkout Lua after the LuaRocks launcher, and the existing root
 option preserves the installed headers and runtime libraries. The profile's
 Busted helper also prepares direct checker C-header lookup through the existing

@@ -718,7 +718,8 @@ cannot replace them. Record the tested macOS architecture explicitly.
 ### Treat shared build products as read-only
 
 Native and Busted helpers must not clean or rebuild the Makefile-owned
-`out/titan.so`, `out/titan.a`, `titan-runtime/libtitan.a`, generated standard shims, or
+`out/titan.so`, `out/titan.a`, `titan-runtime/libtitan.a`, the support module
+`titan-runtime/bootstrap/titan.so`, or
 private dependency archives. Generated test cleanup is deliberately bounded:
 `out/tests/` is owned wholesale, source-adjacent `.o` files below `spec/`
 are generated, and a `.c` below `spec/` is removed only when a same-stem
@@ -736,6 +737,12 @@ export PREFIX="/tmp/titan-$USER-test"
 export PATH="$PREFIX/bin:$PATH"
 unset LUA_PATH LUA_CPATH LUA_PATH_5_5 LUA_CPATH_5_5
 ```
+
+With those overrides unset, Lua's C module path is its default, which already
+contains `$PREFIX/lib/lua/5.5`; `require "titan"` from `titanc`, Busted, or a
+Lua host therefore loads the installed support module
+`$PREFIX/lib/lua/5.5/titan.so`. Select an SDK with `TITAN_ROOT`. The former
+`TITAN_ROCKS_ROOT` was removed in its favor, with no alias, and is ignored.
 
 From the source-tree root, always invoke the incremental compiler for the
 requested suite; it owns the import graph, object invalidation, and final-link
@@ -771,7 +778,7 @@ function discovery. See the
 
 Without `--exe`, the first resulting root owns the executable path (including
 the folder-module output rule); explicit roots precede sorted automatic roots.
-Test mode emits a standalone only—no library provider pair or Lua shim.
+Test mode emits a standalone only—no library provider pair.
 Synthetic runner and entrypoint files are isolated per target under
 `build/.titan-links/<key>/synthetic/`. `titan.test` remains an ordinary dependency;
 no synthetic support module or installed source copy is required. Windows
@@ -786,8 +793,11 @@ also goes to stderr. Runner `-v` is a separate runtime option. Follow the
 [application build guidance](../titan-application/SKILL.md#establish-output-ownership-before-compiling)
 for always-invoked Make targets, native inputs, and jobserver policy.
 `--static` prefers the standard archive on Linux/macOS but may select a DSO;
-it is unsupported on Windows. If a selected provider is outside the runtime
-search path, set `TITAN_PATH_0_6` to its `lib/titan/0.6` directory. Assess
+it is unsupported on Windows. At run time a selected DSO is searched in the
+executable's directory, then `../lib/titan/0.6` beside it, then once per Lua
+state in the installed SDK (`TITAN_ROOT`, or `titanc --print-root` from
+`PATH`/`TITANC`), never in the working directory. For a provider elsewhere,
+set `TITAN_PATH_0_6` to its directory, plus `;;` to keep the default. Assess
 standalone deployment with the application executable and a relocated process
 test.
 
@@ -936,13 +946,25 @@ to Busted (`spec/support/run_rock_tests.sh`).
 - The explicit `busted --run=checkout` profile loads edited checkout Lua
   compiler modules through `.busted`, which prepends `./?.lua;./?/init.lua`
   after the LuaRocks launcher. Pair it with command-scoped
-  `TITAN_ROCKS_ROOT="$PREFIX"` to keep installed headers and runtime libraries
-  selected. The C module path stays unchanged. An ambient checkout-first
-  `LUA_PATH` alone cannot override the launcher. This profile does not refresh
-  installed compiler, SDK, or provider artifacts.
+  `TITAN_ROOT="$PREFIX"` to keep installed headers and runtime libraries
+  selected. Lua's C module path stays the default, so the installed support
+  module `$PREFIX/lib/lua/5.5/titan.so` still loads; nothing re-points C
+  modules at the checkout or at `titan-runtime/bootstrap/`. An ambient
+  checkout-first `LUA_PATH` alone cannot override the launcher. This profile
+  does not refresh installed compiler, SDK, provider, or support-module
+  artifacts.
 - The profile's standard Busted helper prepares the existing driver layout and
   direct checker C-header configuration through one resolver context, then
-  closes it. A missing `TITAN_ROCKS_ROOT` fails before tests run.
+  closes it. A missing or empty `TITAN_ROOT` fails before tests run.
+- `TITAN_ROOT` replaced `TITAN_ROCKS_ROOT`, with no alias. A recipe or shell
+  that still sets only `TITAN_ROCKS_ROOT` is silently ignored: `titanc` and
+  default Busted fall back to the running interpreter's prefix (the parent of
+  its directory), and the checkout profile stops for the missing `TITAN_ROOT`.
+  Rename it.
+- A missing or stale installed support module makes the compiler fail with
+  `cannot load the Titan support module` or `installed Titan native support
+  lacks …; reinstall Titan`. Reinstall the prefix; do not point `LUA_CPATH`
+  at a checkout build.
 - The native aggregate's production standard modules also come from the
   prepared canonical provider. Reinstall after changing standard-library
   source before trusting a focused leaf run.
@@ -951,20 +973,29 @@ to Busted (`spec/support/run_rock_tests.sh`).
 - Compiler specs deliberately disable persistent C-probe results because
   fixtures reuse header pathnames. The Make Busted adapter exports
   `TITAN_PROBE_CACHE_DISABLE=1`; do the same for a direct invocation.
-- A canonical full run should not inherit ambient `ROCKS_TREE`,
-  `TITAN_ROCKS_ROOT`, `TITAN_EXTRA_CPPFLAGS`, or
-  `TITAN_NO_LINE_DIRECTIVES`. They alter provider selection, probe/generated-C
-  context, or source attribution.
+- A canonical full run should not inherit ambient `ROCKS_TREE`, `TITAN_ROOT`,
+  `TITANC`, `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_EXTRA_CPPFLAGS`, or
+  `TITAN_NO_LINE_DIRECTIVES`. They alter SDK/provider selection, the run-time
+  SDK fallback, probe/generated-C context, or source attribution. Clear
+  `LUA_PATH`/`LUA_CPATH` and their `_5_5` forms too, so the default C module
+  path selects the installed support module; a leftover `TITAN_ROCKS_ROOT` is
+  inert but should be removed.
+- Make itself sets `TITAN_ROOT` to the SDK that `TEST_LUA` selects for the
+  native suite's builds, fixture compiles, and runs. The aggregate and its
+  fresh children live outside an SDK `bin`, so this keeps a `titanc` earlier on
+  `PATH` from supplying their provider. This is Make's own selection; it does
+  not make an ambient `TITAN_ROOT` acceptable in a canonical run.
+  `TITAN_TEST_SDK_ROOT` is helper metadata and selects nothing at run time.
 
 Useful focused checkout commands with a prepared, ABI-matched installation:
 
 ```sh
-TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   busted --run=checkout spec/test_runner_spec.lua
-TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   busted --run=checkout spec/checker/unions_spec.lua \
   --filter='case bindings'
-TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   busted --run=checkout spec/coder/test_runner_spec.lua \
   --filter='filters descendants'
 ```
@@ -1475,7 +1506,7 @@ file family:
 2. checker admits a hidden union variant;
 3. generated union payload is collected too early;
 4. `titan.url.parse` normalizes the wrong public host;
-5. installed standard shim is missing after publication;
+5. installed support module is missing from `lib/lua/5.5` after publication;
 6. `titan.os` standalone exit behavior differs in a child process;
 7. test-runner discovery sorts cases nondeterministically.
 
@@ -1567,8 +1598,13 @@ inspects generated C instead of child behavior; deletes broad artifacts.
 
 - default Busted can test the installed compiler snapshot;
 - explicit `--run=checkout` selects edited compiler Lua; command-scoped
-  `TITAN_ROCKS_ROOT="$PREFIX"` keeps installed headers and runtime libraries;
-- the profile leaves the C module path unchanged;
+  `TITAN_ROOT="$PREFIX"` keeps installed headers and runtime libraries;
+- the profile leaves Lua's C module path at its default, so the installed
+  support module (`$PREFIX/lib/lua/5.5/titan.so`) still loads; nothing
+  re-points C modules at the checkout;
+- `TITAN_ROOT` replaced `TITAN_ROCKS_ROOT` with no alias; a recipe that still
+  sets only the old name silently falls back to the running interpreter's
+  prefix (and the checkout profile fails for the missing `TITAN_ROOT`);
 - native stdlib tests depend on the prepared canonical provider;
 - `luarocks test` and the run-only target do not rebuild;
 - rerun the prefix's `luarocks make` after standard-library/runtime changes or
@@ -1581,6 +1617,8 @@ inspects generated C instead of child behavior; deletes broad artifacts.
 
 **Fail signatures:** relies on ambient `LUA_PATH` instead of the explicit
 checkout profile; omits the root option while claiming installed SDK selection;
+writes `TITAN_ROCKS_ROOT` or calls it an alias; claims the checkout profile
+switches the C module path or support module to the checkout;
 claims `.busted` refreshes an installed compiler or provider;
 treats `make titan-stdlib-test-run` as a build; ignores current provider.
 
@@ -1703,7 +1741,7 @@ make titan-stdlib-test-build
 make titan-stdlib-test-run TITAN_FILTER='<anchored-owner-pattern>'
 
 # Correct compiler layer when applicable.
-TITAN_ROCKS_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
+TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
   busted --run=checkout <topical-spec> --filter='<focused text>'
 ```
 

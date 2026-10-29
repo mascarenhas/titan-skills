@@ -572,6 +572,93 @@ The focused P5 addition was run on 2026-08-28 in a separate fresh context with
 only `titan-programmer`; it did not inspect manuals, source, tests, plans,
 `EVALUATION.md`, `AGENTS.md`, or the worktree diff.
 
+### Issue #314 rerun (2026-10-29)
+
+The skills at `issue-314` @ `81d5309` (diff base `main` @ `80d1f70`) changed six
+cartridges for the Titan support module, the installed package searcher,
+`TITAN_ROOT`, the run-time provider search, and the compiler-owned application
+build. No frontmatter description changed, so the frontmatter-only routing set
+ran as a control. Seven cases covered the changed text: tester Eval 9 and
+Eval 13, `T1`, `F1`, `G1`, `J2`, and the compiler-owned application build,
+extended with the `TITANC` and relocated-delivery questions below. `P0`–`P6`,
+`A1`, `N1`, `J1`, `TH1`, and the coverage, named-union, `R1`, and `R2` cases
+cover unchanged text and keep their recorded results.
+
+Each answer came from a fresh subagent given only the case's cartridges; the
+T-E13 and T1 answers report a DeepSeek V4 Flash engineer role, and the others
+name no model. Every complete Titan example was then compiled with the
+issue-314 toolchain in scratch trees. **T-E9 and J2 passed; routing, T-E13,
+T1, F1, G1, and the application build failed.**
+
+| Case | Failure | Disposition |
+| --- | --- | --- |
+| routing | 19/22 exact. Query 20 omitted `titan-async` for `async.Receiver`, reasoning that `titan-thread`'s description already claims it; queries 13 and 14 answered `UNKNOWN` instead of "none". | Deferred to a skills follow-up issue: a frontmatter note that `titan-thread` adds to, and never replaces, `titan-async`. |
+| T-E13 | Every rebuild and `TITAN_ROOT` item was right, but the answer never said that the checkout profile leaves Lua's C module path at its default, so the installed `lib/lua/5.5/titan.so` loads, and never addressed a recipe that still sets the removed `TITAN_ROCKS_ROOT`. | Fixed in this branch. The tested text stated the C-path rule in one bullet and never stated the `TITAN_ROCKS_ROOT` removal; `titan-tester` now states both wherever it discusses the ambient environment and stale installs, and Eval 13 lists them as must-hit items and fail signatures. |
+| T1 | The migration design and runner semantics were exact, and the suite ran 23/23 once one annotation was added. As written, `local keep = (a and b) or (c and d)` failed to compile: `and` with a `boolean` left operand yields `boolean?`, and the `or` of two `boolean?` operands is rejected. | Deferred: the cartridge does not state the rule, and the language manual says long all-boolean `and`/`or` chains compile; the checker/manual conflict is a separate compiler follow-up. |
+| F1 | Export classes, the unsafe boundary, rooting, `void *` rules, the Map protocol, and Lua-host loading were exact. The example failed on `local count: *int` in a `foreign function` body (it needs `foreign *int`); on a fixture header whose `typedef` and function share the name `widget_stats` (invalid C); on reading scalar `foreign int.new()` as automatic storage (it is `owned *int`); and on `M as foreign *Udata`, which compiles only after `foreign import "titan/ffi.h"`. | Header and scalar `.new()`: answer errors. `*int` in body locals and the `Udata` prerequisite: deferred. No corrected F1 tree compiled. |
+| G1 | The parser built a real provider and its assertions passed once fixed. As written, `local hit, failure = parser.find_assignment(...)` dropped both Options, so `hit == nil` was rejected. | Deferred: the cartridge states the drop, but a multiple-result example (`local hit?, failure? = ...`) would prevent a repeated failure. |
+| Application build | The Makefile built both images, ran the suite, and captured one certified object path. Its `check-delivery` target depended, through `package`, on the phony application image and the generator, so it needed `titanc` and `lua` on `PATH` while refusing to run with `titanc` there. The captured C fixture object was never linked into either image. | Fixed in this branch: the `titan-application` Makefile links the captured helper into both images with `-X` and runs `check-delivery` against the packaged copy under `env -i`, with no build prerequisite and with `titanc` and `lua` out of reach. |
+
+The deferred items predate issue #314 and are collected, with their evidence
+and proposed cartridge text, in one skills follow-up issue. No answer invented
+Titan API or contradicted the ownership or single-loop model. The two branch
+fixes have not yet been confirmed by a fresh rerun of T-E13 and the
+application-build case. Until the deferred items land and their cases are
+rerun, this run does not show the cartridges' executable text to be reliable.
+
+All answers also received harness-injected context that the evaluation rules
+exclude: an engineer role block (skill-loading mandate, review-protocol path),
+workstation lines, a peer roster, and memory recalls. Each answer disclosed
+this and said it relied only on the listed cartridges. Spot checks found no
+case where injected text supplied a case-specific fact. These contexts were
+still not hermetic, so they do not strictly satisfy the rule that answers come
+from the cartridges alone.
+
+**Rerun at `abd3fcb`.** Fresh evaluators reran T-E13 and the application-build
+case against the fixed skills, with the same rubrics, authority tree, and
+compile pattern. Both still failed, for reasons the cartridges do not cause:
+
+- Application build: every rubric item passed by execution. Both images
+  linked the captured helper with `-X`, and the same link without it failed
+  with an undefined reference to the helper. `check-delivery` passed with
+  `PATH=/usr/bin:/bin`, where neither `titanc` nor `lua` is reachable. The
+  case failed on the evaluator's own `TREE := src;gen;tests    # …` line:
+  Make keeps the spaces before an inline comment, so the quoted
+  `--tree 'src;gen;tests    '` no longer contained `tests`, and `make test`
+  stopped with `--test-dir 'tests' is outside every --tree source root`.
+  With the comment moved to its own line, the suite built and passed. The
+  `titan-application` snippet has no inline comment after a variable value,
+  so this was an authoring slip in the answer.
+- T-E13: the answer still omitted the bullet saying that the installed support
+  module in `lib/lua/5.5` still loads because the C module path is unchanged.
+  It said `TITAN_ROCKS_ROOT` "is removed and silently ignored" but not what
+  follows from that: a fallback to the running interpreter's prefix, and a
+  checkout profile that stops for the missing `TITAN_ROOT`. The answer was
+  written a minute after the fix commits. Its "silently ignored" wording,
+  however, appears only in the fixed `titan-tester` text. The evaluator
+  therefore likely read that text, so this omission cannot be blamed on a
+  stale revision. The cartridge now states both items in the environment
+  section and in Eval 13; the case remains failed until a fresh run includes
+  them.
+
+**T-E13 third run (`8ef926f`): pass; the second run's omission was evaluator
+variance.** `8ef926f` changed only this file, so the third evaluator read the
+same `titan-tester` text as the second. This time the answer met every
+must-hit item:
+
+- The checkout profile keeps the installed support module through Lua's default
+  C module path. Canonical validation clears `LUA_PATH`/`LUA_CPATH` "so the
+  default C module path selects the installed support module".
+- A stale `TITAN_ROCKS_ROOT` is silently ignored, the checkout profile then
+  stops for the missing `TITAN_ROOT`, and a leftover setting should be removed.
+- The rebuild, reinstall, run-only, `make test`, ambient-variable, and
+  focused-to-broad items were all correct.
+
+One detail is thinner than the cartridge: the answer calls the old variable
+inert but does not name the fallback to the running interpreter's prefix that
+`titanc` and default Busted use. The application-build rerun's only failure
+remains the evaluator's own Makefile line described above.
+
 ## Mechanical gates
 
 For every update:
@@ -768,6 +855,15 @@ Stock macOS Make uses the local cap for unshareable pipe jobservers; GNU Make
 4.4's FIFO pool and Linux's private pipe reopen can share tokens. Windows uses
 the local cap, `--exe` (with automatic `.exe`), and the provider DLL layout;
 reject `--static` and any separate launcher-name option, which `titanc` lacks.
+
+Since issue #314, also ask what `TITANC` may contain and how to validate a
+relocated delivery. `TITANC` must be a single program name or path, because
+compiled programs and Lua hosts run `$TITANC --print-root` without a shell for
+their SDK fallback. The delivery check runs an already packaged copy with
+`TITAN_ROOT`, `TITANC`, `TITAN_PATH_0_6`, and `TITAN_PATH` cleared, with
+neither `titanc` nor the SDK's `lua` reachable, and with no prerequisite that
+rebuilds. Providers live only beside the executable or in `../lib/titan/0.6`
+next to it. The C fixture must still be linked into every image that used it.
 
 Fresh cartridge-only runs on 2026-10-27 (read-only build plans; nothing was
 executed). The first, given the skills at `b01ae48`, left identical SDK
