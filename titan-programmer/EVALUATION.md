@@ -660,6 +660,55 @@ inert but does not name the fallback to the running interpreter's prefix that
 `titanc` and default Busted use. The application-build rerun's only failure
 remains the evaluator's own Makefile line described above.
 
+### Issue #315 rerun (2026-10-29)
+
+The skills at `issue-315-skills` @ `b589563` (diff base `main` @ `25ff4ed`)
+close the five gaps deferred above:
+
+- the `and`/`or` typing after titan#316, including the Lua-exact
+  `boolean`/`value` `or` (`titan-programmer`);
+- foreign-qualified locals and casts in a `foreign function` body, and the
+  `foreign import "titan/ffi.h"` that `M as foreign *Udata` needs
+  (`titan-programmer`, `titan-ffi`);
+- both Options of a multiple-result local (`titan-programmer`);
+- `titan-thread` adding to, never replacing, `titan-async`;
+- `none` as a determinate routing answer.
+
+The issue named routing, T1, F1 and G1. P0, P1 and TH1 also cover edited text
+(the foreign-body rules and Option forcing), so they were rerun too. The other
+cases keep their recorded results.
+
+Each answer came from a fresh DeepSeek subagent (`titan-engineer-deepseek`
+profile) given only the case's cartridge paths. The prompts were the case text plus
+concrete fixtures: twenty slug rows for T1, a `widget.h` for F1, and a draft
+module for P0 and for P1. Every complete Titan file was compiled in a scratch
+tree with explicit `--tree` and `--output`, using the titan
+`issue-315-followups` toolchain, which contains the titan#316 checker fix.
+**Routing, T1, F1, G1, P0, and P1 passed; TH1 failed on an evaluator error.**
+
+| Case | Result and receipts | Disposition |
+| --- | --- | --- |
+| routing | 22/22. Query 20 selected programmer + thread + async and cited the new `titan-thread` sentence; 13, 14, and 19 answered `none`; 12 answered `none` (the routing policy rules out only programmer there); no `UNKNOWN`. | Pass, but not hermetic: the harness also listed the installed pre-change skill descriptions, and project context may have included the repository's work-to-skill table. The cited sentence exists only in the new description. |
+| T1 | `slug_test` built with `--test`; 24/24 ran (two cases, twenty row subtests, two cleanup subtests). Discovery, isolation, `defer` versus `Context:cleanup`, filtering, exit status, commands, and Runtime modes matched `titan-tester`. | Pass. `slugify` classified bytes with `if`/`elseif` ranges, so the answer did not exercise item 1's `and`/`or` shape, and it made no stale `boolean?` claim. The #314 shape `local keep = (c >= 97 and c <= 122) or (c >= 48 and c <= 57)` compiles unannotated under the fixed checker. |
+| F1 | `titanc -c` of `widget.titan` against the case header exits 0 as written. The callback body declares `local counter: foreign *int = context as foreign *int`; `M as foreign *Udata` appears with `foreign import "titan/ffi.h"`. | Pass, with both #315 items hit. This is the compile receipt #315 asked for. |
+| G1 | `my.parser` and `check` built; `check` exits 0 for the found, absent, and labeled-failure (line 2, column 3) inputs. Each multiple-result call uses `local found?, failure? = ...`. | Pass. |
+| P0 | `raw_slot`, `slot_view`, and the corrected `review_me` compile with `-c`. The correction writes `local p: foreign *int = slot`, removes `M.end()` from the foreign body, and annotates `counter: integer?`. | Pass. |
+| P1 | The corrected function and its `fs.stat` variant compile. Strict projection versus `as integer`, the Map metatable protocol, function-level `catch`, and `defer` match the cartridge, including the `boolean` Option truthiness note. | Pass. |
+| TH1 | All seven modules compile with `-c`; three needed a scorer-supplied `worker_queue.h` transcribed from the answer's own declaration comments, because the case supplies no fixture. Four `Record.new` overrides (`LatestOwner`, `LatestSink`, `HeapMutex`, `Handoff`) return `Record(...)`, which calls the override again; GCC reports `-Winfinite-recursion` for each. | Evaluator error. `titan-programmer` already says that calling `Counter(...)` or `Counter.new(...)` inside the override recurses and that the override builds storage with `{ ... }`. The answer wrote no source `foreign function` body, so it did not exercise the edited text. No cartridge change and no rerun for #315. |
+
+No case failed because of cartridge text, so this run requires no cartridge
+change and no further rerun.
+
+All seven evaluators disclosed harness-injected context:
+
+- the engineer role block;
+- a `skill://` catalog carrying the installed pre-change descriptions;
+- memory recalls;
+- a peer roster.
+
+T1 through TH1 read only their listed cartridge paths. As in #314, the
+contexts were therefore not hermetic.
+
 ## Mechanical gates
 
 For every update:
