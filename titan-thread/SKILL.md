@@ -1,6 +1,6 @@
 ---
 name: titan-thread
-description: Write, review, and test multi-threaded Titan code with titan.thread OS threads, bounded cross-thread MPMC channels, structured thread groups, and packet-scoped endpoint transfer (titan.transfer). Use when spawning isolated OS threads with their own Lua/Titan state and async Runtime, sending/receiving values or nested Sender/Receiver endpoints across thread channels or async.Receiver, composing Thread:task() with async combinators, or managing bounded concurrency and error propagation with thread.Group.
+description: Write, review, and test multi-threaded Titan code with titan.thread OS threads, bounded cross-thread MPMC channels, structured thread groups, and packet-scoped endpoint transfer (titan.transfer). Use when spawning isolated OS threads with their own Lua/Titan state and async Runtime, sending/receiving values or nested Sender/Receiver endpoints across thread channels or async.Receiver, composing Thread:task() with async combinators, or managing bounded concurrency and error propagation with thread.Group. Load titan-async as well whenever async.Receiver, Task, or Runtime semantics are involved; this skill does not replace it.
 ---
 
 # Titan thread

@@ -109,8 +109,10 @@ function-like macro, and the adjacent comment must say why it exists.
 
 The readonly ordinary-function builtin `M` is the current module marker.
 `M.member` selects current-module members, including local/keyword-named ones;
-`M as foreign *Udata` exposes its borrowed userdata pointer. It is not an
-ordinary pointer expression. Foreign functions receive neither `L` nor `M`.
+`M as foreign *Udata` exposes its borrowed userdata pointer. The cast needs the
+`Udata` declaration: add `foreign import "titan/ffi.h"` to the module that
+writes it. It is not an ordinary pointer expression. Foreign functions receive
+neither `L` nor `M`.
 
 # The C FFI
 
@@ -686,10 +688,10 @@ uncounted `T[]` borrowed view.
 
 Direct C aggregates and fixed arrays need an initializer; `.new()` and
 `.new_array(...)` request zeroed storage, and the direct local declaration's
-target chooses its representation. A mutable pointer local in an ordinary
-Titan function may omit its RHS and starts as NULL, but every const local and
-every local in a restricted source-written foreign function requires an
-initializer expression list.
+target chooses its representation. A mutable pointer local may omit its RHS
+and starts as NULL, both in an ordinary Titan function and in a restricted
+source-written foreign function; every const local requires an initializer
+expression list.
 For a complete non-GC-bearing struct or union:
 
 | Direct declaration | Representation |
@@ -1170,8 +1172,11 @@ C `void`.
 
 The body is a deliberately closed raw-C subset. It may use:
 
-* parameters and direct-C locals; every local in a restricted foreign function
-  requires an initializer expression list;
+* parameters and direct-C locals. A local needs an initializer unless its
+  explicit C type admits nil (an object or function pointer, which starts as
+  `NULL`); C scalars and aggregates and every const local need one. Only the
+  signature uses unqualified C names: body locals and casts are ordinary
+  annotations, as in `local count: foreign *int = context as foreign *int`;
 * imported C namespaces and their functions, values, fields, types, size and
   alignment;
 * other foreign functions in the module, public foreign functions through a
@@ -1204,9 +1209,9 @@ left-to-right.
 
 ### Private nominal callback fields
 
-For compiler/runtime maintenance only, a restricted foreign function with a
-direct `foreign import "titan/ffi.h"` can use
-`ffi.titan_record_field(owner, "LocalRecord", "field")`. Literal names select
+`ffi.titan_record_field(owner, "LocalRecord", "field")` is for
+compiler/runtime maintenance only: a restricted foreign function with a direct
+`foreign import "titan/ffi.h"` can use it. Literal names select
 a current-module record and its canonical field, including private fields.
 The compiler supplies the physical native/UV access: never hardcode a nominal
 `uv` index from source field order. Traced fields yield a by-value `foreign TValue`; raw fields yield exact C
@@ -2141,7 +2146,8 @@ searching by analogy.
   casts, owners, fields/indexes, raw foreign bodies and rooting.
 * `titan-runtime/titan/ffi.h` — private typed Lua bridges; portable primitives
   are contextual language types and are not typedefs in this header. Do not
-  treat every internal declaration as a public application API.
+  treat every internal declaration as a public application API; its `Udata`
+  declaration is what `M as foreign *Udata` requires.
 * `titan/lua/lua.titan` and `titan/lua/worker.titan` — the public dynamic-loading
   and independent-state escape hatch plus protected foreign worker entries;
   `titan/gc.titan` — its typed public collector/finalizer policy boundary.

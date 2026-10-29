@@ -164,9 +164,10 @@ reserved words; locals/parameters use nonreserved `Name`. Ordinary functions,
 methods, lambdas, and the module initializer bind readonly `L` (current Lua
 state) and `M` (current module). `M.member` and body-local types `M.Type` select
 module declarations despite local/generic shadows, including keyword-named
-members; `M as foreign *Udata` exposes the borrowed module pointer. Foreign
-functions receive neither builtin. The readonly builtin `ffi` may be shadowed
-by ordinary declarations.
+members; `M as foreign *Udata` exposes the borrowed module pointer. The cast
+needs the `Udata` declaration: add `foreign import "titan/ffi.h"` to the module
+that writes it. Foreign functions receive neither builtin. The readonly builtin
+`ffi` may be shadowed by ordinary declarations.
 
 ## The type vocabulary
 
@@ -221,8 +222,11 @@ the all-`value` application, not a wildcard.
 Titan types and raw foreign types have separate syntax and name resolution.
 Use `foreign int`, `foreign float`, `foreign *Item`, and
 `foreign function(*void): void` in ordinary annotations/casts. Within a foreign
-signature/type, names are unqualified: no `ffi.` or module prefix. Primitive
-C words remain identifiers elsewhere, so Titan names do not reserve them.
+signature/type, names are unqualified: no `ffi.` or module prefix. Only the
+signature uses unqualified C names: locals and casts in a `foreign function`
+body are ordinary annotations, as in
+`local count: foreign *int = context as foreign *int`. Primitive C words remain
+identifiers elsewhere, so Titan names do not reserve them.
 Nested pointer/array/callback constructors are grouped, as `foreign *(*int)`.
 
 `foreign type Name = foreigntype` creates an always-local raw C typedef, with no
@@ -332,7 +336,8 @@ is required. This includes:
 - a union `case` scrutinee;
 - numeric-`for` bounds (which otherwise require exact numeric types); and
 - unannotated local inference, which deliberately drops the Option and fails
-  fast if it is absent.
+  fast if it is absent (an Option of `boolean` converts by truthiness instead,
+  so an absent value becomes `false`).
 
 Therefore, after ordinary presence handling, use the value directly:
 
@@ -361,6 +366,12 @@ function required_or_default(values: {string}, index: integer): string
   return optional or required
 end
 ```
+
+The rule applies to each name of a multiple-result local. For a function that
+returns a result or an error, keep both Options with
+`local hit?, failure? = parser.find(input)`; `local hit, failure = …` forces
+both names, so comparing either with `nil` is a type error for a nominal
+result.
 
 Use `x == nil` / `x ~= nil` when a present base value can itself be falsy. A
 `boolean?` has three states (`true`, `false`, nil), while a plain condition
@@ -464,7 +475,21 @@ Titan keeps Lua precedence and Lua-faithful results. Key rules:
   the right when the left has none, and use Lua truthiness. A non-table dynamic
   `value` cannot dispatch; `value`/`value` equality remains deliberately raw.
 - `and`/`or` short-circuit and return values under Titan's Option-aware rules;
-  `not` returns boolean.
+  `not` returns boolean. In a boolean context (a condition, a `boolean` return,
+  a `boolean`-annotated sink) both operands convert by truthiness and the
+  result is `boolean`. Elsewhere, including an unannotated local:
+  - two `boolean` operands give `boolean` with Lua's value (`false and true` is
+    `false`), so `local keep = (c >= 97 and c <= 122) or (c >= 48 and c <= 57)`
+    is a `boolean`;
+  - `x or d` with `x: T?` and `d: T` unwraps to `T`, and `x or y` with both
+    `T?` stays `T?` (a present `false` in a `boolean?` is falsy);
+  - a `boolean` beside a `value` in `or` gives `value` with Lua's value
+    (`false or v` is `v`), while a `boolean` beside any other type converts
+    both sides by truthiness to `boolean` (with `b` false and `n: integer?`
+    holding 5, `b or n` is `true`, not 5);
+  - any other `and` whose left operand is a `boolean`, an Option, or a `value`
+    has the right operand's Option type, and a falsy left operand gives nil,
+    not `false` (`b and 1.0` is nil when `b` is false).
 - Every condition accepts every type and uses Lua truthiness. A condition does
   not narrow its operand.
 
