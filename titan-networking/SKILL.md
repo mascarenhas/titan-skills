@@ -1356,7 +1356,7 @@ The aggregate builds all roots even when filtered and runs outside LuaCov. For
 a project-owned test module:
 
 ```sh
-titanc --test --tree . app.network_tests
+titanc -q --test --tree . app.network_tests
 ./app/network_tests --filter='app[.]network_tests[.]test_client' --verbose
 ```
 

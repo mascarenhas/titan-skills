@@ -319,7 +319,7 @@ end
 ```
 
 ```sh
-(cd scratch && titanc -o out --test --tree . calc_test && ./out/calc_test)
+(cd scratch && titanc -q -o out --test --tree . calc_test && ./out/calc_test)
 ```
 
 The helper call creates a distinct activation for each captured input and
@@ -749,20 +749,24 @@ requested suite; it owns the import graph, object invalidation, and final-link
 reuse. Pass dotted logical module names and choose the runner path with `--exe`:
 
 ```sh
-titanc --incremental --output build --test --tree . \
+titanc -q --incremental --output build --test --tree . \
   --exe build/calc-tests calc_test
 ./build/calc-tests
 
 # Several unrelated test roots may share one explicitly named executable.
-titanc --incremental --output build --test --tree . \
+titanc -q --incremental --output build --test --tree . \
   --exe build/calc-tests calc_test parser_test
 ./build/calc-tests
 
 # Discover conventionally named test owners instead of maintaining a root list.
-titanc --incremental --output build --test --tree . \
+titanc -q --incremental --output build --test --tree . \
   --exe build/project-tests --test-dir tests
 ./build/project-tests
 ```
+
+`-q` keeps agent logs to diagnostics and native tool output; without it,
+`titanc` adds progress lines for every compiled module ([titan-programmer
+build output](../titan-programmer/SKILL.md#compile-with-titanc)).
 
 Repeatable `--test-dir DIR` recursively selects flat or folder modules whose
 final logical component is `test`, `tests`, `spec`, `specs`, or ends in `_test`,
@@ -1005,7 +1009,7 @@ TITAN_ROOT="$PREFIX" TITAN_PROBE_CACHE_DISABLE=1 \
 Coverage uses ordinary native tests and their owning layers:
 
 ```sh
-CC=gcc-14 GCOV=gcov-14 titanc -o out --test --coverage calc_tests
+CC=gcc-14 GCOV=gcov-14 titanc -q -o out --test --coverage calc_tests
 ./out/calc_tests
 ```
 

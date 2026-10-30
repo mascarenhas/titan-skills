@@ -149,10 +149,10 @@ Use the same native policy for checking and compilation:
 ```sh
 TITAN_EXTRA_CPPFLAGS='-I/opt/widget/include -DWIDGET_API=2' \
 TITAN_EXTRA_LDFLAGS='-L/opt/widget/lib -lwidget' \
-  titanc -o out app.main
+  titanc -q -o out app.main
 ```
 
-For a simple library name, `titanc -o out app.main -lwidget` is convenient. CPP flags
+For a simple library name, `titanc -q -o out app.main -lwidget` is convenient. CPP flags
 supply declarations; link flags or `-l` supply implementations. `titanc` takes
 dotted module names, not `.titan` paths.
 

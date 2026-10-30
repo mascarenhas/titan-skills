@@ -1836,7 +1836,7 @@ end
 Compile and run on Linux or macOS:
 
 ```sh
-(cd scratch && titanc --incremental --output out check && ./out/check)
+(cd scratch && titanc -q --incremental --output out check && ./out/check)
 ```
 
 The exact exported `main(args: {string}): integer` makes a standalone
@@ -1849,7 +1849,7 @@ shared/static provider. Lua loads it with ordinary `require` after
 along the Titan path (directories, not `?` templates):
 
 ```sh
-(cd scratch && titanc --incremental --output out calc)
+(cd scratch && titanc -q --incremental --output out calc)
 (cd scratch && TITAN_PATH_0_6='out;;' \
   lua -e 'require "titan"; assert(require("calc").twice(21) == 42)')
 ```
@@ -1887,8 +1887,21 @@ include:
 --print-c-objects     with -c and --c-source: absolute certified paths on stdout
 --no-uv-bootstrap     explicit standalone/test Runtime ownership mode
 -v                    native commands and object/native/link decisions on stderr
+-q                    no progress lines: only diagnostics and native tool output
 --pretty-print         opt in to clang-format for generated C/headers
 ```
+
+`titanc` reports build progress on stderr by default. On a terminal it
+redraws a live status region. In an agent shell, a pipe, or a CI log it prints
+several plain lines for every compiled module, plus link and summary lines.
+When you run `titanc` yourself, pass `-q` so the log holds only diagnostics and
+native compiler or linker output. Switch to `-v` when you need the exact
+commands and the incremental hit/miss decisions; `-q` and `-v` are mutually
+exclusive. Neither changes stdout, so `--print-root`, `--print-ast`, and
+`--print-c-objects` results stay machine-readable. Leave a project's own
+Makefile or build-script invocations at the default unless the project asks
+for quiet builds. See
+[build output](../../../doc/language/modules.md#build-output).
 
 `--tree` selects source lookup and `--output` selects generated files
 independently. `--tree` takes an ordered, semicolon-separated root list, quoted
@@ -2129,7 +2142,7 @@ skill tree should rerun the lightweight cartridge and routing matrix in
 
 ## Native production source coverage
 
-Use `titanc -o out --test --coverage calc_tests`, then run
+Use `titanc -q -o out --test --coverage calc_tests`, then run
 `./out/calc_tests` normally.
 Final links require a test or standalone executable; `--coverage -c` supports
 separate object compilation, while library-only provider links are rejected.
