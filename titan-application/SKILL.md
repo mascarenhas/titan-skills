@@ -59,6 +59,12 @@ the invocation cannot detect changes through the compiler. Do not maintain
 per-module `.o` rules, import/header inventories, or compiler/SDK/configuration
 stamps to decide whether Titan needs to run.
 
+`titanc` prints per-module progress lines on stderr by default. Keep that
+default in the project's Makefile, so people building on a terminal see it.
+When you run a build or test command yourself, add `-q` to keep your log to
+diagnostics and native tool output, or `-v` for command-level debugging
+([build output](../titan-programmer/SKILL.md#compile-with-titanc)).
+
 Titan creates missing output directories and writes generated C, objects,
 headers, and native outputs there, preserving the selected source hierarchy.
 `--tree` selects authored sources independently; no source copies are needed.

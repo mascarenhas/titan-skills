@@ -191,7 +191,7 @@ end
 Compile from the source directory with a prepared, ABI-matched Titan toolchain:
 
 ```sh
-titanc assignment
+titanc -q assignment
 ./assignment
 ```
 
@@ -1141,7 +1141,7 @@ Use a prepared ABI-matched installation, run from the source-tree root of the
 scratch program, and pass dotted module names—not `.titan` paths:
 
 ```sh
-titanc assignment
+titanc -q assignment
 ./assignment
 ```
 
@@ -1192,7 +1192,7 @@ end
 Run it from its source root:
 
 ```sh
-titanc --test --tree . parser_test
+titanc -q --test --tree . parser_test
 ./parser_test --verbose
 ```
 
