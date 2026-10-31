@@ -978,9 +978,10 @@ to Busted (`spec/support/run_rock_tests.sh`).
   fixtures reuse header pathnames. The Make Busted adapter exports
   `TITAN_PROBE_CACHE_DISABLE=1`; do the same for a direct invocation.
 - A canonical full run should not inherit ambient `ROCKS_TREE`, `TITAN_ROOT`,
-  `TITANC`, `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_EXTRA_CPPFLAGS`, or
-  `TITAN_NO_LINE_DIRECTIVES`. They alter SDK/provider selection, the run-time
-  SDK fallback, probe/generated-C context, or source attribution. Clear
+  `TITANC`, `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_EXTRA_CPPFLAGS`,
+  `TITAN_NO_LINE_DIRECTIVES`, or `TITAN_TARGET`. They alter SDK/provider
+  selection, the run-time SDK fallback, probe/generated-C context, source
+  attribution, or which `name.<label>.titan` variants are selected. Clear
   `LUA_PATH`/`LUA_CPATH` and their `_5_5` forms too, so the default C module
   path selects the installed support module; a leftover `TITAN_ROCKS_ROOT` is
   inert but should be removed.
