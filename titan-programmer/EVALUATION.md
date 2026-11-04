@@ -1012,8 +1012,7 @@ explanations covering:
 - per-root `<root>/.titan-ls` cache ownership and the prohibition on deleting
   another agent's `.titan-ls` directory.
 
-This case is intentionally unscored until run in a fresh cartridge-only context
-under the evaluation rules above.
+See the [recorded language-server evaluation results](#language-server-cartridge-evaluation-2026-11-04).
 
 ### LS2 — querying through omp's `lsp` tool and interpreting results (`titan-language-server` + `titan-programmer`)
 
@@ -1110,5 +1109,19 @@ Require:
   both, and `titanc`/tests remain the proof of correctness); and
 - cleaning up untracked `.titan-ls/` and `titan-config.local.lua` artifacts if
   leaving the worktrees clean, with an accurate list of touched paths.
-This case is intentionally unscored until run in a fresh cartridge-only context
-under the evaluation rules above.
+
+### Language-server cartridge evaluation (2026-11-04)
+
+Fresh evaluators were launched in separate processes with `omp -p --model opencode-go/deepseek-v4.1-flash --thinking high --no-skills --no-context-files --no-rules --no-session --approval-mode yolo`:
+
+- **Paper cases (`LS1`, `LS2`):** `--cwd /tmp/vst/eval/paper --tools read`, reading only `/tmp/vst/skills/source/titan-language-server/SKILL.md` (`LS1` and `LS2`) and `/tmp/vst/skills/source/titan-programmer/SKILL.md` (`LS2`) at `64cefdd`.
+- **Live cases (`LS3`, two independent runs):** `--cwd /tmp/vst/eval/work/slice-a --tools read,write,lsp,glob` against the `vscode-titan` `6ca55ed` server binary, reading `/tmp/vst/skills/source/titan-language-server/SKILL.md` and `/tmp/vst/skills/source/titan-programmer/SKILL.md` at `e5d9b61`, with `/tmp/vst/eval/work/slice-b/titan-config.local.lua` and both `.titan-ls/` directories removed before each run.
+
+All four evaluators disclosed their harness-injected context: the omp role/runtime/tool-policy blocks, workstation metadata, `<system-reminder>` with date and `cwd`, and Mnemopi `<memories>` entries; no `skill://` catalog, `AGENTS.md`, or peer roster was injected.
+
+| Case | Result and receipts | Disposition |
+| --- | --- | --- |
+| `LS1` | 6/6. Rejected per-slice server binaries and `"env"`; wrote `/usr/bin/env` with `-u` clearing `TITAN_PREFIX`, `TITAN_PATH*`, `TITAN_SOURCE_PATH`, `LUA_PATH*`, `LUA_CPATH*`; set `TITAN_ROOT` and verbatim `TITAN_LS_LUA_PATH`/`TITAN_LS_LUA_CPATH` without `;;`; kept tracked `titan-config.lua` clean and put only `compiler_root` in `titan-config.local.lua`; configured `initOptions.trustedRoots` with the no-fallback `-32803` and `configuration`-diagnostic rules; required reinstalling compiler Lua edits into `<slice>/prefix` and listed all 10 `titan/workspaceStatus` fields; forbade deleting a sibling's `.titan-ls/`. Marked `TITAN_LS_TRUSTED_ROOTS` separator `UNKNOWN`. | Pass. Added a 5-word note (`using the OS path-list separator`) in `3773185` for `TITAN_LS_TRUSTED_ROOTS`. |
+| `LS2` | 6/6. Kept `pullDiagnostics` enabled in omp; replaced `file="*"` with concrete `.titan` files/globs; identified `symbols`, `type_definition`, `implementation`, and `code_actions` as unimplemented (`MethodNotFound` `-32601`); supplied mandatory `symbol` on `definition` and zero-based UTF-16 positions on raw `textDocument/completion`; distinguished saved-file features from buffer-based completion/private hover; explained why FFI and metadata-only stdlib modules have hover without definition targets; explained that modules failing typechecking publish no semantic facts while `diagnostics` reports the error; required `apply=false` on `rename` and `titanc`/tests as verification proof. | Pass. |
+| `LS3` (run 1) | 5/5. Created only untracked `/tmp/vst/eval/work/slice-b/titan-config.local.lua` with `compiler_root = "/tmp/vst/sdk-b/prefix"`; verified via `titan/workspaceStatus` that `slice-a` used `titanRoot = "/tmp/vst/sdk/prefix"` (`compilerRoot = null`, `trusted = true`, `state = "ready"`) and `slice-b` used `compilerRoot = "/tmp/vst/sdk-b/prefix"`, `titanRoot = "/tmp/vst/sdk-b/prefix"` (`trusted = true`, `state = "ready"`, distinct `workerPid` and `probePrefix`); reported exact diagnostics (`slice-a/src/main.titan:6:26` integer vs string, `slice-b/src/main.titan:5:26` float vs string) and `mathutil.double` signatures (`double(n: integer): integer` "Doubles an integer." vs `double(x: float): float` "Halves a float."); verified empty hover/definition on failed `main.titan` vs full hover/definition on valid `mathutil.titan`; left tracked files untouched and listed all touched paths. | Pass. |
+| `LS3` (run 2) | 5/5. Created only untracked `slice-b/titan-config.local.lua` with `compiler_root = "/tmp/vst/sdk-b/prefix"`; proved per-root SDK isolation through `titan/workspaceStatus` (`file=` in `slice-b`) plus an A/B control clearing the override; reported exact `main.titan` diagnostics (`6:26` and `5:26`) and `mathutil.double` signatures/docs in both slices; verified and explained empty hover/definition in failed `main.titan` vs valid `mathutil.titan`; left tracked files and `.omp/lsp.json` untouched and disclosed all touched files. | Pass. |
