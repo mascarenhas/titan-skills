@@ -500,7 +500,13 @@ these queries:
 21. call `uv.native_mutex_lock` from a source `foreign function` and manage
     `uv.mutex_t.create_native()` lifetime; and
 22. write native `titan.test` cases for `Thread:task()` pre-start cancellation
-    and `async.Receiver` coalescing.
+    and `async.Receiver` coalescing;
+23. configure `titan-language-server` in omp `lsp.json` with `trustedRoots`, set
+    a slice's `compiler_root` in `titan-config.local.lua`, and query hover,
+    definition, and `titan/workspaceStatus` on `.titan` files;
+24. change the compiler's completion hole transform and detached descriptor
+    serialization in `titan-compiler`; and
+25. configure `rust-analyzer` in omp `lsp.json` for a Rust repository.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -513,7 +519,11 @@ construction work adds reflect. Thread channel and `async.Receiver` work selects
 programmer + thread + async (adding ffi when touching `transfer.discard_message`
 or raw C callbacks, and tester when writing native tests).
 Query 21 selects **programmer + ffi**; add async only when changing the
-retirement/wake protocol and tester only when writing its native tests.
+retirement/wake protocol and tester only when writing its native tests. Query 23
+selects **programmer + language-server** (not `titan-completion`, which owns
+compiler completion internals, and not `titan-json` merely because `lsp.json` is
+JSON); query 24 selects **completion** (adding programmer only when `.titan`
+files are read or edited); query 25 is a negative control and selects `none`.
 
 ## Recorded baseline and post-change results
 
@@ -946,3 +956,110 @@ apart. It also used `--tree 'src;tests'` for `runner`, a shared default
 output tree, the qualified republication rule, and the source-spelling,
 split-path, jobserver, Windows payload, and staging distinctions. No
 skill-caused or generic Make/shell defect was found.
+
+## Language-server usage in omp (`titan-language-server`)
+
+### LS1 — multi-root omp configuration, per-slice SDK selection, trust, and reload (`titan-language-server`)
+
+Review a proposed multi-agent setup for two concurrent Titan slices
+(`/tmp/titan-400/slice-a/source` with `/tmp/titan-400/slice-a/prefix` and
+`/tmp/titan-400/slice-b/source` with `/tmp/titan-400/slice-b/prefix`) that:
+
+1. builds two separate `titan-language-server` executables (one per slice) and
+   writes an omp `lsp.json` entry with an invented `"env"` object setting
+   `"TITAN_PREFIX": "/tmp/titan-400/slice-a/prefix"` and
+   `"LUA_PATH": "/tmp/titan-400/slice-a/prefix/share/lua/5.5/?.lua;;"`;
+2. edits the tracked `titan-config.lua` in `slice-a/source` to add
+   `compiler_root = "/tmp/titan-400/slice-a/prefix"`, and writes
+   `include = { "./titan" }` alongside `compiler_root` in
+   `slice-b/source/titan-config.local.lua`;
+3. omits `initOptions.trustedRoots` (and `TITAN_LS_TRUSTED_ROOTS`) and claims
+   that when a root's `compiler_root` is untrusted, missing, or fails the ABI/API
+   check, the router automatically falls back to its default `TITAN_ROOT` SDK so
+   queries still succeed;
+4. edits a compiler Lua file in `slice-a/source/titan-compiler/`, skips
+   reinstalling into `slice-a/prefix`, and claims the running worker immediately
+   uses the edited Lua source from the worktree; and
+5. deletes `/tmp/titan-400/slice-b/source/.titan-ls` from the `slice-a` agent to
+   force a fresh index.
+
+Require the corrected `lsp.json`, `titan-config.local.lua`, and workflow
+explanations covering:
+
+- one `titan-language-server` executable serving every SDK via `compiler_root`:
+  the router spawns its own executable (`os.exepath()`) with
+  `--compiler-root <prefix>`, sets `TITAN_ROOT` and Lua paths from `<prefix>`,
+  neutralizes inherited `TITAN_PATH_0_6`, `TITAN_PATH`, and `TITAN_SOURCE_PATH`,
+  verifies `TITAN_ABI_VERSION == "2"`, `LANGUAGE_SERVER_API_VERSION == 1`, and
+  required driver entry points, skips the build-time embedded interface
+  provider, and sets `prefer_static = true` so standard-library interfaces come
+  from parsing `<prefix>/lib/titan/0.6/titan.a` rather than `dlopen`ing foreign
+  `.so` providers, with the sole `luaopen_titan` C support-table limit stated;
+- `/usr/bin/env` in `command` and `args` (because omp's `ServerConfig` has no
+  `env` field), unsetting contaminating variables (`TITAN_PREFIX`,
+  `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_SOURCE_PATH`, `LUA_PATH*`,
+  `LUA_CPATH*`), `TITAN_ROOT` plus verbatim `TITAN_LS_LUA_PATH` and
+  `TITAN_LS_LUA_CPATH` without `;;`, and why `TITAN_PREFIX` in the server only
+  redirects the C probe cache;
+- keeping tracked `titan-config.lua` clean and putting **only** `compiler_root`
+  in untracked `titan-config.local.lua` (any other key in
+  `titan-config.local.lua` is rejected as a configuration error);
+- canonical containment in `initOptions.trustedRoots` or
+  `TITAN_LS_TRUSTED_ROOTS`, and root-scoped `RequestFailed` (`-32803`) with
+  **no** fallback to the default SDK when `compiler_root` is untrusted, missing,
+  incomplete, or ABI/API-incompatible;
+- reinstalling compiler or standard-library changes into the slice's prefix
+  before expecting the worker to see them, automatic router fingerprint
+  revalidation or immediate `lsp(action="reload", file="*")`, and inspecting
+  root state with `lsp(action="request", query="titan/workspaceStatus")`; and
+- per-root `<root>/.titan-ls` cache ownership and the prohibition on deleting
+  another agent's `.titan-ls` directory.
+
+This case is intentionally unscored until run in a fresh cartridge-only context
+under the evaluation rules above.
+
+### LS2 — querying through omp's `lsp` tool and interpreting results (`titan-language-server` + `titan-programmer`)
+
+Review an agent session that:
+
+1. runs `lsp(action="diagnostics", file="*")` on a Titan checkout and cites the
+   response as proof that every `.titan` module compiled cleanly;
+2. runs `lsp(action="definition", file="src/main.titan", line=15)` without
+   `symbol`, then runs `definition` on a `foreign import "stdio.h"` `ffi.printf`
+   call and on a metadata-only standard-library `string.sub` call, concluding
+   from `No definition found` that both calls are invalid;
+3. calls `lsp(action="completion", ...)` as a named tool action, or sends
+   `lsp(action="request", file="src/main.titan", query="textDocument/completion", payload=...)`
+   with 1-based byte columns copied from an earlier revision of the file before
+   recent edits;
+4. calls `lsp(action="rename", file="src/main.titan", line=10, symbol="helper", new_name="run_helper")`
+   during a read-only review under the assumption that `rename` only previews
+   edits; and
+5. queries a standalone scratch file `/tmp/scratch.titan` outside every
+   workspace folder and with no ancestor `titan-config.lua`, or treats a
+   `diagnostics` timeout / empty hover during initial indexing as a clean pass
+   and skips running `titanc` and tests.
+
+Require exact corrected `lsp(...)` calls and explanations of:
+
+- passing a concrete `.titan` file or `.titan` glob to `diagnostics` (because
+  `file="*"` invokes omp's built-in Rust/TS/Go/Python workspace CLI checkers,
+  not the Titan language server);
+- mandatory `symbol` (with optional `name#N` 1-based occurrence selector) when
+  `line` is supplied to `definition`, `references`, or `rename`, versus raw
+  `action="request"` payloads using zero-based `line` and zero-based UTF-16
+  `character` computed from the current saved text;
+- saved-file authority for `definition`, `references`, `rename`, `foldingRange`,
+  and `diagnostics` versus buffer-captured `textDocument/completion` and
+  post-completion private hover;
+- why C FFI declarations (`foreign import`, `ffi.*`, `foreign` types) and
+  external or metadata-only standard-library modules have no definition target
+  even when hover and completion work;
+- why empty/incomplete results and timeouts are inconclusive, how unowned files
+  outside every workspace folder and without a `titan-config.lua` ancestor fail
+  with `RequestFailed` (`-32803`), why `apply=false` is mandatory on `rename` /
+  `rename_file` to prevent disk mutation, and why compiler and test runs remain
+  the verification proof.
+
+This case is intentionally unscored until run in a fresh cartridge-only context
+under the evaluation rules above.
