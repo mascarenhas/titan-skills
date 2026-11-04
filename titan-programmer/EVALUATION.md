@@ -986,32 +986,29 @@ Review a proposed multi-agent setup for two concurrent Titan slices
 Require the corrected `lsp.json`, `titan-config.local.lua`, and workflow
 explanations covering:
 
-- one `titan-language-server` executable serving every SDK via `compiler_root`:
-  the router spawns its own executable (`os.exepath()`) with
-  `--compiler-root <prefix>`, sets `TITAN_ROOT` and Lua paths from `<prefix>`,
-  neutralizes inherited `TITAN_PATH_0_6`, `TITAN_PATH`, and `TITAN_SOURCE_PATH`,
-  verifies `TITAN_ABI_VERSION == "2"`, `LANGUAGE_SERVER_API_VERSION == 1`, and
-  required driver entry points, skips the build-time embedded interface
-  provider, and sets `prefer_static = true` so standard-library interfaces come
-  from parsing `<prefix>/lib/titan/0.6/titan.a` rather than `dlopen`ing foreign
-  `.so` providers, with the sole `luaopen_titan` C support-table limit stated;
+- one `titan-language-server` executable serving every SDK via `compiler_root`,
+  with one isolated worker process per root and the sole linked `titan` C
+  support-table limit stated;
 - `/usr/bin/env` in `command` and `args` (because omp's `ServerConfig` has no
   `env` field), unsetting contaminating variables (`TITAN_PREFIX`,
   `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_SOURCE_PATH`, `LUA_PATH*`,
   `LUA_CPATH*`), `TITAN_ROOT` plus verbatim `TITAN_LS_LUA_PATH` and
-  `TITAN_LS_LUA_CPATH` without `;;`, and why `TITAN_PREFIX` in the server only
-  redirects the C probe cache;
+  `TITAN_LS_LUA_CPATH` without `;;`, why `TITAN_PREFIX` in the server only
+  redirects the C probe cache, and why `"."` in `rootMarkers` makes a user-level
+  entry eligible in every `cwd`;
 - keeping tracked `titan-config.lua` clean and putting **only** `compiler_root`
-  in untracked `titan-config.local.lua` (any other key in
-  `titan-config.local.lua` is rejected as a configuration error);
+  in untracked `titan-config.local.lua` (any other key, non-string/empty value,
+  or unreadable file fails the root);
 - canonical containment in `initOptions.trustedRoots` or
   `TITAN_LS_TRUSTED_ROOTS`, and root-scoped `RequestFailed` (`-32803`) with
   **no** fallback to the default SDK when `compiler_root` is untrusted, missing,
   incomplete, or ABI/API-incompatible;
 - reinstalling compiler or standard-library changes into the slice's prefix
-  before expecting the worker to see them, automatic router fingerprint
-  revalidation or immediate `lsp(action="reload", file="*")`, and inspecting
-  root state with `lsp(action="request", query="titan/workspaceStatus")`; and
+  before expecting the worker to see them, automatic router revalidation or
+  immediate `lsp(action="reload", file="*")`, and inspecting root state with
+  `lsp(action="request", query="titan/workspaceStatus")` (`roots` entries with
+  `root`, `origin`, `trusted`, `compilerRoot`, `state`, `failure`, `workerPid`,
+  `generation`, `titanRoot`, `probePrefix`); and
 - per-root `<root>/.titan-ls` cache ownership and the prohibition on deleting
   another agent's `.titan-ls` directory.
 
@@ -1022,8 +1019,9 @@ under the evaluation rules above.
 
 Review an agent session that:
 
-1. runs `lsp(action="diagnostics", file="*")` on a Titan checkout and cites the
-   response as proof that every `.titan` module compiled cleanly;
+1. runs `lsp(action="diagnostics", file="*")` and `lsp(action="symbols", file="src/main.titan")`
+   on a Titan checkout and cites the responses as proof that every `.titan`
+   module compiled cleanly and that `src/main.titan` declares no symbols;
 2. runs `lsp(action="definition", file="src/main.titan", line=15)` without
    `symbol`, then runs `definition` on a `foreign import "stdio.h"` `ffi.printf`
    call and on a metadata-only standard-library `string.sub` call, concluding
@@ -1044,14 +1042,16 @@ Require exact corrected `lsp(...)` calls and explanations of:
 
 - passing a concrete `.titan` file or `.titan` glob to `diagnostics` (because
   `file="*"` invokes omp's built-in Rust/TS/Go/Python workspace CLI checkers,
-  not the Titan language server);
+  not the Titan language server), and recognizing that `symbols`,
+  `type_definition`, `implementation`, and `code_actions` are unimplemented by
+  the server (`MethodNotFound`, `-32601`);
 - mandatory `symbol` (with optional `name#N` 1-based occurrence selector) when
   `line` is supplied to `definition`, `references`, or `rename`, versus raw
   `action="request"` payloads using zero-based `line` and zero-based UTF-16
   `character` computed from the current saved text;
-- saved-file authority for `definition`, `references`, `rename`, `foldingRange`,
-  and `diagnostics` versus buffer-captured `textDocument/completion` and
-  post-completion private hover;
+- saved-file authority for `definition`, `references`, `rename`,
+  `textDocument/foldingRange`, and `diagnostics` versus buffer-captured
+  `textDocument/completion` and post-completion private hover;
 - why C FFI declarations (`foreign import`, `ffi.*`, `foreign` types) and
   external or metadata-only standard-library modules have no definition target
   even when hover and completion work;
