@@ -77,18 +77,23 @@ JSON-RPC over stdio (stdout is reserved for LSP frames; logs go to stderr).
 The server runs as a session router that starts one isolated worker process per
 Titan root:
 
-- **Workspace folders and lazy discovery:** initial folders come from
-  `initialize.workspaceFolders` (else `rootUri`, `rootPath`, or launch `cwd`),
-  canonicalized with `realpath`. When you query a `.titan` file in a sibling git
-  checkout or worktree outside omp's launch `cwd`, omp finds its nearest `.git`
-  ancestor and sends `workspace/didChangeWorkspaceFolders` before `didOpen` to
-  add that checkout as a workspace folder. Each document routes by canonical
-  path to the **most specific** known root containing it (and `publishDiagnostics`
-  is forwarded only from that owning root). A document outside every known
-  folder walks upward for the nearest
-  ancestor `titan-config.lua` and registers it as a discovered root; if none
-  exists, the file is unowned and requests fail with `RequestFailed` (`-32803`)
-  naming the file and `titan-config.lua`.
+- **Workspace folders, released roots, and lazy discovery:** initial folders
+  come from `initialize.workspaceFolders` (else `rootUri`, `rootPath`, or launch
+  `cwd`), canonicalized with `realpath`. When you query a `.titan` file in a
+  sibling git checkout or worktree outside omp's launch `cwd`, omp finds its
+  nearest `.git` ancestor and sends `workspace/didChangeWorkspaceFolders` before
+  `didOpen` to add that checkout, and omp's shared mux removes the sibling
+  folder again when the call releases the server. Removing a folder releases the
+  root (`origin: "released"`) without stopping its warm worker, so the next call
+  reuses the worker without restarting or re-indexing until idle eviction or the
+  worker cap stops it. Each document routes by canonical path to the **most
+  specific** of the claimed roots containing it and its nearest ancestor
+  `titan-config.lua` (and `publishDiagnostics` is forwarded only from that
+  owning root), so a configured project nested inside a folder (even one omp
+  added because of an incidental `.git`) becomes its own `discovered` root. If a
+  file has no claiming root and no `titan-config.lua` ancestor, it is unowned
+  and requests fail with `RequestFailed` (`-32803`) naming the file and
+  `titan-config.lua`.
 - **Worker cap, idle eviction, and crash limit:** at `initialized`, initial
   roots activate up to `maxWorkers` (default `4`; set via
   `initializationOptions.maxWorkers` or `TITAN_LS_MAX_WORKERS`); remaining and
@@ -223,15 +228,16 @@ For a slice worktree `/tmp/titan-NNN/<slice>/source` with installed prefix
   `line` and UTF-16 `character`** computed from the current saved text (never
   reused from an earlier file revision).
 - **`titan/workspaceStatus`:** returns `{ "roots": [ ... ] }` where each root
-  reports `root`, `origin` (`"folder"` | `"discovered"`), `trusted`,
-  `compilerRoot` (string | `null`), `state` (`"inactive"` | `"starting"` |
-  `"ready"` | `"failed"` | `"evicted"`), optional `failure`, `workerPid`
-  (integer | `null`), `generation`, and the worker's self-reported `titanRoot`
-  and `probePrefix` (string | `null`). Pass a concrete `.titan` `file` when
-  calling `titan/workspaceStatus` through omp (so omp reconciles and registers
-  that file's checkout before querying); a file-less call also works for
-  already-registered roots.
-
+  reports `root`, `origin` (`"folder"` | `"discovered"` | `"released"`),
+  `trusted`, `compilerRoot` (string | `null`), `state` (`"inactive"` |
+  `"starting"` | `"ready"` | `"failed"` | `"evicted"`), optional `failure`,
+  `workerPid` (integer | `null`), `generation`, and the worker's self-reported
+  `titanRoot` and `probePrefix` (string | `null`). Because omp's mux removes a
+  sibling checkout folder after each call, a file-less `titan/workspaceStatus`
+  call may show a previously queried sibling root with `origin: "released"`
+  (still `state: "ready"` with its warm worker), whereas passing `file=` for a
+  `.titan` file in that checkout causes omp to re-add (or initially register) the
+  folder first (`origin: "folder"`).
 ```text
 # Inspect live roots, trust, compilerRoot, titanRoot, probePrefix, workerPid, and failure messages
 lsp(action="request", query="titan/workspaceStatus",
