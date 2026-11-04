@@ -176,7 +176,7 @@ ambient variables:
   would start the server in any project with `.titan` files; prefer project
   scope or omit `"."` when that is unwanted.
 - **`initOptions`:** `trustedRoots` (array of absolute paths; also configurable
-  via `TITAN_LS_TRUSTED_ROOTS`), `insertCallSnippets`, `maxWorkers`, and
+  via `TITAN_LS_TRUSTED_ROOTS` using the OS path-list separator), `insertCallSnippets`, `maxWorkers`, and
   `idleTimeoutSeconds`. Leave `pullDiagnostics` unset/enabled in omp
   (`pullDiagnostics: false` omits `diagnosticProvider` and is used by the VS
   Code extension to avoid duplicate push/pull collections). Project overrides
