@@ -1047,10 +1047,10 @@ Require exact corrected `lsp(...)` calls and explanations of:
   workspace CLI checkers, not the Titan language server), how work-done progress
   (`window/workDoneProgress/create` + `$/progress` `begin`/`report`/`end` with
   `titan-progress/<pid>/<n>`) and `textDocument/diagnostic` (`resultId` /
-  `unchanged`) wait for a completed generation covering current saved disk bytes
-  (including newly created, deleted, or repaired project sources, while
-  non-admitted `.titan` files outside `include` return an empty report without
-  re-indexing), and recognizing that `symbols`, `type_definition`,
+  `unchanged`) act as a saved-change freshness barrier (scan-only when nothing
+  is dirty, revalidating newly created, deleted, edited, or dependency/folder
+  contributor files on disk while returning an empty report for `.titan` files
+  the project does not contain), and recognizing that `symbols`, `type_definition`,
   `implementation`, and `code_actions` are unimplemented by the server
   (`MethodNotFound`, `-32601`);
 - mandatory `symbol` (with optional `name#N` 1-based occurrence selector) when

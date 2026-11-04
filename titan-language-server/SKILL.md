@@ -39,11 +39,12 @@ JSON-RPC over stdio (stdout is reserved for LSP frames; logs go to stderr).
     sending `end` only after the completed generation and its diagnostics are
     published so omp waits for indexing automatically. `textDocument/diagnostic`
     (`diagnosticProvider`) answers from the same published rows as push, carries
-    a `resultId` (`unchanged` when `previousResultId` matches), and waits for a
-    refresh whenever the completed generation does not yet cover the file's
-    current saved bytes—including a newly created or deleted project source, or a
-    repair after a failed pass (a `.titan` file outside `include`, excluded, or
-    an inactive target variant answers an empty report without re-indexing).
+    a `resultId` (`unchanged` when `previousResultId` matches), and acts as a
+    freshness barrier: every pull requests a coalesced saved-change refresh pass
+    (scan-only when nothing on disk is dirty) and answers from the generation
+    that pass completed, revalidating the file, its folder contributors, and its
+    dependencies (a `.titan` file the project does not contain answers an empty
+    report).
   - **Buffer-based completion and private hover (`textDocument/completion`,
     `hover`):** completion (triggered by `.` and `:` or raw request) analyzes
     captured open/changed editor buffers against the committed saved-file
