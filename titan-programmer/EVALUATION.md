@@ -1019,7 +1019,8 @@ under the evaluation rules above.
 
 Review an agent session that:
 
-1. runs `lsp(action="diagnostics", file="*")` and `lsp(action="symbols", file="src/main.titan")`
+1. sets `"pullDiagnostics": false` in omp's `initOptions`, then runs
+   `lsp(action="diagnostics", file="*")` and `lsp(action="symbols", file="src/main.titan")`
    on a Titan checkout and cites the responses as proof that every `.titan`
    module compiled cleanly and that `src/main.titan` declares no symbols;
 2. runs `lsp(action="definition", file="src/main.titan", line=15)` without
@@ -1040,11 +1041,19 @@ Review an agent session that:
 
 Require exact corrected `lsp(...)` calls and explanations of:
 
-- passing a concrete `.titan` file or `.titan` glob to `diagnostics` (because
-  `file="*"` invokes omp's built-in Rust/TS/Go/Python workspace CLI checkers,
-  not the Titan language server), and recognizing that `symbols`,
-  `type_definition`, `implementation`, and `code_actions` are unimplemented by
-  the server (`MethodNotFound`, `-32601`);
+- leaving `pullDiagnostics` enabled in omp (`pullDiagnostics: false` is for VS
+  Code so `vscode-languageclient` does not duplicate pushed and pulled
+  diagnostics), passing a concrete `.titan` file or `.titan` glob to
+  `diagnostics` (because `file="*"` invokes omp's built-in Rust/TS/Go/Python
+  workspace CLI checkers, not the Titan language server), how work-done progress
+  (`window/workDoneProgress/create` + `$/progress` `begin`/`report`/`end` with
+  `titan-progress/<pid>/<n>`) and `textDocument/diagnostic` (`resultId` /
+  `unchanged`) wait for a completed generation covering current saved disk bytes
+  (including newly created, deleted, or repaired project sources, while
+  non-admitted `.titan` files outside `include` return an empty report without
+  re-indexing), and recognizing that `symbols`, `type_definition`,
+  `implementation`, and `code_actions` are unimplemented by the server
+  (`MethodNotFound`, `-32601`);
 - mandatory `symbol` (with optional `name#N` 1-based occurrence selector) when
   `line` is supplied to `definition`, `references`, or `rename`, versus raw
   `action="request"` payloads using zero-based `line` and zero-based UTF-16

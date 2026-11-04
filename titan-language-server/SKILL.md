@@ -31,6 +31,19 @@ JSON-RPC over stdio (stdout is reserved for LSP frames; logs go to stderr).
     under the root's `include` directories (`titan-config.lua`, default
     `{ "./src" }`) resolved through `source_module_roots` (default
     `{ "./src" }`). Save files to disk before querying them.
+  - **Work-done progress and pull diagnostics (`$/progress`,
+    `textDocument/diagnostic`):** when the client advertises
+    `window.workDoneProgress` (as omp does), each worker wraps initial indexing
+    and every saved refresh in `window/workDoneProgress/create`
+    (`titan-progress/<pid>/<n>`) and `$/progress` `begin` / `report` / `end`,
+    sending `end` only after the completed generation and its diagnostics are
+    published so omp waits for indexing automatically. `textDocument/diagnostic`
+    (`diagnosticProvider`) answers from the same published rows as push, carries
+    a `resultId` (`unchanged` when `previousResultId` matches), and waits for a
+    refresh whenever the completed generation does not yet cover the file's
+    current saved bytes—including a newly created or deleted project source, or a
+    repair after a failed pass (a `.titan` file outside `include`, excluded, or
+    an inactive target variant answers an empty report without re-indexing).
   - **Buffer-based completion and private hover (`textDocument/completion`,
     `hover`):** completion (triggered by `.` and `:` or raw request) analyzes
     captured open/changed editor buffers against the committed saved-file
@@ -163,9 +176,11 @@ ambient variables:
   scope or omit `"."` when that is unwanted.
 - **`initOptions`:** `trustedRoots` (array of absolute paths; also configurable
   via `TITAN_LS_TRUSTED_ROOTS`), `insertCallSnippets`, `maxWorkers`, and
-  `idleTimeoutSeconds`. Project overrides replace `initOptions` as a whole, so
-  repeat the full object in any override. Run `lsp(action="reload", file="*")`
-  after editing `lsp.json`.
+  `idleTimeoutSeconds`. Leave `pullDiagnostics` unset/enabled in omp
+  (`pullDiagnostics: false` omits `diagnosticProvider` and is used by the VS
+  Code extension to avoid duplicate push/pull collections). Project overrides
+  replace `initOptions` as a whole, so repeat the full object in any override.
+  Run `lsp(action="reload", file="*")` after editing `lsp.json`.
 
 ## Per-slice SDK selection, trust, and reload
 
@@ -239,13 +254,15 @@ lsp(action="rename", file="/tmp/titan-NNN/slice-a/source/titan/string.titan",
 
 ## Interpreting results and `.titan-ls` hygiene
 
-- **Empty, incomplete, or timed-out results are inconclusive:** before initial
-  indexing finishes, read-only requests can return empty results or
-  `isIncomplete: true`; during a background refresh they read the preceding
-  completed generation. A `diagnostics` timeout is **not** a clean `OK` result.
-  If a module fails checking (e.g. missing `extra_ffi_include_dirs` or
-  `extra_ffi_cppflags` in `titan-config.lua`), it and its dependents publish no
-  reusable interfaces for that generation.
+- **Empty, incomplete, or timed-out results are inconclusive:** omp waits for
+  `$/progress` and pulls `textDocument/diagnostic` for current saved bytes, but
+  a `diagnostics` timeout (when indexing exceeds omp's call `timeout`) is **not**
+  a clean `OK` result. Read-only requests (`hover`, `foldingRange`, `completion`)
+  issued before initial indexing finishes can still return empty results or
+  `isIncomplete: true`, and read the preceding completed generation while a
+  background refresh runs. If a module fails checking (e.g. missing
+  `extra_ffi_include_dirs` or `extra_ffi_cppflags` in `titan-config.lua`), it
+  and its dependents publish no reusable interfaces for that generation.
 - **Per-root `.titan-ls` caches:** each worker writes `<root>/.titan-ls/index.sqlite3`
   and (by default) `<root>/.titan-ls/var/cache/titan-probes/2`. Remove your own
   worktree's `.titan-ls/` and `titan-config.local.lua` before committing if a
