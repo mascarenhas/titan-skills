@@ -500,7 +500,13 @@ these queries:
 21. call `uv.native_mutex_lock` from a source `foreign function` and manage
     `uv.mutex_t.create_native()` lifetime; and
 22. write native `titan.test` cases for `Thread:task()` pre-start cancellation
-    and `async.Receiver` coalescing.
+    and `async.Receiver` coalescing;
+23. configure `titan-language-server` in omp `lsp.json` with `trustedRoots`, set
+    a slice's `compiler_root` in `titan-config.local.lua`, and query hover,
+    definition, and `titan/workspaceStatus` on `.titan` files;
+24. change the compiler's completion hole transform and detached descriptor
+    serialization in `titan-compiler`; and
+25. configure `rust-analyzer` in omp `lsp.json` for a Rust repository.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -513,7 +519,11 @@ construction work adds reflect. Thread channel and `async.Receiver` work selects
 programmer + thread + async (adding ffi when touching `transfer.discard_message`
 or raw C callbacks, and tester when writing native tests).
 Query 21 selects **programmer + ffi**; add async only when changing the
-retirement/wake protocol and tester only when writing its native tests.
+retirement/wake protocol and tester only when writing its native tests. Query 23
+selects **programmer + language-server** (not `titan-completion`, which owns
+compiler completion internals, and not `titan-json` merely because `lsp.json` is
+JSON); query 24 selects **completion** (adding programmer only when `.titan`
+files are read or edited); query 25 is a negative control and selects `none`.
 
 ## Recorded baseline and post-change results
 
@@ -946,3 +956,172 @@ apart. It also used `--tree 'src;tests'` for `runner`, a shared default
 output tree, the qualified republication rule, and the source-spelling,
 split-path, jobserver, Windows payload, and staging distinctions. No
 skill-caused or generic Make/shell defect was found.
+
+## Language-server usage in omp (`titan-language-server`)
+
+### LS1 — multi-root omp configuration, per-slice SDK selection, trust, and reload (`titan-language-server`)
+
+Review a proposed multi-agent setup for two concurrent Titan slices
+(`/tmp/titan-400/slice-a/source` with `/tmp/titan-400/slice-a/prefix` and
+`/tmp/titan-400/slice-b/source` with `/tmp/titan-400/slice-b/prefix`) that:
+
+1. builds two separate `titan-language-server` executables (one per slice) and
+   writes an omp `lsp.json` entry with an invented `"env"` object setting
+   `"TITAN_PREFIX": "/tmp/titan-400/slice-a/prefix"` and
+   `"LUA_PATH": "/tmp/titan-400/slice-a/prefix/share/lua/5.5/?.lua;;"`;
+2. edits the tracked `titan-config.lua` in `slice-a/source` to add
+   `compiler_root = "/tmp/titan-400/slice-a/prefix"`, and writes
+   `include = { "./titan" }` alongside `compiler_root` in
+   `slice-b/source/titan-config.local.lua`;
+3. omits `initOptions.trustedRoots` (and `TITAN_LS_TRUSTED_ROOTS`) and claims
+   that when a root's `compiler_root` is untrusted, missing, or fails the ABI/API
+   check, the router automatically falls back to its default `TITAN_ROOT` SDK so
+   queries still succeed;
+4. edits a compiler Lua file in `slice-a/source/titan-compiler/`, skips
+   reinstalling into `slice-a/prefix`, and claims the running worker immediately
+   uses the edited Lua source from the worktree; and
+5. deletes `/tmp/titan-400/slice-b/source/.titan-ls` from the `slice-a` agent to
+   force a fresh index.
+
+Require the corrected `lsp.json`, `titan-config.local.lua`, and workflow
+explanations covering:
+
+- one `titan-language-server` executable serving every SDK via `compiler_root`,
+  with one isolated worker process per root and the sole linked `titan` C
+  support-table limit stated;
+- `/usr/bin/env` in `command` and `args` (because omp's `ServerConfig` has no
+  `env` field), unsetting contaminating variables (`TITAN_PREFIX`,
+  `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_SOURCE_PATH`, `LUA_PATH*`,
+  `LUA_CPATH*`), `TITAN_ROOT` plus verbatim `TITAN_LS_LUA_PATH` and
+  `TITAN_LS_LUA_CPATH` without `;;`, why `TITAN_PREFIX` in the server only
+  redirects the C probe cache, and why `"."` in `rootMarkers` makes a user-level
+  entry eligible in every `cwd`;
+- keeping tracked `titan-config.lua` clean and putting **only** `compiler_root`
+  in untracked `titan-config.local.lua` (any other key, non-string/empty value,
+  or unreadable file fails the root);
+- canonical containment in `initOptions.trustedRoots` or
+  `TITAN_LS_TRUSTED_ROOTS`, and root-scoped `RequestFailed` (`-32803`) with
+  **no** fallback to the default SDK when `compiler_root` is untrusted, missing,
+  incomplete, or ABI/API-incompatible;
+- reinstalling compiler or standard-library changes into the slice's prefix
+  before expecting the worker to see them, automatic router revalidation or
+  immediate `lsp(action="reload", file="*")`, and inspecting root state with
+  `lsp(action="request", query="titan/workspaceStatus")` (`roots` entries with
+  `root`, `origin`, `trusted`, `compilerRoot`, `state`, `failure`, `workerPid`,
+  `generation`, `titanRoot`, `probePrefix`); and
+- per-root `<root>/.titan-ls` cache ownership and the prohibition on deleting
+  another agent's `.titan-ls` directory.
+
+See the [recorded language-server evaluation results](#language-server-cartridge-evaluation-2026-11-04).
+
+### LS2 — querying through omp's `lsp` tool and interpreting results (`titan-language-server` + `titan-programmer`)
+
+Review an agent session that:
+
+1. sets `"pullDiagnostics": false` in omp's `initOptions`, then runs
+   `lsp(action="diagnostics", file="*")` and `lsp(action="symbols", file="src/main.titan")`
+   on a Titan checkout and cites the responses as proof that every `.titan`
+   module compiled cleanly and that `src/main.titan` declares no symbols;
+2. runs `lsp(action="definition", file="src/main.titan", line=15)` without
+   `symbol`, then runs `definition` on a `foreign import "stdio.h"` `ffi.printf`
+   call and on a metadata-only standard-library `string.sub` call, concluding
+   from `No definition found` that both calls are invalid;
+3. calls `lsp(action="completion", ...)` as a named tool action, or sends
+   `lsp(action="request", file="src/main.titan", query="textDocument/completion", payload=...)`
+   with 1-based byte columns copied from an earlier revision of the file before
+   recent edits;
+4. calls `lsp(action="rename", file="src/main.titan", line=10, symbol="helper", new_name="run_helper")`
+   during a read-only review under the assumption that `rename` only previews
+   edits; and
+5. queries a standalone scratch file `/tmp/scratch.titan` outside every
+   workspace folder and with no ancestor `titan-config.lua`, or treats a
+   `diagnostics` timeout / empty hover during initial indexing as a clean pass
+   and skips running `titanc` and tests.
+
+Require exact corrected `lsp(...)` calls and explanations of:
+
+- leaving `pullDiagnostics` enabled in omp (`pullDiagnostics: false` is for VS
+  Code so `vscode-languageclient` does not duplicate pushed and pulled
+  diagnostics), passing a concrete `.titan` file or `.titan` glob to
+  `diagnostics` (because `file="*"` invokes omp's built-in Rust/TS/Go/Python
+  workspace CLI checkers, not the Titan language server), how work-done progress
+  (`window/workDoneProgress/create` + `$/progress` `begin`/`report`/`end` with
+  `titan-progress/<pid>/<n>`) and `textDocument/diagnostic` (`resultId` /
+  `unchanged`) act as a saved-change freshness barrier (scan-only when nothing
+  is dirty, revalidating newly created, deleted, edited, or dependency/folder
+  contributor files on disk while returning an empty report for `.titan` files
+  the project does not contain), and recognizing that `symbols`, `type_definition`,
+  `implementation`, and `code_actions` are unimplemented by the server
+  (`MethodNotFound`, `-32601`);
+- mandatory `symbol` (with optional `name#N` 1-based occurrence selector) when
+  `line` is supplied to `definition`, `references`, or `rename`, versus raw
+  `action="request"` payloads using zero-based `line` and zero-based UTF-16
+  `character` computed from the current saved text;
+- saved-file authority for `definition`, `references`, `rename`,
+  `textDocument/foldingRange`, and `diagnostics` versus buffer-captured
+  `textDocument/completion` and post-completion private hover;
+- why C FFI declarations (`foreign import`, `ffi.*`, `foreign` types) and
+  external or metadata-only standard-library modules have no definition target
+  even when hover and completion work;
+- why empty/incomplete results and timeouts are inconclusive, how unowned files
+  outside every workspace folder and without a `titan-config.lua` ancestor fail
+  with `RequestFailed` (`-32803`), why `apply=false` is mandatory on `rename` /
+  `rename_file` to prevent disk mutation, and why compiler and test runs remain
+  the verification proof.
+
+
+### LS3 — live multi-root omp session across two slices (`titan-language-server` + `titan-programmer`)
+
+Run in a live environment with `cwd` `/tmp/vst/eval/work/slice-a` and tools
+`read`, `write`, `lsp`, and `glob`. The project config
+`/tmp/vst/eval/work/slice-a/.omp/lsp.json` is pre-configured for the session
+server with `trustedRoots: ["/tmp/vst/eval/work"]` and must not be edited.
+
+Ask the fresh evaluator to:
+
+1. configure sibling worktree `/tmp/vst/eval/work/slice-b` to use the installed
+   SDK at `/tmp/vst/sdk-b/prefix` without modifying any tracked file, and prove
+   which SDK each root (`slice-a` and `slice-b`) is actually using through the
+   live language server;
+2. report each slice's diagnostics for `src/main.titan` with exact
+   `file:line:col`;
+3. report the signature of `mathutil.double` in each slice;
+4. explain what an empty `hover` or `definition` result on a symbol inside a
+   module with a type error means, and what establishes verification proof; and
+5. leave both worktrees in the state required by the cartridge and list every
+   file it created or modified.
+
+Require:
+
+- creating only untracked `/tmp/vst/eval/work/slice-b/titan-config.local.lua`
+  assigning `compiler_root = "/tmp/vst/sdk-b/prefix"` while leaving tracked
+  `titan-config.lua` and `.omp/lsp.json` untouched;
+- querying `titan/workspaceStatus` through `lsp(action="request", query="titan/workspaceStatus", ...)`
+  (after opening/querying a file in `slice-b` or passing `file=` so `slice-b` is
+  registered and active) and citing each root's `compilerRoot` and worker-reported
+  `titanRoot`;
+- reporting the exact diagnostics for both `slice-a/src/main.titan` and
+  `slice-b/src/main.titan` and the distinct `mathutil.double` signatures from the
+  two slices;
+- stating that a module that fails typechecking publishes no semantic facts for
+  that generation (so empty `hover`/`definition` on its symbols is expected
+  while `diagnostics` reports the error, whereas clean modules still answer
+  both, and `titanc`/tests remain the proof of correctness); and
+- cleaning up untracked `.titan-ls/` and `titan-config.local.lua` artifacts if
+  leaving the worktrees clean, with an accurate list of touched paths.
+
+### Language-server cartridge evaluation (2026-11-04)
+
+Fresh evaluators were launched in separate processes with `omp -p --model opencode-go/deepseek-v4.1-flash --thinking high --no-skills --no-context-files --no-rules --no-session --approval-mode yolo`:
+
+- **Paper cases (`LS1`, `LS2`):** `--cwd /tmp/vst/eval/paper --tools read`, reading only `/tmp/vst/skills/source/titan-language-server/SKILL.md` (`LS1` and `LS2`) and `/tmp/vst/skills/source/titan-programmer/SKILL.md` (`LS2`) at `64cefdd`.
+- **Live cases (`LS3`, two independent runs):** `--cwd /tmp/vst/eval/work/slice-a --tools read,write,lsp,glob` against the `vscode-titan` `6ca55ed` server binary, reading `/tmp/vst/skills/source/titan-language-server/SKILL.md` and `/tmp/vst/skills/source/titan-programmer/SKILL.md` at `e5d9b61`, with `/tmp/vst/eval/work/slice-b/titan-config.local.lua` and both `.titan-ls/` directories removed before each run.
+
+All four evaluators disclosed their harness-injected context: the omp role/runtime/tool-policy blocks, workstation metadata, `<system-reminder>` with date and `cwd`, and Mnemopi `<memories>` entries; no `skill://` catalog, `AGENTS.md`, or peer roster was injected.
+
+| Case | Result and receipts | Disposition |
+| --- | --- | --- |
+| `LS1` | 6/6. Rejected per-slice server binaries and `"env"`; wrote `/usr/bin/env` with `-u` clearing `TITAN_PREFIX`, `TITAN_PATH*`, `TITAN_SOURCE_PATH`, `LUA_PATH*`, `LUA_CPATH*`; set `TITAN_ROOT` and verbatim `TITAN_LS_LUA_PATH`/`TITAN_LS_LUA_CPATH` without `;;`; kept tracked `titan-config.lua` clean and put only `compiler_root` in `titan-config.local.lua`; configured `initOptions.trustedRoots` with the no-fallback `-32803` and `configuration`-diagnostic rules; required reinstalling compiler Lua edits into `<slice>/prefix` and listed all 10 `titan/workspaceStatus` fields; forbade deleting a sibling's `.titan-ls/`. Marked `TITAN_LS_TRUSTED_ROOTS` separator `UNKNOWN`. | Pass. Added a 5-word note (`using the OS path-list separator`) in `3773185` for `TITAN_LS_TRUSTED_ROOTS`. |
+| `LS2` | 6/6. Kept `pullDiagnostics` enabled in omp; replaced `file="*"` with concrete `.titan` files/globs; identified `symbols`, `type_definition`, `implementation`, and `code_actions` as unimplemented (`MethodNotFound` `-32601`); supplied mandatory `symbol` on `definition` and zero-based UTF-16 positions on raw `textDocument/completion`; distinguished saved-file features from buffer-based completion/private hover; explained why FFI and metadata-only stdlib modules have hover without definition targets; explained that modules failing typechecking publish no semantic facts while `diagnostics` reports the error; required `apply=false` on `rename` and `titanc`/tests as verification proof. | Pass. |
+| `LS3` (run 1) | 5/5. Created only untracked `/tmp/vst/eval/work/slice-b/titan-config.local.lua` with `compiler_root = "/tmp/vst/sdk-b/prefix"`; verified via `titan/workspaceStatus` that `slice-a` used `titanRoot = "/tmp/vst/sdk/prefix"` (`compilerRoot = null`, `trusted = true`, `state = "ready"`) and `slice-b` used `compilerRoot = "/tmp/vst/sdk-b/prefix"`, `titanRoot = "/tmp/vst/sdk-b/prefix"` (`trusted = true`, `state = "ready"`, distinct `workerPid` and `probePrefix`); reported exact diagnostics (`slice-a/src/main.titan:6:26` integer vs string, `slice-b/src/main.titan:5:26` float vs string) and `mathutil.double` signatures (`double(n: integer): integer` "Doubles an integer." vs `double(x: float): float` "Halves a float."); verified empty hover/definition on failed `main.titan` vs full hover/definition on valid `mathutil.titan`; left tracked files untouched and listed all touched paths. | Pass. |
+| `LS3` (run 2) | 5/5. Created only untracked `slice-b/titan-config.local.lua` with `compiler_root = "/tmp/vst/sdk-b/prefix"`; proved per-root SDK isolation through `titan/workspaceStatus` (`file=` in `slice-b`) plus an A/B control clearing the override; reported exact `main.titan` diagnostics (`6:26` and `5:26`) and `mathutil.double` signatures/docs in both slices; verified and explained empty hover/definition in failed `main.titan` vs valid `mathutil.titan`; left tracked files and `.omp/lsp.json` untouched and disclosed all touched files. | Pass. |

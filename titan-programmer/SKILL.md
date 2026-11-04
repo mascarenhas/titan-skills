@@ -46,6 +46,12 @@ work crosses one of these boundaries:
   descriptors, and dynamic record/interface field access with GC safety.
 - **`titan-json`** — JSON encoding/decoding, explicit schema selection, null
   preservation, record/union mapping, diagnostics, and JSON-library maintenance.
+- **[`titan-language-server`](../titan-language-server/SKILL.md)** — configuring
+  and querying `titan-language-server` through omp's `lsp` tool, multi-root
+  routing, per-slice `compiler_root` / `titan-config.local.lua` SDK selection,
+  and `trustedRoots` policy (load **[`titan-completion`](../titan-completion/SKILL.md)**
+  instead when changing compiler completion contexts or language-server
+  completion internals).
 
 The core `fs`, `io`, and `os` APIs below have synchronous-looking Titan calls
 that may suspend. Application-level use is covered here; load **`titan-async`**
