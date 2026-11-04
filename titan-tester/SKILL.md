@@ -1595,7 +1595,7 @@ inspects generated C instead of child behavior; deletes broad artifacts.
 
 **Prompt:**
 
-> An agent edits `titan-compiler/checker/...` and `titan/fs.titan`, then runs a
+> An agent edits `titan-compiler/checker/...` and `titan/fs.native.titan`, then runs a
 > direct Busted spec and `make titan-stdlib-test-run`; both pass. Explain why
 > that may test stale code and give a safe focused-to-broad sequence.
 

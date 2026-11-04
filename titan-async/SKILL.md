@@ -61,7 +61,7 @@ multi-shot source needs exactly the buffering/waiter state promised by its
 public semantics.
 
 Evidence: `doc/language/async-io.md`,
-`doc/implementation/libuv-runtime.md`, `titan/async.titan`, and issue #82.
+`doc/implementation/libuv-runtime.md`, `titan/async.native.titan`, and issue #82.
 
 ## Choose the public layer
 
@@ -401,7 +401,7 @@ occurs only when a typed view projects that payload. Identity comparison,
 `status():as_string()`, and tag-only status inspection do not project it.
 `async.version()` returns libuv's version string.
 
-Evidence: `titan/async.titan`, `titan/async.titan`, and
+Evidence: `titan/async.native.titan`, `titan/async.native.titan`, and
 `doc/language/async-io.md`.
 
 `run_with_cleanup` enters its wrapper even after cancellation while still
@@ -803,7 +803,7 @@ while the first is suspended. Producer cleanup may use `await_cleanup`; its
 supplied drain callback transfers unread resource-bearing events for disposal
 before domain handles are closed. One subscription need not own one handle.
 
-Evidence: `titan/async.titan`, `doc/language/async-io.md`, and the native async
+Evidence: `titan/async.native.titan`, `doc/language/async-io.md`, and the native async
 subscription/await tests. For domain admission checks, preserve established
 error and cancellation precedence before querying a shared reservation.
 
@@ -951,7 +951,7 @@ The exact result/error owners follow one positional pattern:
 Only `join` has a unary form. There is intentionally no unary `any`, `race`,
 or `all`, and no variadic or Array-taking form.
 
-Evidence: `titan/async.titan` and `doc/language/async-io.md`.
+Evidence: `titan/async.native.titan` and `doc/language/async-io.md`.
 
 ### Exact channel surface
 
@@ -982,7 +982,7 @@ standalone OS worker threads (`thread.spawn*`, `Thread`), and bounded thread
 groups (`thread.group`, `Group`), load the peer
 [`titan-thread` skill](../titan-thread/SKILL.md).
 
-Evidence: `titan/async.titan` and `doc/language/async-io.md`.
+Evidence: `titan/async.native.titan` and `doc/language/async-io.md`.
 
 ## Start and drive Tasks correctly
 
@@ -1371,7 +1371,7 @@ This is **not** an invitation to fence native one-shot operations: accepted
 native operations settle their exact public await capability.
 
 Evidence: `doc/language/async-io.md`,
-`doc/implementation/libuv-runtime.md`, `titan/async.titan`, and
+`doc/implementation/libuv-runtime.md`, `titan/async.native.titan`, and
 `spec/stdlib/titan/uv/task_tests/continuations_test.titan`.
 
 ## Terminal listeners are synchronous observation, not Tasks
@@ -1563,7 +1563,7 @@ Ticker/subscription.
 `ResumeToken` remains the explicit `suspend`/`Task:resume(token)` capability;
 native one-shot adapters settle their own await capabilities.
 
-Evidence: `titan/timer.titan`,
+Evidence: `titan/timer.native.titan`,
 `doc/language/standard-library-timer.md`, and
 `spec/stdlib/titan/timer/tests.titan`.
 
@@ -1614,7 +1614,7 @@ delimiter raises. Reader close discards its own saved suffix and returns nil for
 new reads. Writer close preserves a suffix already transferred to the Reader,
 but the next underlying channel receive observes close.
 
-Evidence: `doc/language/async-io.md`, `titan/async.titan`, and
+Evidence: `doc/language/async-io.md`, `titan/async.native.titan`, and
 `spec/stdlib/titan/async/tests/channel_test.titan`.
 
 ## Public UV adapters and native binding ownership
@@ -1713,7 +1713,7 @@ wait cancellation. Libuv orders accepted writes; do not add another write queue.
 Subscription buffers are justified by promised event semantics, not scheduling.
 
 Evidence: `doc/implementation/libuv-extension-guide.md`,
-`doc/implementation/libuv-runtime.md`, `titan/uv/`, `titan/async.titan`, and
+`doc/implementation/libuv-runtime.md`, `titan/uv/`, `titan/async.native.titan`, and
 the consumer implementations in `fs`, `net`, `os`, and `timer`.
 
 ## Raw Titan coroutines are a separate low-level API
@@ -2217,9 +2217,9 @@ handles.
   `doc/language/async-io.md` and `doc/language/standard-library-transfer.md`.
 - Public timer contract: `doc/language/standard-library-timer.md`.
 - Public low-level coroutine contract: `doc/language/coroutines.md`.
-- Public sources/signatures: `titan/async.titan`, `titan/transfer.titan`,
-  `titan/timer.titan`, and `titan/coroutine.titan`.
-- Runtime/Task and generic operation sources: `titan/async.titan`.
+- Public sources/signatures: `titan/async.native.titan`, `titan/transfer.titan`,
+  `titan/timer.native.titan`, and `titan/coroutine.titan`.
+- Runtime/Task and generic operation sources: `titan/async.native.titan`.
 - Public callback and external-wake binding: `titan/uv/`
   (`titan/uv/external_wake.titan`, `titan/uv/sync.titan`) and
   `doc/language/standard-library-uv.md`.
@@ -2227,7 +2227,7 @@ handles.
   and `doc/implementation/transfer-library.md`.
 - Native extension recipes: `doc/implementation/libuv-extension-guide.md`.
 - Coroutine mechanics: `doc/implementation/coroutines.md`.
-- Watcher ownership example: `titan/fs.titan` and
+- Watcher ownership example: `titan/fs.native.titan` and
   `doc/implementation/filesystem-library.md`.
 - Native behavior evidence: `spec/stdlib/titan/async/`,
   `spec/stdlib/titan/timer/`, `spec/stdlib/titan/uv/task_tests/`,
