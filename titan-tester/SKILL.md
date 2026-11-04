@@ -652,7 +652,10 @@ The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names the owners that
 `make titan-stdlib-browser-test` builds into one `--target browser --test`
 image and runs under Node and headless Chromium (emsdk, Node 24, Chromium, the
 browser SDK, and the installed native provider required). They are native
-roots too; the browser suite adds no case of its own. See the [browser test
+roots too, so both suites share these owners and their portable cases; a
+`.browser.titan` contributor (such as `coroutine/tests/close.browser.titan`)
+adds browser-only cases and a `.native.titan` contributor native-only ones. See
+the [browser test
 owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browser-suite).
 
 ### Where to put a new standard-library case

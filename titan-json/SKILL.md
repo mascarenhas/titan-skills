@@ -260,7 +260,9 @@ engine/runtime errors as bad JSON or a JSON limit failure. Applications own
 more matching-stack space than single-child chains at the same depth.
 On `--target browser`, `json.encode` applies at most 103 for `max_depth`
 (`TITAN_JSON_WRITER_DEPTH_LIMIT`): a larger value is accepted and a deeper
-value raises `limit_exceeded`, so the engine stack never overflows first.
+value raises `limit_exceeded`. The cap bounds the writer's own traversal to
+half the depth measured to exhaust the engine stack; it does not count stack
+the caller already uses, so deep caller recursion can still overflow first.
 Decoding limits are the same on every target. Write depth tests above 103
 against the target value, not a native constant; see the [browser nesting
 limits](../../../doc/implementation/browser-target.md#nesting-limits).
