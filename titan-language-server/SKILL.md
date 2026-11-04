@@ -238,6 +238,7 @@ For a slice worktree `/tmp/titan-NNN/<slice>/source` with installed prefix
   (still `state: "ready"` with its warm worker), whereas passing `file=` for a
   `.titan` file in that checkout causes omp to re-add (or initially register) the
   folder first (`origin: "folder"`).
+
 ```text
 # Inspect live roots, trust, compilerRoot, titanRoot, probePrefix, workerPid, and failure messages
 lsp(action="request", query="titan/workspaceStatus",
