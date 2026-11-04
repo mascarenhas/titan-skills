@@ -1070,5 +1070,45 @@ Require exact corrected `lsp(...)` calls and explanations of:
   `rename_file` to prevent disk mutation, and why compiler and test runs remain
   the verification proof.
 
+
+### LS3 — live multi-root omp session across two slices (`titan-language-server` + `titan-programmer`)
+
+Run in a live environment with `cwd` `/tmp/vst/eval/work/slice-a` and tools
+`read`, `write`, `lsp`, and `glob`. The project config
+`/tmp/vst/eval/work/slice-a/.omp/lsp.json` is pre-configured for the session
+server with `trustedRoots: ["/tmp/vst/eval/work"]` and must not be edited.
+
+Ask the fresh evaluator to:
+
+1. configure sibling worktree `/tmp/vst/eval/work/slice-b` to use the installed
+   SDK at `/tmp/vst/sdk-b/prefix` without modifying any tracked file, and prove
+   which SDK each root (`slice-a` and `slice-b`) is actually using through the
+   live language server;
+2. report each slice's diagnostics for `src/main.titan` with exact
+   `file:line:col`;
+3. report the signature of `mathutil.double` in each slice;
+4. explain what an empty `hover` or `definition` result on a symbol inside a
+   module with a type error means, and what establishes verification proof; and
+5. leave both worktrees in the state required by the cartridge and list every
+   file it created or modified.
+
+Require:
+
+- creating only untracked `/tmp/vst/eval/work/slice-b/titan-config.local.lua`
+  assigning `compiler_root = "/tmp/vst/sdk-b/prefix"` while leaving tracked
+  `titan-config.lua` and `.omp/lsp.json` untouched;
+- querying `titan/workspaceStatus` through `lsp(action="request", query="titan/workspaceStatus", ...)`
+  (after opening/querying a file in `slice-b` or passing `file=` so `slice-b` is
+  registered and active) and citing each root's `compilerRoot` and worker-reported
+  `titanRoot`;
+- reporting the exact diagnostics for both `slice-a/src/main.titan` and
+  `slice-b/src/main.titan` and the distinct `mathutil.double` signatures from the
+  two slices;
+- stating that a module that fails typechecking publishes no semantic facts for
+  that generation (so empty `hover`/`definition` on its symbols is expected
+  while `diagnostics` reports the error, whereas clean modules still answer
+  both, and `titanc`/tests remain the proof of correctness); and
+- cleaning up untracked `.titan-ls/` and `titan-config.local.lua` artifacts if
+  leaving the worktrees clean, with an accurate list of touched paths.
 This case is intentionally unscored until run in a fresh cartridge-only context
 under the evaluation rules above.

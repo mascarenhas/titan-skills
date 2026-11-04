@@ -80,11 +80,12 @@ Titan root:
 - **Workspace folders and lazy discovery:** initial folders come from
   `initialize.workspaceFolders` (else `rootUri`, `rootPath`, or launch `cwd`),
   canonicalized with `realpath`. When you query a `.titan` file in a sibling git
-  checkout or worktree outside omp's launch `cwd`, omp sends
-  `workspace/didChangeWorkspaceFolders` before `didOpen` to add that checkout.
-  Each document routes by canonical path to the **most specific** known root
-  containing it (and `publishDiagnostics` is forwarded only from that owning
-  root). A document outside every known folder walks upward for the nearest
+  checkout or worktree outside omp's launch `cwd`, omp finds its nearest `.git`
+  ancestor and sends `workspace/didChangeWorkspaceFolders` before `didOpen` to
+  add that checkout as a workspace folder. Each document routes by canonical
+  path to the **most specific** known root containing it (and `publishDiagnostics`
+  is forwarded only from that owning root). A document outside every known
+  folder walks upward for the nearest
   ancestor `titan-config.lua` and registers it as a discovered root; if none
   exists, the file is unowned and requests fail with `RequestFailed` (`-32803`)
   naming the file and `titan-config.lua`.
@@ -226,12 +227,15 @@ For a slice worktree `/tmp/titan-NNN/<slice>/source` with installed prefix
   `compilerRoot` (string | `null`), `state` (`"inactive"` | `"starting"` |
   `"ready"` | `"failed"` | `"evicted"`), optional `failure`, `workerPid`
   (integer | `null`), `generation`, and the worker's self-reported `titanRoot`
-  and `probePrefix` (string | `null`).
+  and `probePrefix` (string | `null`). Pass a concrete `.titan` `file` when
+  calling `titan/workspaceStatus` through omp (so omp reconciles and registers
+  that file's checkout before querying); a file-less call also works for
+  already-registered roots.
 
 ```text
-# Inspect live roots, trust, compilerRoot, workerPid, and failure messages
-lsp(action="request", query="titan/workspaceStatus")
-
+# Inspect live roots, trust, compilerRoot, titanRoot, probePrefix, workerPid, and failure messages
+lsp(action="request", query="titan/workspaceStatus",
+    file="/tmp/titan-NNN/slice-a/source/titan/string.titan")
 # Saved-file diagnostics (always pass a concrete .titan file or .titan glob;
 # file="*" runs omp's Rust/TS/Go/Python CLI checkers, not Titan)
 lsp(action="diagnostics", file="/tmp/titan-NNN/slice-a/source/titan/string.titan", timeout=60)
@@ -254,15 +258,21 @@ lsp(action="rename", file="/tmp/titan-NNN/slice-a/source/titan/string.titan",
 
 ## Interpreting results and `.titan-ls` hygiene
 
+- **Modules that fail checking publish no semantic facts (`hover`, `definition`,
+  `references`):** when a module fails checking (for example because of a syntax
+  or type error inside that file, or missing `extra_ffi_include_dirs` /
+  `extra_ffi_cppflags` in `titan-config.lua`), `diagnostics` reports the
+  compiler error, while `hover`, `definition`, and `references` for symbols in
+  that failed module (and its dependents) return nothing (`No hover information`
+  / `No definition found`) for that generation; independently valid modules in
+  the same project still answer both.
 - **Empty, incomplete, or timed-out results are inconclusive:** omp waits for
   `$/progress` and pulls `textDocument/diagnostic` for current saved bytes, but
   a `diagnostics` timeout (when indexing exceeds omp's call `timeout`) is **not**
   a clean `OK` result. Read-only requests (`hover`, `foldingRange`, `completion`)
   issued before initial indexing finishes can still return empty results or
   `isIncomplete: true`, and read the preceding completed generation while a
-  background refresh runs. If a module fails checking (e.g. missing
-  `extra_ffi_include_dirs` or `extra_ffi_cppflags` in `titan-config.lua`), it
-  and its dependents publish no reusable interfaces for that generation.
+  background refresh runs.
 - **Per-root `.titan-ls` caches:** each worker writes `<root>/.titan-ls/index.sqlite3`
   and (by default) `<root>/.titan-ls/var/cache/titan-probes/2`. Remove your own
   worktree's `.titan-ls/` and `titan-config.local.lua` before committing if a
