@@ -783,6 +783,39 @@ All seven evaluators disclosed harness-injected context:
 T1 through TH1 read only their listed cartridge paths. As in #314, the
 contexts were therefore not hermetic.
 
+### Issues #349 and #350 evaluation (2026-11-05)
+
+The skills at `issue-349-skills` @ `690a822` (diff base `main` @ `9cd94a7`)
+replace the compile-time-constant module-initializer rule with the dependency
+and call-exposure rule (`titan-programmer`, `titan-ffi`, one `titan-pegs`
+sentence), add the browser byte bounds (`titan-programmer`), and retire the
+browser test image partition and budget (`titan-tester`). No frontmatter
+description changed, so the routing set was not rerun. New cases `I1`, `I2`
+and `B1` cover the edited text; `I1` items 1 and 5 cover the changed
+`titan-pegs` sentence, so `G1` (whose scoring text only drops its
+nonconstant-initializer rejection) was not rerun.
+
+Each answer came from a fresh process,
+`omp -p --model openai-codex/gpt-6.1-sol --thinking high --no-skills
+--no-context-files --no-rules --no-session --no-extensions --tools read,write`,
+given only a prompt file naming its cartridge and fixture paths. The scorer
+compiled with the titan `issue-349-initializers` toolchain at `5dee32cc`
+(explicit `--tree` and `--output` in scratch trees outside the source).
+**I1, I2 and B1 passed.**
+
+| Case | Result and receipts | Disposition |
+| --- | --- | --- |
+| I1 | All sixteen initializers classified as the compiler decides: each was compiled alone, ten accepted and six rejected with the expected own-reference or anonymous-function diagnostic, and the repaired module (rejected work moved into the root initializer after `seed = 41`) compiled; 17/17. The answer stated the function-value versus bound-method asymmetry, the latent bare-nominal exposure, the own-Interface-to-imported-implementation case, the load-time `Holder.new` rejection before consumer initializers, the observed `Scalar.new` override, and the `peg.compile` callback condition. | Pass. |
+| I2 | `ffi_init` compiled against the case header and, loaded by Lua, returned the predicted `total() == 83`. The four extra forms were all rejected as predicted; the source `foreign function` value also reports the general "cannot be used as a first-class value" error, which the answer did not mention beside the correct own-function reason. | Pass. |
+| B1 | Both bounds, what each counts, inclusive equality, source-attributed versus unavailable diagnostics, rejection before publication, the non-guarantee and the six distinct quantities, one root list, one image and its artifacts, no partition or budget knob, the filter rules, and the stdout-only audit were all correct; the three proposals were rejected. It marked the substituted `<engine>` tokens and the literal fallback wording as unknown, which the cartridges leave implicit. | Pass. No Titan code to compile. |
+
+All three evaluators disclosed harness-injected context despite the `--no-*`
+flags: system and developer blocks, tool schemas including memory and
+managed-skill tools (unused), workstation metadata, the date and working
+directory, and eight recalled memories unrelated to these rules. No skill
+catalog or agent roster was injected. The contexts were therefore not
+hermetic, although each answer reports reading only its listed files.
+
 ## Mechanical gates
 
 For every update:
