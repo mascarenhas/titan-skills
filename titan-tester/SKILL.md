@@ -649,9 +649,14 @@ not a module build graph. `test.tests` remains the explicit first root, and
 `--exe` preserves `out/tests/test/tests` as the POSIX aggregate executable.
 
 The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names the owners that
-`make titan-stdlib-browser-test` builds into one `--target browser --test`
-image and runs under Node and headless Chromium (emsdk, Node 24, Chromium, the
-browser SDK, and the installed native provider required). They are native
+`make titan-stdlib-browser-test` runs under Node and headless Chromium (emsdk,
+Node 24, Chromium, the browser SDK, and the installed native provider
+required). `TITAN_STDLIB_BROWSER_TEST_IMAGES` and
+`TITAN_STDLIB_BROWSER_TEST_IMAGE_ROOTS_<image>` partition them into
+`--target browser --test` images, each capped at
+`TITAN_STDLIB_BROWSER_TEST_IMAGE_MAX_BYTES`; a new browser owner must join
+exactly one image, and an image over the budget fails until its owners are
+repartitioned in the manifest. They are native
 roots too, so both suites share these owners and their portable cases; a
 `.browser.titan` contributor (such as `coroutine/tests/close.browser.titan`)
 adds browser-only cases and a `.native.titan` contributor native-only ones. See
@@ -918,8 +923,8 @@ make rock-test \
 # Reinstall the current rock/provider, then run the complete mixed suite.
 make test
 
-# Build the browser-portable owners into one browser image, check its
-# dependency closure and member inventory, and run it under Node and Chromium.
+# Build the browser-portable owners into the manifest's size-bounded browser
+# images, check closure and member inventory, and run them under Node and Chromium.
 make titan-stdlib-browser-test
 ```
 
