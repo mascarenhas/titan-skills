@@ -838,6 +838,35 @@ directory, and eight recalled memories unrelated to these rules. No skill
 catalog or agent roster was injected. The contexts were therefore not
 hermetic, although each answer reports reading only its listed files.
 
+### Issue #349 implicit-dispatch extension (2026-11-05)
+
+A fresh GPT 6.1 Sol evaluator read only the programmer and FFI cartridges at
+`c8ab8492` and the focused thirty-row exercise. It did not inspect compiler
+source, the implementation handoff, expected answers or earlier evaluations.
+**The extended I1 case passed.** All thirty source classifications matched
+independent compilation: thirteen accepted and seventeen rejected with the
+expected initializer-exposure or unsupported-operator diagnostics. The complete
+repaired consumer also compiled, for **31/31** matching outcomes.
+
+The scorer used the `issue-349-initializers` toolchain at `929721be`
+(production code unchanged since its installed `51768381`), with explicit
+`--tree` and `--output` in a scratch tree. This was compile-only validation;
+it did not execute the consumers' initializers. The answer correctly
+distinguished Map-key/equality/length/spread exposure, non-dispatching fresh
+origins and raw value equality, delivered versus discarded constructor
+arguments, record-specific `literal` requirements, and compatibility rejection
+before callback execution. The existing native replacement regressions,
+separately exercised by the owning compiler gate, establish the stored-callback
+rejection and nested scalar replacement from 41 to 42.
+
+The evaluator disclosed injected profiles, tool schemas, skill/agent catalogs,
+machine metadata, unrelated historical memories and a peer roster. This was
+therefore **not hermetic**, although its answer reports using only the supplied
+cartridges for language guidance. Its answer, exact sources and command/status
+receipt are retained as `eval/349-metamethod-answer.md`,
+`eval/349-metamethod-compile-results.json` and
+`logs/349-metamethod-eval-compile.log` in the issue's validation evidence.
+
 ## Mechanical gates
 
 For every update:
