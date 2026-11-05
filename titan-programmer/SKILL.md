@@ -1956,19 +1956,20 @@ cache may rehash first.
 
 With an explicit `-o`/`--output` tree, moving the built output tree or an
 identical SDK prefix also preserves reuse when all other inputs and generated-C
-semantics are unchanged. Certification uses root-relative identities for the
-compiler-owned SDK, output and compile roots and SDK-owned include directories;
-it does not make the user source tree relocatable by definition. Reused objects
-keep their original embedded debug and diagnostic paths. The first move may
-preprocess generated C to verify its semantics before accepting the objects;
-later receipt hits avoid repeating that work. Changed user-source spelling,
-external-input bindings, symlink targets or path-sensitive macro values such as
-`__FILE__` and `__BASE_FILE__` still cause misses. Legacy source-adjacent builds
-without `-o` retain conservative misses when moved.
+semantics are unchanged. Certification identifies the SDK prefix, the output
+root, and the compiler's own source checkout (when it runs from source) by
+root-relative paths, including their path operands in compile commands and the
+SDK include directories; the user source tree is not a compiler-owned root.
+Reused objects keep their original embedded debug and diagnostic paths. The
+first build after a move may preprocess generated C to verify its semantics
+before accepting the objects; later receipt hits avoid repeating that work.
+Changed user-source spelling, external-input bindings, symlink targets, or
+path-sensitive macro values such as `__FILE__` and `__BASE_FILE__` still cause
+misses. Source-adjacent builds without `-o` miss conservatively when moved.
 
-Opaque native mechanisms (`@file`,
-`-fplugin`, `-specs`, `-wrapper`, `-Xclang`, `-Xlinker`) or an uncertified
-toolchain keep the affected native nodes or final link uncacheable either way.
+Opaque native mechanisms (`@file`, `-fplugin`, `-specs`, `-wrapper`, `-Xclang`,
+`-Xlinker`) or an uncertified toolchain keep the affected native nodes or final
+link uncacheable either way.
 
 Keep the source-path spelling stable: `--tree src` and an absolute spelling
 can produce different code locations and legitimately miss. Equivalent
