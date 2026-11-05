@@ -1952,8 +1952,21 @@ build with valid outputs and certificates, when the SDK's headers and providers
 still resolve to the same paths and all other inputs, options, and the native
 toolchain are unchanged: objects, native C nodes, and final links are reused,
 with no compilation or linking despite new timestamps and inodes. The digest
-cache may rehash first; an SDK moved to a different physical path or a
-retargeted symlink can legitimately miss. Opaque native mechanisms (`@file`,
+cache may rehash first.
+
+With an explicit `-o`/`--output` tree, moving the built output tree or an
+identical SDK prefix also preserves reuse when all other inputs and generated-C
+semantics are unchanged. Certification uses root-relative identities for the
+compiler-owned SDK, output and compile roots and SDK-owned include directories;
+it does not make the user source tree relocatable by definition. Reused objects
+keep their original embedded debug and diagnostic paths. The first move may
+preprocess generated C to verify its semantics before accepting the objects;
+later receipt hits avoid repeating that work. Changed user-source spelling,
+external-input bindings, symlink targets or path-sensitive macro values such as
+`__FILE__` and `__BASE_FILE__` still cause misses. Legacy source-adjacent builds
+without `-o` retain conservative misses when moved.
+
+Opaque native mechanisms (`@file`,
 `-fplugin`, `-specs`, `-wrapper`, `-Xclang`, `-Xlinker`) or an uncertified
 toolchain keep the affected native nodes or final link uncacheable either way.
 
