@@ -288,8 +288,9 @@ captures, and reports a labeled failure with line/column. Require the anchored
 `Pattern:match` versus module-level `peg.match` distinction, ordinary failure
 versus `throw("fail")` versus labeled recovery, dense grammar collections,
 capture callback timing, compile-local `Definition` values, and equivalent
-combinator spelling. Reject invented separators and nonconstant module
-initializers.
+combinator spelling. Reject invented separators. A module-variable initializer
+may call `peg.compile`; reject one that reads own-module state or passes a
+lambda or another own callable to the call.
 
 ### J1 — JSON data and nominal mapping (`titan-programmer` + `titan-json`)
 
@@ -470,6 +471,69 @@ nonexportable distinction and the explicit unsafe boundary. Check all four
 external-wake wait paths (send, receive, normal join, proxy cleanup join) and
 the prearmed proxy barrier, and record only actual integrator-run
 native/platform/benchmark evidence.
+
+### I1 — module-variable initializer dependencies (`titan-programmer` + `titan-pegs`)
+
+Give a fresh agent one module with an earlier `local seed: integer?`, an own
+record `Box` with method `read`, an own Interface `Reader`, an imported module
+`dep` (a generated record `Holder` with one callback field, a custom-`new`
+record `Scalar`, a function `take(value)`, and a record implementing `Reader`),
+and these module-variable initializers to classify and repair:
+
+1. `ffi.abs(-3)`, `dep.take(dep.Scalar(41))`, and `peg.compile("'a'*")`;
+2. `seed + 1` and `local f = helper` for an own function `helper`;
+3. `{function(): integer return seed end}`, the same lambda in a written
+   cast and behind `true and`, and `Box(1):read`;
+4. `local r: Reader = Box(2)` and `(dep.make() as Reader):read()`;
+5. `Box(1):read()`, `dep.take(function(): integer return 1 end)`,
+   `dep.take({Box(1):read})`, and `dep.take(Box(3))`; and
+6. `dep.Holder(function(): integer return seed end)`, then a provider release
+   whose `Holder.new` calls its callback.
+
+Require: 1 accepted (loading-time effects, imported custom `new` observed);
+2 rejected as own data, including the stored function value; 3 accepted as
+storage, with the asymmetry between the rejected function value and the
+accepted bound method; 4 accepted, because an own Interface dispatching to an
+imported implementation is not an own implementation; 5 rejected as call
+exposure (callee, argument, nested argument, and a bare own method-bearing
+record reachable through a witnessed Interface conversion), without promising
+one diagnostic text; and 6 accepted with the generated default, while the
+replacement is rejected as incompatible when the consumer loads, before its
+initializers run. The repair must move own-state work into the final root
+initializer without granting called functions const-write authority. Reject
+any "constant initializer" or "whole-initializer lambda only" rule.
+
+### I2 — foreign values in module initializers (`titan-programmer` + `titan-ffi`)
+
+Supply a header with an object-like macro, an enum constant, a static `int`
+variable, a static struct with an `int` field, a static `int[2]`, an inline
+counting function, and a static function-pointer variable. Ask for one complete
+module whose mutable and const module variables read each of them, call the
+function directly and through the pointer, store the pointer itself, and
+allocate `foreign int.new_array(count)` with the count from the C function.
+Then ask which of `ffi.abs(seed)` with an own `seed`, a module-local source
+`foreign function` read as a value, and a C call whose argument is an Array
+holding a lambda are rejected. Require loading-time declaration-order
+execution, the C environment's availability before later directives, the
+pointer-storage `TValue` rule, rejection of all three listed forms for the
+right reason, and the unchanged unsafe-boundary contract. The module must
+compile with the current toolchain against the supplied header.
+
+### B1 — browser byte bounds and the stdlib browser suite (`titan-programmer` + `titan-tester`)
+
+Review a proposal that answers a browser link rejection by raising a
+manifest image budget, splits a standard-library browser test owner across two
+images, and hand-splits a large regression function until the image builds. The
+rejected body measured 7,654,322 bytes. Require the exact body and image
+bounds, what each counts (local-declaration vector in, length prefix out, every
+section in the image), inclusive equality, source-attributed or explicitly
+unavailable diagnostics, rejection before publication, and that bounds are not
+a startup-memory guarantee, with RSS, VmData, VSZ, and image bytes kept
+distinct. For the suite, require one `TITAN_STDLIB_BROWSER_TEST_ROOTS` list,
+one image and its artifact names, no partition or budget knob, the
+unfiltered-every-owner versus filtered-at-least-one-case rule, and a stdout-only
+audit that keeps stderr and failing status. Reject invented
+`TITAN_STDLIB_BROWSER_TEST_IMAGE*` variables or a resurrected size budget.
 
 ## Frontmatter-only routing set
 

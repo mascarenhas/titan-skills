@@ -166,6 +166,19 @@ names, macros, and complete types are visible even in earlier module-variable
 initializers. Ordinary Titan aliases and variables keep their earlier-import
 and earlier-variable restrictions.
 
+Foreign constants, variables, fields, indices, function pointers, and calls are
+valid mutable and const module-variable initializers. Their effects happen
+while the module loads, in declaration order, not during checking. Their
+operands still obey the initializer dependency rule: no own-module variable or
+function reads and no own method calls, and no lambda, bound own method, own
+Interface implementation, or value of an own record or union type with methods
+passed to the call, even nested inside an argument. Storing such values without
+a call stays valid. `foreign T.new()` and `foreign T.new_array(count)` check
+their operands the same way but expose nothing to a call. A source `foreign
+function` declared by the same module is an own function and cannot be read
+there. C remains an unsafe boundary with its pointer, lifetime, and ABI
+contracts, and ordinary Titan import visibility and order are unchanged.
+
 An explicit source dependency's C environment is transitive. Its private Titan
 members still require a direct explicit `.titan` import. Generated C includes
 `A.ffi.h` before `A.titan.h` when present; the latter contains foreign-function
