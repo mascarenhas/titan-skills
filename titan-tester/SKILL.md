@@ -600,9 +600,10 @@ Current precedents live in `spec/stdlib/titan/async/`, `http/`, and
 
 ## 8. Repository-native test ownership and layout
 
-The aggregate has 30 expected logical owners in
+The aggregate's expected logical owners are listed in
 `spec/support/stdlib_test_modules.mk:TITAN_STDLIB_TEST_ROOTS`, shared by Linux,
-macOS, and native Windows for runtime scheduling and reporting:
+macOS, and native Windows for runtime scheduling and reporting. The manifest
+is authoritative; it currently lists:
 
 ```text
 test.tests
@@ -635,12 +636,32 @@ sqlite3.tests
 json.tests
 protobuf.tests
 thread.tests
+test.host_tests
+reflect.lua_tests
+json.lua_tests
+protobuf.resource_tests
+transfer.tests
 ```
 
 Do not replace these owners with an import-only aggregator. The compiler
 selects them through `--test-dir`; the manifest audits the expected inventory,
 not a module build graph. `test.tests` remains the explicit first root, and
 `--exe` preserves `out/tests/test/tests` as the POSIX aggregate executable.
+
+The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names the owners that
+`make titan-stdlib-browser-test` runs under Node and headless Chromium (emsdk,
+Node 24, Chromium, the browser SDK, and the installed native provider
+required). `TITAN_STDLIB_BROWSER_TEST_IMAGES` and
+`TITAN_STDLIB_BROWSER_TEST_IMAGE_ROOTS_<image>` partition them into
+`--target browser --test` images, each capped at
+`TITAN_STDLIB_BROWSER_TEST_IMAGE_MAX_BYTES`; a new browser owner must join
+exactly one image, and an image over the budget fails until its owners are
+repartitioned in the manifest. They are native
+roots too, so both suites share these owners and their portable cases; a
+`.browser.titan` contributor (such as `coroutine/tests/close.browser.titan`)
+adds browser-only cases and a `.native.titan` contributor native-only ones. See
+the [browser test
+owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browser-suite).
 
 ### Where to put a new standard-library case
 
@@ -651,6 +672,16 @@ not a module build graph. `test.tests` remains the explicit first root, and
   `async/tests/`, `coroutine/tests/`, `http/tests/`, `peg/tests/`, and
   `uv/task_tests/` are current examples. The contributors are not submodules;
   all cases still have the one logical owner such as `async.tests`.
+- An owner in `TITAN_STDLIB_BROWSER_TEST_ROOTS` may import only the browser
+  standard-library modules (`coroutine`, `gc`, `iteration`, `math`, `test`,
+  `reflect`, `json`, `protobuf`, `transfer`, `peg`, `string`, `url`, `path`),
+  owner-local support, and `support.common.titan`. Put a case that needs `lua`,
+  `fs`, `thread`, `support.command`, `support.runtime`, or another
+  native-only facility in the module's native-only owner (`test.host_tests`,
+  `reflect.lua_tests`, `json.lua_tests`, `protobuf.resource_tests`) or a
+  `.native.titan` contributor; never copy it into a browser variant. Derive
+  target facts (`size_t` width, pointer width, string limits, endianness,
+  locale, nesting limits) from the target instead of skipping them.
 - Keep module-specific support beside its owner, for example
   `fs/test_support.titan`. Put something under `support/` only when it expresses
   a genuinely cross-module testing contract.
@@ -867,7 +898,7 @@ Incremental certification can reuse unchanged objects independently of filters.
 The leaf commands are:
 
 ```sh
-# Build all 30 roots once under out/tests; does not run them.
+# Build every aggregate root once under out/tests; does not run them.
 make titan-stdlib-test-build
 
 # Run the existing aggregate from the repository root.
@@ -887,10 +918,14 @@ make stdlib-test
 # All retained Busted specs, then the aggregate. Filters are independent.
 make rock-test \
   BUSTED_FILTER='test runner' \
-  TITAN_FILTER='^test[.]tests[.]test_outside_runner'
+  TITAN_FILTER='^test[.]host_tests[.]test_outside_runner'
 
 # Reinstall the current rock/provider, then run the complete mixed suite.
 make test
+
+# Build the browser-portable owners into the manifest's size-bounded browser
+# images, check closure and member inventory, and run them under Node and Chromium.
+make titan-stdlib-browser-test
 ```
 
 `make titan-stdlib-test-build` invokes one compiler-owned
@@ -908,7 +943,7 @@ uses the same path contract with Bash-3-compatible array handling. Explicit
 The run target returns to the repository root because fixtures rely on that
 CWD. It supervises the aggregate in a separate process group with a default
 600-second deadline for
-all 30 roots, including repeated fresh child-fixture compilation with O3/Linux
+every aggregate root, including repeated fresh child-fixture compilation with O3/Linux
 LTO. It streams merged output through a pipe and preserves exit status. `TITAN_TEST_TIMEOUT` can
 override the budget for a justified environment; focused CI shutdown checks
 retain their explicit 15-second limit.
@@ -925,7 +960,7 @@ cases, and the complete gate uses no filter. See
 `TITAN_FILTER` carries one runner pattern. To apply repeated OR patterns, run
 `out/tests/test/tests` directly from the repository root with repeated
 `-f`, or use one carefully designed Lua pattern. The filter does not change the
-30-root compile.
+compiled root set.
 
 On Unix, several filtered `titan-stdlib-test-run` processes can share one
 built aggregate concurrently when each sets its own `TITAN_TEST_RUN_LOG` and
@@ -1595,7 +1630,7 @@ inspects generated C instead of child behavior; deletes broad artifacts.
 
 **Prompt:**
 
-> An agent edits `titan-compiler/checker/...` and `titan/fs.titan`, then runs a
+> An agent edits `titan-compiler/checker/...` and `titan/fs.native.titan`, then runs a
 > direct Busted spec and `make titan-stdlib-test-run`; both pass. Explain why
 > that may test stale code and give a safe focused-to-broad sequence.
 
@@ -1685,7 +1720,7 @@ make rock-test \
 ```
 
 Must say `TITAN_FILTER` is a runtime Lua pattern, filters one domain only, and
-does not reduce the 30-root build. Do not accept regex-only escaping or a claim
+does not reduce the compiled root set. Do not accept regex-only escaping or a claim
 that `make rock-test` rebuilds/reinstalls the rock.
 
 ## Eval 17 — API surface discrimination
@@ -1862,7 +1897,7 @@ epochs, including an already-delivered wake. Repeated failure retains ownership
 again. This generic recovery contract is authored; assert it from observed
 behavior rather than assuming the failing path has been exercised.
 Check unreferenced `external_wake_t:reserve` versus active-wait sole-loop liveness,
-cancellation, stale wakes, and shutdown. Preserve the complete 30-root aggregate and
+cancellation, stale wakes, and shutdown. Preserve the complete aggregate root set and
 Runtime-bound cleanup inside `support.runtime`; a runtime filter never reduces
 the build roots. Leave new evaluations unscored until actually run, and
 distinguish source/provider revisions even though both ownership snapshots use

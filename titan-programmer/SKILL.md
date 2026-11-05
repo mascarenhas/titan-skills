@@ -2015,7 +2015,12 @@ to the language rules:
   explicit `.titan` source import, so each source module compiles against
   compiled-only providers. Put behavior with the owner of its state (the shell
   facade is in `os`) or export one complete operation (`Coroutine:transfer`
-  for async). The Make import lists still order the build.
+  for async). Make keeps no import lists: `titanc --incremental` orders the
+  module graph. The thirteen browser-subset modules (`coroutine`, `gc`,
+  `iteration`, `math`, `test`, `reflect`, `json`, `protobuf`, `transfer`,
+  `peg`, `string`, `url`, `path`) must not gain an import path to `uv`,
+  `async`, or any other native-only module; see
+  [standard-library maintenance](../../../doc/implementation/standard-library-maintenance.md#keep-the-browser-subset-dependency-closed).
 - **Honor the supported trust/concurrency model.** Do not harden one imagined
   race when the API requires callers to serialize all mutations. Partial
   rechecks imply guarantees the rest of the object does not provide.

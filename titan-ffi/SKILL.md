@@ -1698,7 +1698,7 @@ the result buffer, restores the remote stack's saved entry height, and releases
 the exclusive reservation. They do
 not substitute a foreign pointer for a generated function's built-in `L`.
 
-This exact helper from `titan/lua/lua.titan` is the current-state model:
+This exact helper from `titan/lua/lua.native.titan` is the current-state model:
 
 ```titan
 foreign import "lua.h"
@@ -2148,12 +2148,12 @@ searching by analogy.
   are contextual language types and are not typedefs in this header. Do not
   treat every internal declaration as a public application API; its `Udata`
   declaration is what `M as foreign *Udata` requires.
-* `titan/lua/lua.titan` and `titan/lua/worker.titan` — the public dynamic-loading
+* `titan/lua/lua.native.titan` and `titan/lua/worker.titan` — the public dynamic-loading
   and independent-state escape hatch plus protected foreign worker entries;
   `titan/gc.titan` — its typed public collector/finalizer policy boundary.
 * `titan/{iteration,test}.titan`, `titan/peg/native.titan`, and
   `titan/string/string.titan` — other audited Lua-stack examples.
-* `titan/fs.titan`, `titan/uv/*.titan`, `titan/http/native.titan`, and
+* `titan/fs.native.titan`, `titan/uv/*.titan`, `titan/http/native.titan`, and
   `titan/coroutine.titan` — private source foreign callbacks; study only with
   their ownership/runtime docs, not as generic application templates.
 * `titan/transfer.titan` and `titan/thread/*.titan` — C-ABI `foreign function`
