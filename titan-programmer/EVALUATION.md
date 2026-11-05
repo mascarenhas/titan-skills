@@ -288,8 +288,9 @@ captures, and reports a labeled failure with line/column. Require the anchored
 `Pattern:match` versus module-level `peg.match` distinction, ordinary failure
 versus `throw("fail")` versus labeled recovery, dense grammar collections,
 capture callback timing, compile-local `Definition` values, and equivalent
-combinator spelling. Reject invented separators and nonconstant module
-initializers.
+combinator spelling. Reject invented separators. A module-variable initializer
+may call `peg.compile`; reject one that reads own-module state or passes a
+lambda or another own callable to the call.
 
 ### J1 — JSON data and nominal mapping (`titan-programmer` + `titan-json`)
 
@@ -470,6 +471,93 @@ nonexportable distinction and the explicit unsafe boundary. Check all four
 external-wake wait paths (send, receive, normal join, proxy cleanup join) and
 the prearmed proxy barrier, and record only actual integrator-run
 native/platform/benchmark evidence.
+
+### I1 — module-variable initializer dependencies (`titan-programmer` + `titan-ffi` + `titan-pegs`)
+
+Give a fresh agent one module with an earlier `local seed: integer?`, an own
+record `Box` with method `read`, an own Interface `Reader`, an imported module
+`dep` (a generated record `Holder` with one callback field, a generated scalar
+record `Plain`, a custom-`new` record `Scalar`, a function `take(value)`, a
+record implementing `Reader`, Map values `registry` and `integers`, a boxed
+`dynamic`, and `flag: boolean`), and these module-variable initializers to
+classify and repair:
+
+1. `ffi.abs(-3)`, `dep.take(dep.Scalar(41))`, and `peg.compile("'a'*")`;
+2. `seed + 1` and `local f = helper` for an own function `helper`;
+3. `{function(): integer return seed end}`, the same lambda in a written
+   cast and behind `true and`, and `Box(1):read`;
+4. `local r: Reader = Box(2)` and `(dep.make() as Reader):read()`;
+5. `Box(1):read()`, `dep.take(function(): integer return 1 end)`,
+   `dep.take({Box(1):read})`, and `dep.take(Box(3))`;
+6. `dep.Holder(function(): integer return seed end)`, then a provider release
+   whose `Holder.new` calls its callback;
+7. `dep.registry[Box(1):read]` and `dep.registry ==
+   ({["read"] = function(): integer return seed end} as {value: value})`;
+8. length, finite/open spread, and ranged spread of a receiver selected between
+   an imported integer Map and a fresh integer Map holding an own callable,
+   plus a Map lookup with an own-callable key computed inside a generated
+   constructor argument;
+9. equality, inequality, boxed comparison, and length of fresh callable-bearing
+   Map literals through casts and `and`/`or`, Array length, and raw
+   `dep.dynamic == ({["read"] = Box(1):read} as value)`; and
+10. delivered callbacks from Array/Map spread into `Holder`, contrasted with
+    scalar `dep.Plain(41, ...{function(): integer return seed end})` whose
+    surplus callable is discarded.
+
+Require: 1 accepted (loading-time effects, imported custom `new` observed);
+2 rejected as own data, including the stored function value; 3 accepted as
+storage, with the asymmetry between the rejected function value and the
+accepted bound method; 4 accepted, because an own Interface dispatching to an
+imported implementation is not an own implementation; 5 rejected as call
+exposure (callee, argument, nested argument, and a bare own method-bearing
+record reachable through a witnessed Interface conversion), without promising
+one diagnostic text; 6 accepted with the generated default, while the
+replacement is rejected as incompatible when the consumer loads, before its
+initializers run; 7 and 8 rejected as implicit call exposure, even though no
+call syntax is written and an outer constructor only stores; 9 accepted for
+the actual non-dispatching origins and operations; and 10 accepted, with the
+`literal` capability required only for delivered stored callables, not for
+discarded surplus arguments or undelivered spread elements. The answer must
+still treat the evaluated surplus arguments of a real call as exposed, and
+must not infer freshness merely from a Function type or a cast of an imported
+Map.
+The repair must move own-state work into the final root initializer without
+granting called functions const-write authority. Reject any "constant
+initializer", "whole-initializer lambda only", or "all Lua operators invoke
+metamethods" rule. Historical I1 results below predate these added criteria;
+evaluate the implicit-dispatch extension freshly rather than relabeling them.
+
+### I2 — foreign values in module initializers (`titan-programmer` + `titan-ffi`)
+
+Supply a header with an object-like macro, an enum constant, a static `int`
+variable, a static struct with an `int` field, a static `int[2]`, an inline
+counting function, and a static function-pointer variable. Ask for one complete
+module whose mutable and const module variables read each of them, call the
+function directly and through the pointer, store the pointer itself, and
+allocate `foreign int.new_array(count)` with the count from the C function.
+Then ask which of `ffi.abs(seed)` with an own `seed`, a module-local source
+`foreign function` read as a value, and a C call whose argument is an Array
+holding a lambda are rejected. Require loading-time declaration-order
+execution, the C environment's availability before later directives, the
+pointer-storage `TValue` rule, rejection of all three listed forms for the
+right reason, and the unchanged unsafe-boundary contract. The module must
+compile with the current toolchain against the supplied header.
+
+### B1 — browser byte bounds and the stdlib browser suite (`titan-programmer` + `titan-tester`)
+
+Review a proposal that answers a browser link rejection by raising a
+manifest image budget, splits a standard-library browser test owner across two
+images, and hand-splits a large regression function until the image builds. The
+rejected body measured 7,654,322 bytes. Require the exact body and image
+bounds, what each counts (local-declaration vector in, length prefix out, every
+section in the image), inclusive equality, source-attributed or explicitly
+unavailable diagnostics, rejection before publication, and that bounds are not
+a startup-memory guarantee, with RSS, VmData, VSZ, and image bytes kept
+distinct. For the suite, require one `TITAN_STDLIB_BROWSER_TEST_ROOTS` list,
+one image and its artifact names, no partition or budget knob, the
+unfiltered-every-owner versus filtered-at-least-one-case rule, and a stdout-only
+audit that keeps stderr and failing status. Reject invented
+`TITAN_STDLIB_BROWSER_TEST_IMAGE*` variables or a resurrected size budget.
 
 ## Frontmatter-only routing set
 
@@ -718,6 +806,71 @@ All seven evaluators disclosed harness-injected context:
 
 T1 through TH1 read only their listed cartridge paths. As in #314, the
 contexts were therefore not hermetic.
+
+### Issues #349 and #350 evaluation (2026-11-05)
+
+The skills at `issue-349-skills` @ `690a822` (diff base `main` @ `9cd94a7`)
+replace the compile-time-constant module-initializer rule with the dependency
+and call-exposure rule (`titan-programmer`, `titan-ffi`, one `titan-pegs`
+sentence), add the browser byte bounds (`titan-programmer`), and retire the
+browser test image partition and budget (`titan-tester`). No frontmatter
+description changed, so the routing set was not rerun. New cases `I1`, `I2`
+and `B1` cover the edited text; `I1` items 1 and 5 cover the changed
+`titan-pegs` sentence, so `G1` (whose scoring text only drops its
+nonconstant-initializer rejection) was not rerun.
+
+Each answer came from a fresh process,
+`omp -p --model openai-codex/gpt-6.1-sol --thinking high --no-skills
+--no-context-files --no-rules --no-session --no-extensions --tools read,write`,
+given only a prompt file naming its cartridge and fixture paths. The scorer
+compiled with the titan `issue-349-initializers` toolchain at `5dee32cc`
+(explicit `--tree` and `--output` in scratch trees outside the source).
+**I1, I2 and B1 passed.**
+
+| Case | Result and receipts | Disposition |
+| --- | --- | --- |
+| I1 | All sixteen initializers classified as the compiler decides: each was compiled alone, ten accepted and six rejected with the expected own-reference or anonymous-function diagnostic, and the repaired module (rejected work moved into the root initializer after `seed = 41`) compiled; 17/17. The answer stated the function-value versus bound-method asymmetry, the latent bare-nominal exposure, the own-Interface-to-imported-implementation case, the load-time `Holder.new` rejection before consumer initializers, the observed `Scalar.new` override, and the `peg.compile` callback condition. | Pass. |
+| I2 | `ffi_init` compiled against the case header and, loaded by Lua, returned the predicted `total() == 83`. The four extra forms were all rejected as predicted; the source `foreign function` value also reports the general "cannot be used as a first-class value" error, which the answer did not mention beside the correct own-function reason. | Pass. |
+| B1 | Both bounds, what each counts, inclusive equality, source-attributed versus unavailable diagnostics, rejection before publication, the non-guarantee and the six distinct quantities, one root list, one image and its artifacts, no partition or budget knob, the filter rules, and the stdout-only audit were all correct; the three proposals were rejected. It marked the substituted `<engine>` tokens and the literal fallback wording as unknown, which the cartridges leave implicit. | Pass. No Titan code to compile. |
+
+All three evaluators disclosed harness-injected context despite the `--no-*`
+flags: system and developer blocks, tool schemas including memory and
+managed-skill tools (unused), workstation metadata, the date and working
+directory, and eight recalled memories unrelated to these rules. No skill
+catalog or agent roster was injected. The contexts were therefore not
+hermetic, although each answer reports reading only its listed files.
+
+### Issue #349 implicit-dispatch extension (2026-11-05)
+
+A fresh GPT 6.1 Sol evaluator read only the programmer and FFI cartridges at
+`c8ab8492` and the focused thirty-row exercise. It did not inspect compiler
+source, the implementation handoff, expected answers or earlier evaluations.
+**The extended I1 case passed.** All thirty source classifications matched
+independent compilation: thirteen accepted and seventeen rejected with the
+expected initializer-exposure or unsupported-operator diagnostics. The complete
+repaired consumer also compiled, for **31/31** matching outcomes.
+
+The scorer used the `issue-349-initializers` toolchain at `929721be`
+(production code unchanged since its installed `51768381`), with explicit
+`--tree` and `--output` in a scratch tree. This was compile-only validation;
+it did not execute the consumers' initializers. The answer correctly
+distinguished Map-key/equality/length/spread exposure, non-dispatching fresh
+origins and raw value equality, delivered versus discarded constructor
+arguments, record-specific `literal` requirements, and compatibility rejection
+before callback execution. The checker and coder binary-compatibility specs,
+the latter with actual shared-library replacements, separately cover the
+runtime side: a callback-invoking `Holder.new` replacement is rejected before
+consumer initialization, while callback-free imported construction, including
+a nested one, observes the replacement's 42 instead of the stored 41. This
+compile-only evaluation does not re-claim those results.
+
+The evaluator disclosed injected profiles, tool schemas, skill/agent catalogs,
+machine metadata, unrelated historical memories and a peer roster. This was
+therefore **not hermetic**, although its answer reports using only the supplied
+cartridges for language guidance. Its answer, exact sources and command/status
+receipt are retained as `eval/349-metamethod-answer.md`,
+`eval/349-metamethod-compile-results.json` and
+`logs/349-metamethod-eval-compile.log` in the issue's validation evidence.
 
 ## Mechanical gates
 

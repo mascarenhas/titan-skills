@@ -68,8 +68,9 @@ module function returns a leftmost `Match?`.
 
 Complete copy-paste modules below use `titan` fences. Deliberate expression,
 function-body, or final-initializer fragments use `text` and assume the visible
-`local peg = import "peg"` context. A fragment is not permission to call an
-imported function in an ordinary module-variable initializer.
+`local peg = import "peg"` context. A module-variable initializer may call an
+imported function such as `peg.compile`, but not with a lambda or another own
+callable among its arguments; compile such a grammar in the final initializer.
 
 ### PEGs are not `titan.string.Regex`
 

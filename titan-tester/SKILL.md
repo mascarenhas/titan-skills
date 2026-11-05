@@ -651,13 +651,16 @@ not a module build graph. `test.tests` remains the explicit first root, and
 The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names the owners that
 `make titan-stdlib-browser-test` runs under Node and headless Chromium (emsdk,
 Node 24, Chromium, the browser SDK, and the installed native provider
-required). `TITAN_STDLIB_BROWSER_TEST_IMAGES` and
-`TITAN_STDLIB_BROWSER_TEST_IMAGE_ROOTS_<image>` partition them into
-`--target browser --test` images, each capped at
-`TITAN_STDLIB_BROWSER_TEST_IMAGE_MAX_BYTES`; a new browser owner must join
-exactly one image, and an image over the budget fails until its owners are
-repartitioned in the manifest. They are native
-roots too, so both suites share these owners and their portable cases; a
+required). All of them build into one `--target browser --test` image,
+`images/stdlib.{mjs,wasm,wasm.map}` under `out/browser-stdlib` or
+`TITAN_BROWSER_TEST_BUILD_DIR`, beside `roots.txt`, `members.md`, and each
+engine's `stdlib.<engine>.log` stdout and `stdlib.<engine>.stderr.log`. A new
+browser owner joins that one root list; there is no image partition or suite
+byte budget, only the compiler's general browser image bounds. An unfiltered
+run must execute every owner under both engines, and a `TITAN_FILTER` run may
+omit owners but must select at least one case. The audit reads stdout only and
+keeps stderr and a nonzero runner status. The owners are native
+roots too, so both suites share them and their portable cases; a
 `.browser.titan` contributor (such as `coroutine/tests/close.browser.titan`)
 adds browser-only cases and a `.native.titan` contributor native-only ones. See
 the [browser test
@@ -923,8 +926,8 @@ make rock-test \
 # Reinstall the current rock/provider, then run the complete mixed suite.
 make test
 
-# Build the browser-portable owners into the manifest's size-bounded browser
-# images, check closure and member inventory, and run them under Node and Chromium.
+# Build the browser-portable owners into one browser image, check closure and
+# member inventory, and run it under Node and Chromium.
 make titan-stdlib-browser-test
 ```
 

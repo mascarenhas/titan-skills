@@ -983,7 +983,17 @@ private fields; a local override stays private even for an all-public record.
 An override may have arbitrary parameters and results, including no results,
 multiple results, or variadic/flexible tails. `Record(...)` has exactly that
 call contract; returning the record itself is not required. Overrides are
-ordinary computed calls and cannot be constant module-variable initializers.
+ordinary calls. An own-module override cannot be used in a module-variable
+initializer. An imported one can, because its module has already initialized,
+provided its arguments do not expose an own callable to the call. When an
+initializer stores an own callable through an imported *generated* constructor,
+the compiled consumer also requires that constructor to stay generated: a
+replacement provider that overrides `new` is rejected when the consumer loads,
+before its initializers run. Only values delivered to the constructor's
+parameters count; discarded surplus arguments and undelivered spread elements
+do not. Callback-free imported construction such as `Box(41)` therefore stays
+replaceable, even when surplus expressions construct lambdas that are
+discarded, and every written computation is still checked.
 `Box<|integer|>(x)` binds owner arguments; if `new` has its own generic binders,
 use `.new<|U|>` when explicit member arguments are needed, retaining the existing
 both-explicit-or-both-inferred rule.
@@ -1206,9 +1216,68 @@ although nominal types, aliases, and callable declarations are known module-wide
 Unbound `foreign import "header.h"` directives populate the complete ordered C
 environment. Values use the readonly, shadowable builtin `ffi`; foreign types
 use their separate unqualified namespace. Imported declarations/macros are
-available throughout the module, including earlier initializers. A written
-module-variable initializer must be a compile-time constant. Put computed one-time work in the
-single final root `do ... end` initializer.
+available throughout the module, including earlier initializers.
+
+Mutable and const module-variable initializers run when the module loads, in
+declaration order, not at compile time. They may use foreign values and calls
+and members or calls of visible earlier imports. They cannot read an own-module
+variable, use an own function, static, or custom constructor (even as a stored
+value), or call an own method; a type alias does not hide the owner. The
+generated record `new` and union-variant constructors are the exception: their
+arguments are checked and their bodies only store them.
+
+Creating a lambda, binding an own method to an admissible receiver
+(`Box(1):read`), or converting an own record or union to an Interface runs no
+body, so these values may be stored, including inside Arrays, Maps, generated
+constructors, operators, and written casts. A lambda body may read earlier
+module variables when it is called. Keep the deliberate asymmetry: a named own
+function value is rejected, while a bound own method on a safe receiver is
+accepted. A bare value of an own record or union type with methods is an own
+callable too, because other code can reach its methods through a
+compiler-witnessed Interface conversion from `value`.
+
+An own callable must not reach an explicit or implicit call that the
+initializer evaluates: it is rejected as the callee, an Interface-dispatch
+receiver, or an argument, including nested inside containers, constructors,
+operators, casts, or spreads within that argument. All evaluated arguments of
+a real call are exposed, including discarded surplus. Generated constructors
+only store, so they create no such exposure, but they inherit it from an
+enclosing call and do not protect implicit calls computed in their arguments.
+Dispatch through an own Interface to an imported implementation stays valid.
+Exposed lambdas and other exposed own callables report different diagnostics.
+
+Map operations can enter Lua without written call syntax: a potentially
+metatable-bearing Map read exposes the Map and key, Map/Map or Map/`value`
+equality in either orientation exposes both operands, and integer-Map length
+or spread exposes the Map receiver. Fresh ordinary Map literals have no
+metatable and use raw filling, so indexing, length, or spread of one, and
+equality between two, stay non-invoking. A cast or boxing preserves a Map's
+identity and metatable: a fresh literal stays fresh, and an imported Map stays
+potentially metatable-bearing. `and`/`or` keeps freshness only when both
+operands are fresh or primitive, and a Function annotation does not prove a
+genuine closure instead of a boxed `__call` object. Raw `value`/`value`
+equality, equality with an option operand, and canonical Array
+indexing/length do not add Map dispatch; supported primitive ordering,
+arithmetic, and concatenation add no arbitrary Lua operator calls. Always
+check nested computations and preserve inherited exposure.
+
+```text
+local seed: integer?
+record Box n: integer end
+function Box:read(): integer return self.n + seed end
+
+local stored = {Box(1):read, function(): integer return seed end}   -- ok
+local bad1 = Box(1):read()                       -- rejected: own method call
+local bad2 = dep.apply(function(): integer return 1 end)  -- rejected: exposed
+local bad3 = dep.take({Box(1):read})             -- rejected: nested exposure
+local bad4 = dep.registry[Box(1):read]           -- rejected: __index may call key
+local bad5 = dep.registry ==                     -- rejected: __eq may call stored fn
+    ({["read"] = function(): integer return seed end} as {value: value})
+```
+
+Put work that reads own-module state or invokes own callables in the single
+final root `do ... end` initializer. That does not grant a function or lambda
+called from it the root initializer's const-write authority.
 
 An initialized `const` module variable is read-only immediately. A
 module variable without an initializer, mutable or const, must have an explicit
@@ -1876,6 +1945,21 @@ compiler frontend, and application launcher EXEs. Follow the
 [Windows build guide](../../../doc/language/windows-build.md) for toolchain,
 layout, native dependencies, and experimental limitations.
 
+Browser builds (`--target browser`, from Linux or macOS hosts) produce `.mjs`,
+`.wasm`, and `.wasm.map` images. Before publishing a program or test image, or
+executing a provider's protocol image, `titanc` enforces the WebAssembly
+JavaScript Interface byte bounds: one function body, counting its
+local-declaration vector but not its length prefix, may be at most 7,654,321
+bytes, and the complete `.wasm` at most 1,073,741,824 bytes; equality is
+accepted. A body rejection names the Wasm function (or its index), its size,
+the bound, and the first mapped source location, or says that no source is
+available; do not infer a file from a mangled name. Rejection leaves previously
+published images unchanged. Titan neither splits nor outlines an oversized
+function automatically. These bounds are not a memory promise: engines can
+fail below them, and image bytes, linear memory, Node RSS, Chromium renderer
+RSS, and Linux VmData or Darwin VSZ measure different things. See
+[browser limits](../../../doc/language/browser-target.md#limits).
+
 Use the matched installed `lua`. A dotted module maps dots to directories;
 `titanc app.check` finds folder `app/check/check.titan` before flat
 `app/check.titan`. `--tree ROOT` changes the source root. Useful driver options
@@ -2194,8 +2278,10 @@ runs. Combination and Codecov uploads stay external. See
 
 ## Before finishing
 
-- Recheck exports versus `local`, module-variable constant/order rules, and
-  source-versus-binary visibility. Ordinary imports stay public-only even when
+- Recheck exports versus `local`, module-variable dependencies, explicit and
+  implicit call exposure (including Map operands and spread plans), delivered
+  versus discarded constructor arguments, and order rules. Check
+  source-versus-binary visibility: ordinary imports stay public-only even when
   source wins; private collaboration requires a terminal `.titan` marker and a
   real source module.
 - For a public C type, prove the complete graph is exportable. Prefer a
