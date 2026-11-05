@@ -513,12 +513,14 @@ exposure (callee, argument, nested argument, and a bare own method-bearing
 record reachable through a witnessed Interface conversion), without promising
 one diagnostic text; 6 accepted with the generated default, while the
 replacement is rejected as incompatible when the consumer loads, before its
-initializers run; 7 and 8 rejected as implicit call exposure, not blessed as
-safe because no call syntax is written or an outer constructor only stores;
-9 accepted for the actual non-dispatching origins/routes; and 10 accepted with
-literal authority only for delivered stored callables, not discarded surplus
-or setup alone. Keep real-call evaluated-surplus exposure unchanged, and do
-not infer freshness merely from a Function type or a cast of an imported Map.
+initializers run; 7 and 8 rejected as implicit call exposure, even though no
+call syntax is written and an outer constructor only stores; 9 accepted for
+the actual non-dispatching origins and operations; and 10 accepted, with the
+`literal` capability required only for delivered stored callables, not for
+discarded surplus arguments or undelivered spread elements. The answer must
+still treat the evaluated surplus arguments of a real call as exposed, and
+must not infer freshness merely from a Function type or a cast of an imported
+Map.
 The repair must move own-state work into the final root initializer without
 granting called functions const-write authority. Reject any "constant
 initializer", "whole-initializer lambda only", or "all Lua operators invoke
@@ -855,9 +857,12 @@ it did not execute the consumers' initializers. The answer correctly
 distinguished Map-key/equality/length/spread exposure, non-dispatching fresh
 origins and raw value equality, delivered versus discarded constructor
 arguments, record-specific `literal` requirements, and compatibility rejection
-before callback execution. The existing native replacement regressions,
-separately exercised by the owning compiler gate, establish the stored-callback
-rejection and nested scalar replacement from 41 to 42.
+before callback execution. The checker and coder binary-compatibility specs,
+the latter with actual shared-library replacements, separately cover the
+runtime side: a callback-invoking `Holder.new` replacement is rejected before
+consumer initialization, while callback-free imported construction, including
+a nested one, observes the replacement's 42 instead of the stored 41. This
+compile-only evaluation does not re-claim those results.
 
 The evaluator disclosed injected profiles, tool schemas, skill/agent catalogs,
 machine metadata, unrelated historical memories and a peer roster. This was

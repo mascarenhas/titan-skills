@@ -1350,10 +1350,12 @@ call-exposure rule as written calls. A read exposes its potentially
 metatable-bearing Map and key; Map/Map or Map/`value` comparison exposes both
 operands; integer-Map length and spread expose their receiver. Own callable
 values, even nested ones, cannot reach those implicit calls. Fresh ordinary
-Map literals have no metatable and use raw construction, so proved fixed-origin
-operations remain legal. Boxing/casts do not erase a Map's metatable, and a
-Function view can still hold a `__call` table. Raw `value`/`value` equality and
-canonical Array indexing/length keep their non-dispatching distinction.
+Map literals have no metatable and use raw construction, so indexing, length,
+or spread of one, and equality between two, remain legal. Boxing or a cast
+neither removes a Map's metatable nor makes an imported value fresh, and a
+Function-typed value may be a `__call` table rather than a genuine closure.
+Raw `value`/`value` equality, equality with an option operand, and canonical
+Array indexing/length keep their non-dispatching distinction.
 
 A Lua write through a mutable Array proxy dynamically converts a nonnil element
 with the writer installed when the Array was constructed; nil deletes before
