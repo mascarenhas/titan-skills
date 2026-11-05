@@ -881,6 +881,10 @@ references already-reported outcomes. Repository stdout audits require the
 new grammar, owner totals, and consistent counts and timings; do not accept
 obsolete untimed outcomes or globally strip timing-shaped text from binary
 output audits.
+Text-report scanners accept LF and Windows CRLF by removing at most one CR
+immediately before a real LF, never embedded or doubled CR or a lone CR at
+EOF. Keep this line-boundary handling separate from captured payload bytes;
+browser byte-fidelity checks retain their exact LF/binary-byte expectations.
 
 ### Parent and child filters are independent
 
