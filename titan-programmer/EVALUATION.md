@@ -472,13 +472,15 @@ external-wake wait paths (send, receive, normal join, proxy cleanup join) and
 the prearmed proxy barrier, and record only actual integrator-run
 native/platform/benchmark evidence.
 
-### I1 — module-variable initializer dependencies (`titan-programmer` + `titan-pegs`)
+### I1 — module-variable initializer dependencies (`titan-programmer` + `titan-ffi` + `titan-pegs`)
 
 Give a fresh agent one module with an earlier `local seed: integer?`, an own
 record `Box` with method `read`, an own Interface `Reader`, an imported module
-`dep` (a generated record `Holder` with one callback field, a custom-`new`
-record `Scalar`, a function `take(value)`, and a record implementing `Reader`),
-and these module-variable initializers to classify and repair:
+`dep` (a generated record `Holder` with one callback field, a generated scalar
+record `Plain`, a custom-`new` record `Scalar`, a function `take(value)`, a
+record implementing `Reader`, Map values `registry` and `integers`, a boxed
+`dynamic`, and `flag: boolean`), and these module-variable initializers to
+classify and repair:
 
 1. `ffi.abs(-3)`, `dep.take(dep.Scalar(41))`, and `peg.compile("'a'*")`;
 2. `seed + 1` and `local f = helper` for an own function `helper`;
@@ -486,9 +488,21 @@ and these module-variable initializers to classify and repair:
    cast and behind `true and`, and `Box(1):read`;
 4. `local r: Reader = Box(2)` and `(dep.make() as Reader):read()`;
 5. `Box(1):read()`, `dep.take(function(): integer return 1 end)`,
-   `dep.take({Box(1):read})`, and `dep.take(Box(3))`; and
+   `dep.take({Box(1):read})`, and `dep.take(Box(3))`;
 6. `dep.Holder(function(): integer return seed end)`, then a provider release
-   whose `Holder.new` calls its callback.
+   whose `Holder.new` calls its callback;
+7. `dep.registry[Box(1):read]` and `dep.registry ==
+   ({["read"] = function(): integer return seed end} as {value: value})`;
+8. length, finite/open spread, and ranged spread of a receiver selected between
+   an imported integer Map and a fresh integer Map holding an own callable,
+   plus a Map lookup with an own-callable key computed inside a generated
+   constructor argument;
+9. equality, inequality, boxed comparison, and length of fresh callable-bearing
+   Map literals through casts and `and`/`or`, Array length, and raw
+   `dep.dynamic == ({["read"] = Box(1):read} as value)`; and
+10. delivered callbacks from Array/Map spread into `Holder`, contrasted with
+    scalar `dep.Plain(41, ...{function(): integer return seed end})` whose
+    surplus callable is discarded.
 
 Require: 1 accepted (loading-time effects, imported custom `new` observed);
 2 rejected as own data, including the stored function value; 3 accepted as
@@ -497,11 +511,19 @@ accepted bound method; 4 accepted, because an own Interface dispatching to an
 imported implementation is not an own implementation; 5 rejected as call
 exposure (callee, argument, nested argument, and a bare own method-bearing
 record reachable through a witnessed Interface conversion), without promising
-one diagnostic text; and 6 accepted with the generated default, while the
+one diagnostic text; 6 accepted with the generated default, while the
 replacement is rejected as incompatible when the consumer loads, before its
-initializers run. The repair must move own-state work into the final root
-initializer without granting called functions const-write authority. Reject
-any "constant initializer" or "whole-initializer lambda only" rule.
+initializers run; 7 and 8 rejected as implicit call exposure, not blessed as
+safe because no call syntax is written or an outer constructor only stores;
+9 accepted for the actual non-dispatching origins/routes; and 10 accepted with
+literal authority only for delivered stored callables, not discarded surplus
+or setup alone. Keep real-call evaluated-surplus exposure unchanged, and do
+not infer freshness merely from a Function type or a cast of an imported Map.
+The repair must move own-state work into the final root initializer without
+granting called functions const-write authority. Reject any "constant
+initializer", "whole-initializer lambda only", or "all Lua operators invoke
+metamethods" rule. Historical I1 results below predate these added criteria;
+evaluate the implicit-dispatch extension freshly rather than relabeling them.
 
 ### I2 — foreign values in module initializers (`titan-programmer` + `titan-ffi`)
 

@@ -989,8 +989,10 @@ provided its arguments do not expose an own callable to the call. When an
 initializer stores an own callable through an imported *generated* constructor,
 the compiled consumer also requires that constructor to stay generated: a
 replacement provider that overrides `new` is rejected when the consumer loads,
-before its initializers run. Callback-free imported construction such as
-`Box(41)` simply observes a compatible override's result.
+before its initializers run. This proof uses delivered stored arguments, not
+discarded surplus or spread setup alone. Callback-free stored construction
+such as `Box(41)` stays replaceable even when surplus expressions construct
+lambdas whose values are discarded; every written computation is still checked.
 `Box<|integer|>(x)` binds owner arguments; if `new` has its own generic binders,
 use `.new<|U|>` when explicit member arguments are needed, retaining the existing
 both-explicit-or-both-inferred rule.
@@ -1233,13 +1235,27 @@ accepted. A bare value of an own record or union type with methods is an own
 callable too, because other code can reach its methods through a
 compiler-witnessed Interface conversion from `value`.
 
-An own callable must not reach a call that the initializer evaluates: it is
-rejected as the callee, an Interface-dispatch receiver, or an argument,
-including nested inside containers, constructors, operators, casts, or spreads
-within that argument. Generated constructors only store, so they create no such
-exposure, but they inherit it from an enclosing call. Dispatch through an own
-Interface to an imported implementation stays valid. Exposed lambdas and other
-exposed own callables report different diagnostics.
+An own callable must not reach an explicit or implicit call that the
+initializer evaluates: it is rejected as the callee, an Interface-dispatch
+receiver, or an argument, including nested inside containers, constructors,
+operators, casts, or spreads within that argument. All evaluated arguments of
+a real call are exposed, including discarded surplus. Generated constructors
+only store, so they create no such exposure, but they inherit it from an
+enclosing call and do not protect implicit calls computed in their arguments.
+Dispatch through an own Interface to an imported implementation stays valid.
+Exposed lambdas and other exposed own callables report different diagnostics.
+
+Map operations can enter Lua without written call syntax: a potentially
+metatable-bearing Map read exposes the Map and key, Map/Map or Map/`value`
+equality in either orientation exposes both operands, and integer-Map length
+or spread exposes the Map receiver. A cast or boxing preserves a Map's
+identity/metatable; a Function annotation does not prove a genuine closure
+instead of a boxed `__call` object. Fresh ordinary Map literals have no
+metatable and use raw filling, so operations proved to use only fixed fresh
+origins keep their non-invoking behavior. Raw `value`/`value` equality and
+canonical Array indexing/length do not add Map dispatch; supported primitive
+ordering, arithmetic, and concatenation add no arbitrary Lua operator calls.
+Always check nested computations and preserve inherited exposure.
 
 ```text
 local seed: integer?
@@ -1250,6 +1266,9 @@ local stored = {Box(1):read, function(): integer return seed end}   -- ok
 local bad1 = Box(1):read()                       -- rejected: own method call
 local bad2 = dep.apply(function(): integer return 1 end)  -- rejected: exposed
 local bad3 = dep.take({Box(1):read})             -- rejected: nested exposure
+local bad4 = dep.registry[Box(1):read]            -- rejected: __index may call key
+local bad5 = dep.registry ==                    -- rejected: __eq may call stored fn
+    ({["read"] = function(): integer return seed end} as {value: value})
 ```
 
 Put work that reads own-module state or invokes own callables in the single
@@ -2255,10 +2274,12 @@ runs. Combination and Codecov uploads stay external. See
 
 ## Before finishing
 
-- Recheck exports versus `local`, module-variable dependency, call-exposure, and
-  order rules, and source-versus-binary visibility. Ordinary imports stay public-only even when
-  source wins; private collaboration requires a terminal `.titan` marker and a
-  real source module.
+- Recheck exports versus `local`, module-variable dependencies, explicit and
+  implicit call exposure (including Map operands and spread plans), delivered
+  versus discarded constructor arguments, and order rules. Check source-versus-
+  binary visibility: ordinary imports stay public-only even when source wins;
+  private collaboration requires a terminal `.titan` marker and a real source
+  module.
 - For a public C type, prove the complete graph is exportable. Prefer a
   header-free portable boundary when appropriate; otherwise require every
   consumer to import the original compatible header declarations. Preserve

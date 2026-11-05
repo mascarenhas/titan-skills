@@ -172,12 +172,14 @@ while the module loads, in declaration order, not during checking. Their
 operands still obey the initializer dependency rule: no own-module variable or
 function reads and no own method calls, and no lambda, bound own method, own
 Interface implementation, or value of an own record or union type with methods
-passed to the call, even nested inside an argument. Storing such values without
-a call stays valid. `foreign T.new()` and `foreign T.new_array(count)` check
-their operands the same way but expose nothing to a call. A source `foreign
-function` declared by the same module is an own function and cannot be read
-there. C remains an unsafe boundary with its pointer, lifetime, and ABI
-contracts, and ordinary Titan import visibility and order are unchanged.
+exposed to an explicit or implicit call, even nested inside an argument.
+Storing such values without exposure stays valid. `foreign T.new()` and
+`foreign T.new_array(count)` invoke no user callback, but their operand
+computations, including Map metamethods, are still checked and keep any
+exposure inherited from an enclosing call. A source `foreign function`
+declared by the same module is an own function and cannot be read there.
+C remains an unsafe boundary with its pointer, lifetime, and ABI contracts,
+and ordinary Titan import visibility and order are unchanged.
 
 An explicit source dependency's C environment is transitive. Its private Titan
 members still require a direct explicit `.titan` import. Generated C includes
@@ -1342,6 +1344,16 @@ either orientation begin with identity/raw equality; when both run-time values
 are tables, Lua selects the left `__eq` and falls back to the right, interpreting
 the result by Lua truthiness. Two `value` operands deliberately remain raw
 equality even when both contain tables with `__eq`.
+
+In a module-variable initializer, these potential Map calls obey the same
+call-exposure rule as written calls. A read exposes its potentially
+metatable-bearing Map and key; Map/Map or Map/`value` comparison exposes both
+operands; integer-Map length and spread expose their receiver. Own callable
+values, even nested ones, cannot reach those implicit calls. Fresh ordinary
+Map literals have no metatable and use raw construction, so proved fixed-origin
+operations remain legal. Boxing/casts do not erase a Map's metatable, and a
+Function view can still hold a `__call` table. Raw `value`/`value` equality and
+canonical Array indexing/length keep their non-dispatching distinction.
 
 A Lua write through a mutable Array proxy dynamically converts a nonnil element
 with the writer installed when the Array was constructed; nil deletes before
