@@ -853,18 +853,34 @@ test.
 - help exits 0; bad option/pattern exits 2; any failed case exits 1; all-pass,
   all-skip, zero-selected, and zero-test runs exit 0.
 
-The runner prints no timing. Output and exit rules are stable gtest-shaped
-reporting, not a timing/benchmark contract:
+The runner reports monotonic wall time in milliseconds, with two decimal
+places on every executed pass/fail/skip outcome. A case includes its body,
+selected descendants, and cleanup; an uninvoked child skipped because its
+parent failed or skipped has exactly `0.00 ms`. Skip reasons precede the
+timing suffix. Filtered-out cases remain absent. For example, with
+illustrative durations:
 
 ```text
 [==========] Running Titan tests.
 [ RUN      ] calc_test.test_twice
 [ RUN      ] calc_test.test_twice.zero
-[       OK ] calc_test.test_twice.zero
-[       OK ] calc_test.test_twice
-[==========] 2 tests ran.
+[       OK ] calc_test.test_twice.zero (0.02 ms)
+[       OK ] calc_test.test_twice (0.08 ms)
+[----------] calc_test (0.08 ms total)
+[==========] 2 tests ran. (0.15 ms total)
 [  PASSED  ] 2 tests.
 ```
+
+Owner totals sum only entered top-level intervals, even when custom `run`
+callers interleave owners. The run total is independently measured wall time,
+including execution-loop output; neither is a sum of inclusive descendant
+timings. Empty and zero-selected runs still have a run total and no owner
+totals. The same grammar and accounting apply on native Unix/Windows and
+browser Node/Chromium. The final failed-name list is untimed because it
+references already-reported outcomes. Repository stdout audits require the
+new grammar, owner totals, and consistent counts and timings; do not accept
+obsolete untimed outcomes or globally strip timing-shaped text from binary
+output audits.
 
 ### Parent and child filters are independent
 
