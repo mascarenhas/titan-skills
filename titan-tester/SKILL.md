@@ -85,6 +85,11 @@ while emitted typedef headers and restored source-import manifests belong in
 driver/cache specs. Keep parser scaling checks focused on bounded terminal
 lookahead, committed syntactic descents, and flat-list capture growth.
 
+Public UV/async boundaries, native packet ownership, and retained writes after
+a raise (the coder layer's five-part matrix) have their own owners and
+requirements: see
+[Public UV and generic async boundary tests](#public-uv-and-generic-async-boundary-tests).
+
 ## 2. Native tests are discovered ordinary module functions
 
 A native case is discovered only when a checked declaration satisfies **all**
@@ -1322,6 +1327,146 @@ Common wrong turns to reject explicitly:
   `.titan` source-collaboration import;
 - cleaning `spec/**/*.c`, `*.a`, or canonical provider outputs broadly.
 
+## Public UV and generic async boundary tests
+
+Use ordinary compiled `uv`/`async` imports for public callback and adapter
+behavior. Never import `uv.titan`, inspect private Task/Runtime state, or bring
+libuv native headers into a consumer fixture. C-only worker fixtures may expose
+their own opaque native data without a transitive libuv dependency.
+
+Check rejection versus accepted completion, callback-only operation without
+Tasks, ordinary callable callbacks, forced GC while native work owns borrowed
+values, request reuse, exact cancellation reasons, and cleanup after callback
+failure. Generic await tests distinguish inline registration settlement from
+deferred callbacks, cleanup waits from ordinary cancellation, and stale fatal
+capabilities from a successor wait. Subscription tests include nil/false data,
+queued wake reservation, immediate cancel-then-replacement before old unwind,
+terminal ordering, and disposal of unread resource-bearing events.
+
+Do not weaken existing public behavior assertions to fit a migration. In
+particular HTTP timer-only loser cancellation must preserve buffered-request
+ordering while state-owning reader cleanup is shielded on every parent exit.
+Use exact frozen input/provider evidence when a private build tests an evolving
+source tree; a passing old provider is not evidence for later edits.
+
+For native packet ownership (`transfer.encode_message` / `decode_message` /
+`discard_message`, thread endpoints, and eager coalescing `async.Receiver`),
+prepared external wakes, and direct `uv.native_*` synchronization, keep public
+behavior in `async.tests`, `thread.tests`, and `uv.public_tests`; use only
+test-owned failure fixtures. Check native `discard_message` without a Runtime
+and after source-state close, plus `Receiver` overwrite and close disposal: all
+must release unclaimed attachments with zero decoder/module-loader calls.
+Raw decode regressions take a real uniquely owned packet into a `foreign *void`
+local guarded by `defer transfer.discard_message(raw)` and call
+`transfer.decode_message(raw)` directly, catching expected failures with
+`do ... catch`. Check the local is nil after success and after decoder, claim,
+partial-claim, nested-scope, module-load, OOM, and scalar-reservation errors,
+with unclaimed attachments released before GC. Pre-reserve the Lua stack before
+arming an allocator fault so it lands inside decode's body rather than its
+entry preamble, which leaves the packet to the guard. Cover a local assigned
+in an earlier protected region as well as a packet acquired in its own
+declaration. The guarded pointer local is a recovery-sensitive scalar with one
+volatile home plus a declaration-time compiler escape barrier; a decoder that
+clears then raises must leave catch and the guard seeing nil, never a stale
+value. Decode's own `catch`/`setjmp` prevents inlining by supported GCC/Clang:
+native decode coverage is not an inlining test. For this scalar home the
+guarantee is verified with GCC, including LTO (production-provider evidence),
+and with Clang at `-O2`/`-O3` without LTO; Clang LTO is not separately
+verified. Separately exercise ordinary inlinable scalar callees at
+`-O2`/`-O3`, with no normal-path read: write through the address, then raise
+from a checked return conversion, while the protected body returns directly.
+This terminal error shape exposes GCC's dead-store deletion without a barrier.
+Also cover explicit `raise`, and check declaration barriers on locals, named
+parameters and lambda parameters. Volatility alone is insufficient.
+Cover production/optimized builds and `async.Receiver:wait`,
+not just validation/thread receives. This supported GCC/Clang guarantee
+(including Windows Clang/MSYS2) retains the ISO C 6.7.3p6 unqualified-access
+caveat, not strict ISO-C safety; see
+[recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
+
+**Retained-write regression matrix.** The general retained-write rule for
+every eligible address-exposed kind belongs to the owning coder layer. A
+complete plan has all five parts:
+
+1. **Real optimized programs:** native programs
+   (`spec/fixtures/error_handling/aggregate_recovery.titan`) built at `-O2`
+   and `-O3` with `-Werror`, not only generated-C text.
+2. **Every eligible kind and exclusion:** C integer, floating, enum, and
+   pointer homes; structs, unions, fixed, nested, typedef, and inline-field
+   arrays; the full FAM extent; named and supported lambda parameters; and the
+   const/captured and non-address-exposed exclusions. Mutate through the
+   actual address, then raise explicitly, through a checked-return conversion,
+   or from C before a normal return; recovery must see the current writes,
+   including after an earlier protected assignment.
+3. **Both exact GC forms at Lua close:** for `TValue` and `Udata *`, store a
+   fresh real userdata, raise, force a full GC during Lua close, and require
+   the stored object intact; also clear the old value before raising and prove
+   the old object was finalized during close. Cover normal-return root commits
+   and an early failure before a later defer-tail GC declaration.
+4. **The writer's own root truncated:** keep the foreign writer's own root
+   alive through error handling and let close truncate it before the
+   collection, so the caller's pre-close publication is what preserves the
+   value; a globally rooted sentinel proves only classification.
+5. **Structural versus executed evidence:** a generated-C oracle that pins
+   publication at the three landing sites is structural evidence, not an
+   executed run of the rare re-armed-close and unwind-guard landings, and
+   these Linux receipts claim no new Clang, LTO, or platform qualification.
+
+Captured locals cannot supply mutable pointer storage; keep consuming decode in
+its owning function, or use a by-value `foreign *Slot` pointer to an array
+cell. Lua code in an independent state cannot call `decode_message`; use an
+ordinary test-support entry that asserts the borrowed lightuserdata slot.
+Attachment-count cases that must cross the scope's inline scratch, first heap
+spill, and spill growth derive their counts from
+`TITAN_TRANSFER_INLINE_RESOURCES` (`transfer_native.h`) instead of literals,
+so a capacity change cannot silently turn a spill case into an inline one.
+
+Exercise `run_with_cleanup`'s optional third argument through public behavior:
+require an unused/open/unbound same-Runtime `prepare_native_retirement`
+capability and reject generic prepared waits. Check revalidation after
+allocations, pre-exposure native activation/admission and rollback, traced owner
+rooting, and body/peer/alias exclusion outside owning cleanup. Only its exact
+cleanup wait may use the final epoch; generic/nested cleanup has no privilege.
+The preaccepted terminal gate must survive root/cleanup-entry failure and a
+missed await. Preallocation is not proof ordinary entries cannot allocate.
+Check the bound cleanup wait attaches once to an already-armed barrier, handles
+retirement before suspension, and rejects unbound/ordinary waits. Logical close
+must reject later waits without dropping unfinished native ownership; native
+callback 0/1/negative cases must preserve the stated admission/retirement owners.
+Prove the domain notifies only after monotonic retirement readiness: retirement
+after notification cannot return pending and rely on a second wake to arrive.
+
+Retain required Thread proxy ordering: all terminal outcomes follow actual
+child OS-thread finish, including pre-start cancellation, delayed child cleanup,
+and failures before Task-root/cleanup bodies begin. Test the preaccepted native
+completion barrier, not just a later cleanup callback. Exercise send, receive,
+normal join, and the proxy cleanup join on each path; generic bridge tests are
+not thread-adapter evidence.
+Check reasonless native cancellation requires no accepted child cancellation
+and follows ordinary forwarding at the exact bound cleanup wait, or a pending
+terminal outcome whose cleanup failed; never normal body/prearm. Preserve host
+outcome and accepted child reason. Cover the nil cleanup reason from a failed
+proxy body, which becomes the default `simple("cancelled")` request, and the
+DEFAULT outcome degradation, which surfaces to the host as
+`simple("cancelled")`. Exercise a first explicit proxy cancellation that arrives
+while native retirement is pending: it overrides a pending success/error, while a
+later cancellation replaces neither that first reason nor an accepted child
+reason and terminal status still follows the OS join. A cancellation request
+short of a terminal proxy is not a retirement oracle. Inject negative
+retirement: retain the same
+nonterminal Task, native token/context, target, pending operation and Runtime.
+The driver error must report `async.native_retirement.retire` and its native
+code; direct later `async.loop()` retries without re-registering or resetting
+epochs, including an already-delivered wake. Repeated failure retains ownership
+again. This generic recovery contract is authored; assert it from observed
+behavior rather than assuming the failing path has been exercised.
+Check unreferenced `external_wake_t:reserve` versus active-wait sole-loop liveness,
+cancellation, stale wakes, and shutdown. Preserve the complete aggregate root set and
+Runtime-bound cleanup inside `support.runtime`; a runtime filter never reduces
+the build roots. Leave new evaluations unscored until actually run, and
+distinguish source/provider revisions even though both ownership snapshots use
+ABI 2 (language-server API 1; other existing versions unchanged).
+
 ## 13. Agent workflow for a test change
 
 1. **Classify the assertion.** State in one sentence whether it is compiler
@@ -1826,137 +1971,3 @@ assert the wrong ownership model, clean up after a dead Runtime, or encode an
 impossible callback schedule. The strongest evals combine static inspection,
 focused execution, and a short written explanation of the selected layer and
 lifetime.
-
-## Public UV and generic async boundary tests
-
-Use ordinary compiled `uv`/`async` imports for public callback and adapter
-behavior. Never import `uv.titan`, inspect private Task/Runtime state, or bring
-libuv native headers into a consumer fixture. C-only worker fixtures may expose
-their own opaque native data without a transitive libuv dependency.
-
-Check rejection versus accepted completion, callback-only operation without
-Tasks, ordinary callable callbacks, forced GC while native work owns borrowed
-values, request reuse, exact cancellation reasons, and cleanup after callback
-failure. Generic await tests distinguish inline registration settlement from
-deferred callbacks, cleanup waits from ordinary cancellation, and stale fatal
-capabilities from a successor wait. Subscription tests include nil/false data,
-queued wake reservation, immediate cancel-then-replacement before old unwind,
-terminal ordering, and disposal of unread resource-bearing events.
-
-Do not weaken existing public behavior assertions to fit a migration. In
-particular HTTP timer-only loser cancellation must preserve buffered-request
-ordering while state-owning reader cleanup is shielded on every parent exit.
-Use exact frozen input/provider evidence when a private build tests an evolving
-source tree; a passing old provider is not evidence for later edits.
-
-For native packet ownership (`transfer.encode_message` / `decode_message` /
-`discard_message`, thread endpoints, and eager coalescing `async.Receiver`),
-prepared external wakes, and direct `uv.native_*` synchronization, keep public
-behavior in `async.tests`, `thread.tests`, and `uv.public_tests`; use only
-test-owned failure fixtures. Check native `discard_message` without a Runtime
-and after source-state close, plus `Receiver` overwrite and close disposal: all
-must release unclaimed attachments with zero decoder/module-loader calls.
-Raw decode regressions take a real uniquely owned packet into a `foreign *void`
-local guarded by `defer transfer.discard_message(raw)` and call
-`transfer.decode_message(raw)` directly, catching expected failures with
-`do ... catch`. Check the local is nil after success and after decoder, claim,
-partial-claim, nested-scope, module-load, OOM, and scalar-reservation errors,
-with unclaimed attachments released before GC. Pre-reserve the Lua stack before
-arming an allocator fault so it lands inside decode's body rather than its
-entry preamble, which leaves the packet to the guard. Cover a local assigned
-in an earlier protected region as well as a packet acquired in its own
-declaration. The guarded pointer local is a recovery-sensitive scalar with one
-volatile home plus a declaration-time compiler escape barrier; a decoder that
-clears then raises must leave catch and the guard seeing nil, never a stale
-value. Decode's own `catch`/`setjmp` prevents inlining by supported GCC/Clang:
-native decode coverage is not an inlining test. For this scalar home the
-guarantee is verified with GCC, including LTO (production-provider evidence),
-and with Clang at `-O2`/`-O3` without LTO; Clang LTO is not separately
-verified. Separately exercise ordinary inlinable scalar callees at
-`-O2`/`-O3`, with no normal-path read: write through the address, then raise
-from a checked return conversion, while the protected body returns directly.
-This terminal error shape exposes GCC's dead-store deletion without a barrier.
-Also cover explicit `raise`, and check declaration barriers on locals, named
-parameters and lambda parameters. Volatility alone is insufficient.
-Cover production/optimized builds and `async.Receiver:wait`,
-not just validation/thread receives. This supported GCC/Clang guarantee
-(including Windows Clang/MSYS2) retains the ISO C 6.7.3p6 unqualified-access
-caveat, not strict ISO-C safety; see
-[recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
-
-The general retained-write rule for every eligible address-exposed kind
-belongs to the owning coder layer as real native programs
-(`spec/fixtures/error_handling/aggregate_recovery.titan`, built at `-O2` and
-`-O3` with `-Werror`), not only generated-C text. Cover C integer, floating,
-enum, and pointer homes; structs, unions, fixed, nested, typedef, and
-inline-field arrays; the full FAM extent; named and supported lambda
-parameters; and the const/captured and non-address-exposed exclusions. Mutate
-through the actual address, then raise explicitly, through a checked-return
-conversion, or from C before a normal return; recovery must see the current
-writes, including after an earlier protected assignment. For both exact GC
-forms (`TValue` and `Udata *`), store a fresh real userdata, raise, force a
-full GC during Lua close, and require the stored object intact; also clear
-the old value before raising and prove the old object was finalized during
-close. Keep the foreign writer's own root alive through error handling and let
-close truncate it before the collection, so the caller's pre-close
-publication is what preserves the value; a globally rooted sentinel proves
-only classification. Cover normal-return root commits and an early failure
-before a later defer-tail GC declaration. A generated-C oracle that pins
-publication at the three landing sites is structural evidence, not an
-executed run of the rare re-armed-close and unwind-guard landings, and these
-Linux receipts claim no new Clang, LTO, or platform qualification.
-
-Captured locals cannot supply mutable pointer storage; keep consuming decode in
-its owning function, or use a by-value `foreign *Slot` pointer to an array
-cell. Lua code in an independent state cannot call `decode_message`; use an
-ordinary test-support entry that asserts the borrowed lightuserdata slot.
-Attachment-count cases that must cross the scope's inline scratch, first heap
-spill, and spill growth derive their counts from
-`TITAN_TRANSFER_INLINE_RESOURCES` (`transfer_native.h`) instead of literals,
-so a capacity change cannot silently turn a spill case into an inline one.
-
-Exercise `run_with_cleanup`'s optional third argument through public behavior:
-require an unused/open/unbound same-Runtime `prepare_native_retirement`
-capability and reject generic prepared waits. Check revalidation after
-allocations, pre-exposure native activation/admission and rollback, traced owner
-rooting, and body/peer/alias exclusion outside owning cleanup. Only its exact
-cleanup wait may use the final epoch; generic/nested cleanup has no privilege.
-The preaccepted terminal gate must survive root/cleanup-entry failure and a
-missed await. Preallocation is not proof ordinary entries cannot allocate.
-Check the bound cleanup wait attaches once to an already-armed barrier, handles
-retirement before suspension, and rejects unbound/ordinary waits. Logical close
-must reject later waits without dropping unfinished native ownership; native
-callback 0/1/negative cases must preserve the stated admission/retirement owners.
-Prove the domain notifies only after monotonic retirement readiness: retirement
-after notification cannot return pending and rely on a second wake to arrive.
-
-Retain required Thread proxy ordering: all terminal outcomes follow actual
-child OS-thread finish, including pre-start cancellation, delayed child cleanup,
-and failures before Task-root/cleanup bodies begin. Test the preaccepted native
-completion barrier, not just a later cleanup callback. Exercise send, receive,
-normal join, and the proxy cleanup join on each path; generic bridge tests are
-not thread-adapter evidence.
-Check reasonless native cancellation requires no accepted child cancellation
-and follows ordinary forwarding at the exact bound cleanup wait, or a pending
-terminal outcome whose cleanup failed; never normal body/prearm. Preserve host
-outcome and accepted child reason. Cover the nil cleanup reason from a failed
-proxy body, which becomes the default `simple("cancelled")` request, and the
-DEFAULT outcome degradation, which surfaces to the host as
-`simple("cancelled")`. Exercise a first explicit proxy cancellation that arrives
-while native retirement is pending: it overrides a pending success/error, while a
-later cancellation replaces neither that first reason nor an accepted child
-reason and terminal status still follows the OS join. A cancellation request
-short of a terminal proxy is not a retirement oracle. Inject negative
-retirement: retain the same
-nonterminal Task, native token/context, target, pending operation and Runtime.
-The driver error must report `async.native_retirement.retire` and its native
-code; direct later `async.loop()` retries without re-registering or resetting
-epochs, including an already-delivered wake. Repeated failure retains ownership
-again. This generic recovery contract is authored; assert it from observed
-behavior rather than assuming the failing path has been exercised.
-Check unreferenced `external_wake_t:reserve` versus active-wait sole-loop liveness,
-cancellation, stale wakes, and shutdown. Preserve the complete aggregate root set and
-Runtime-bound cleanup inside `support.runtime`; a runtime filter never reduces
-the build roots. Leave new evaluations unscored until actually run, and
-distinguish source/provider revisions even though both ownership snapshots use
-ABI 2 (language-server API 1; other existing versions unchanged).

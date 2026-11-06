@@ -1399,6 +1399,39 @@ function. Each settlement becomes one queued protected notification;
 error}` only for errors no caller can receive; it never stands in for a
 request's failure callable.
 
+A complete page module that starts one host request:
+
+```titan
+local browser = import "browser"
+
+function main(args: {string}): integer
+  local report = browser.binding("report") -- the callbacks use it after main
+  local fetch = browser.binding("fetch_text")
+  defer fetch:close() -- start invokes the binding synchronously
+  local done = browser.callable(function(body: string)
+    browser.call_void(report, {browser.Argument.is_bytes("loaded " .. body)})
+  end)
+  local failed = browser.callable(function(message: string, thrown: browser.JSHandle)
+    thrown:close()
+    browser.call_void(report, {browser.Argument.is_bytes("failed " .. message)})
+  end)
+  browser.start(fetch, {browser.Argument.is_bytes(args[1])}, done, failed)
+  return 0
+end
+```
+
+Only this exact exported `main(args: {string}): integer` makes a page image;
+`main()` is an ordinary library function, so `--exe` fails. `browser.start`
+takes two `Callable`s from `browser.callable`, never bare functions; keep its
+returned `Request` only to cancel or close it. The success parameters match
+the host promise's resolution: one value here (a `Uint8Array`), `undefined`
+for none, or a dense Array for several. Main's `defer`s run before the
+page's later `drain()` delivers the outcome, so leave open what the callbacks
+use; `dispose()` retires it. A colon-declared method is not a field value: for
+`function Session:on_done(body: string)`, `session.on_done` is a field lookup
+and fails to typecheck. Pass `browser.callable(session:on_done)` (a bound
+method) or a lambda.
+
 ## Instance lifetime
 
 The generated image is persistent. `initialize()` runs module initializers but

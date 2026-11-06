@@ -167,14 +167,27 @@ Only a call may be used as an expression statement.
 
 Type words `boolean`, `integer`, `float`, `string`, and `value` are contextual
 identifiers. Top-level declarations and members accept `AnyName`, including
-reserved words; locals/parameters use nonreserved `Name`. Ordinary functions,
-methods, lambdas, and the module initializer bind readonly `L` (current Lua
-state) and `M` (current module). `M.member` and body-local types `M.Type` select
-module declarations despite local/generic shadows, including keyword-named
-members; `M as foreign *Udata` exposes the borrowed module pointer. The cast
-needs the `Udata` declaration: add `foreign import "titan/ffi.h"` to the module
-that writes it. Foreign functions receive neither builtin. The readonly builtin
-`ffi` may be shadowed by ordinary declarations.
+reserved words; locals/parameters use nonreserved `Name`. The reserved words
+are:
+
+```text
+and as break case catch const defer do else elseif end false finally for
+foreign function goto if import in interface is local nil not or owned raise
+record repeat return then true type union until when while
+```
+
+A record field or C struct member may be named `owned` or `type`, and
+`response.owned` parses, but `local owned = ...` and a parameter named `type`
+are syntax errors: rename the local (`owned_ptr`), not the member.
+
+Ordinary functions, methods, lambdas, and the module initializer bind readonly
+`L` (current Lua state) and `M` (current module). `M.member` and body-local
+types `M.Type` select module declarations despite local/generic shadows,
+including keyword-named members; `M as foreign *Udata` exposes the borrowed
+module pointer. The cast needs the `Udata` declaration: add
+`foreign import "titan/ffi.h"` to the module that writes it. Foreign functions
+receive neither builtin. The readonly builtin `ffi` may be shadowed by
+ordinary declarations.
 
 ## The type vocabulary
 
@@ -1326,6 +1339,16 @@ file-private. Contributors are not importable submodules. The main declarations
 come first, contributor basenames follow deterministic numeric-byte order, and
 the main's optional initializer comes last. Do not use filename order as a
 hidden dependency mechanism.
+
+File names versus logical names: each dot of a logical name becomes a
+directory under the `--tree` root, so `ring.main` is never found in a file
+named `ring.main.titan`.
+
+| Item | Right | Wrong |
+| --- | --- | --- |
+| source of logical `ring.main` | `ring/main.titan`, or folder main `ring/main/main.titan` | `ring.main.titan` (`source module 'ring.main' not found`) |
+| relative `foreign import "ring.h"` in that source | `ring/ring.h`, beside the importing file | `ring.h` at the tree root (`ring.h:file not found`) |
+| `import` string and `titanc` operand | `import "ring.main"`, `titanc ... ring.main` | `"ring/main"` or `ring/main.titan` (invalid logical module name) |
 
 ### Replacing compiled dependencies
 

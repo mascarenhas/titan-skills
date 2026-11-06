@@ -60,6 +60,21 @@ borrowed values must remain alive through the callback libuv promised, and a
 multi-shot source needs exactly the buffering/waiter state promised by its
 public semantics.
 
+Timing contrast:
+
+- **Before the call returns:** `uv.walk` and, on Windows, TTY
+  `uv.read_start`/`uv.tty_set_mode` are synchronous public calls whose
+  callbacks run inline; a callback error is rethrown after native return.
+- **Inline continuation:** a loop callback that settles its operation's exact
+  await capability (`Completion:resolve`/`reject`) resumes the suspended Task
+  directly, so copy callback-only results and finish native cleanup first.
+  Settlement during registration continues after registration returns;
+  settlement from another running Task or a finalizer is queued.
+- **Deferred:** `Task:resume(token)` and subscription `publish`/`fail`/`finish`
+  wake the waiting Task later and never enter it inline. `Task:resume` serves
+  only an explicit `async.suspend(token)`; it is not a native operation's or
+  subscription producer's capability.
+
 Evidence: `doc/language/async-io.md`,
 `doc/implementation/libuv-runtime.md`, `titan/async.native.titan`, and issue #82.
 
