@@ -640,6 +640,23 @@ driver: item order, a non-string error value surfacing unchanged, skipped
 items, an empty range, a nested call, and a full collection inside every
 callback.
 
+### F3 — C scalar store-back (`titan-programmer` + `titan-ffi`)
+
+Supply `typedef struct Stats { int hits; size_t bytes; unsigned char flags; }
+Stats;` and ask for a minimal module `stats_update` whose `record(stats:
+foreign *Stats, size: integer)` adds one to `hits` and `size` to `bytes`,
+`set_flag(stats, bit)` sets one bit of `flags`, and `snapshot(stats)` returns
+both counters, with a short explanation of how each update is typed and
+checked. A Titan operand puts a C-mode result in `lua_Integer`'s C type,
+arithmetic drops typedef identity, and a store never converts one C integer
+type to another implicitly, so `stats.hits = stats.hits + 1` and its `size_t`
+and `unsigned char` siblings are rejected. Accept Titan arithmetic followed by
+a range-checked store, or a written C cast whose C conversion the answer
+states. The module and header must compile unchanged. The judge's driver,
+built through a second `--tree` root with `-I` naming the answer's directory,
+must observe two hits, fifteen bytes and flags 9, and overflow behavior (a sum
+past `INT_MAX`, bit 8, a negative byte count) that matches the explanation.
+
 ## Frontmatter-only routing set
 
 Read only each skill's YAML `name` and `description`. Answer `none` when no
@@ -1297,6 +1314,159 @@ delivered files, per-round `runs.json`, `smoke/`, `reference/`, `driver/`,
 `/tmp/titan-370/logs` (`issue370-*.log`, `eval/*.omp.log`), with
 `/tmp/titan-370/examples` and `/tmp/titan-370/mechanical`. They are archived
 as the `issue-370-validation-archive` release on mascarenhas/titan.
+
+### Issue #369 evaluation (2026-11-06)
+
+titan#369 adds the two follow-ups that the #366 re-evaluation proposed. In
+`titan-async`, one sentence at the end of the
+`drain_pending()`/`drain_if(predicate)` paragraph states the follow-on batch
+rule and links to it under "Domain adapters". Luna's round-3 A1 answer had
+stopped reading about 800 lines before that rule. In `titan-ffi`, "C operator
+mode" adds a two-line store-back example for a C `int` field: the rejected
+`response.fills = response.fills + 1` with its diagnostic, and the accepted
+`response.fills = (response.fills as integer) + 1`. The surrounding text says
+that a C-mode arithmetic result drops typedef identity, that a store never
+converts one C integer type to another implicitly, and that a
+`foreign function` body types the literal `1` as C `int`. The new case is F3.
+
+The evaluated cartridges were `issue-369-skills-pointers` at `a662dcdc`, based
+on `b5bef05`, exported read-only. Every added statement was checked against
+titan master `c6ae114b`:
+
+- the drain rule against `Watcher:drain_notifications` and
+  `Watcher:map_notification` in `fs.native.titan`, "One-to-one drain mapping"
+  in `filesystem-library.md`, and the watcher passage of `async-io.md`;
+- the example by compiling both lines verbatim with the session SDK (titan
+  0.6.0-1 from `c6ae114b`, validation profile, Linux x64, gcc 16.2.1). The
+  rejected line reports
+  `type error: types in assignment do not match, expected foreign int but found foreign long long`
+  twice, at columns 28 and 11. The accepted line runs, and at `INT_MAX` its
+  store raises `numeric value is outside the range of foreign int` and leaves
+  the field unchanged;
+- the surrounding text against "Promotions and mixed Titan operands" in
+  `c-ffi-expressions.md` and compiled controls. An `int` to `long long`
+  declaration, a `size_t` sum (`unsigned long long`), an `unsigned char` sum
+  and an `int` element sum are rejected. The Titan form for `size_t` and for
+  the element, a `long long` field sum and a `foreign function` body sum
+  compile.
+
+The A1, H1 and F1 rubrics were checked against the same tree before scoring,
+because the #366 source check once corrected A1's. A1's timing cases match
+`uv/CONTRACT-NOTES.md` (synchronous `walk`, inline Windows TTY
+`read_start`/`tty_set_mode`) and "The callback/continuation model" in
+`async-io.md`: callback settlement enters the Task directly, while
+`Task:resume` and producer notifications are deferred. Its caller rule matches
+`standard-library-fs.md` (one polling Task per Watcher, concurrent mutation
+coordinated externally). H1 matches "C storage after a caught error" in
+`c-ffi-expressions.md` and the `titan-tester` five-part matrix, and F1's export
+classes match `ffi.md`. No rubric needed a change; between #366's check at
+`843b446e` and `c6ae114b` only the #370 documents changed.
+
+Each answer came from a fresh `omp -p` process with the #366 and #370 command
+shape: high thinking, only `read,write`, `--no-skills --no-context-files
+--no-rules --no-session --no-extensions --no-prewalk --no-lsp --no-title`,
+`--approval-mode yolo`, `--max-time 20m` and the memory-off overlay, one serial
+queue per provider. The prompts were the preserved #366 prompts (A1 from round
+3), with only the cartridge paths changed. A smoke prompt reported no injected
+memories for any model; a DeepSeek control without the overlay reported one.
+The workstation block remained, so the runs were memory-free but not completely
+hermetic. All nine scored processes exited 0 and wrote an answer; none was
+retried. Delivered modules were compiled unchanged with the session SDK: H1 as
+native `--test` executables that ran, F1 with `-c`. A1 is review-only.
+
+| Case | Before (#366; A1 from round 3) | DeepSeek | Haiku | Luna |
+| --- | --- | --- | --- | --- |
+| A1 | DeepSeek Pass. Haiku Partial: names only `uv.walk` and never calls `Task:resume` deferred. Luna Partial: discards retired-owner events; it read `titan-async` only to line 903. | Pass: walk/TTY explicit, the inline continuation stated as a sequence, publication and `Task:resume` deferred; the follow-on batch maps the retired registration's events and leaves a live-only batch buffered. | Partial: walk/TTY explicit and the follow-on batch mapped whole, retired-owner events included; omits the inline continuation and the `Task:resume` deferral. It also adds Task-side state so a detached batch survives poll cancellation, which the real `poll` does not promise. | Partial: maps every follow-on event in callback order, the retired registration's included; walk/TTY and the `Task:resume` deferral explicit; omits the inline continuation. |
+| H1 | DeepSeek Partial: `response.fills = response.fills + 1` fails typecheck. Haiku Pass. Luna Partial: matrix omissions. | Fail: `local owned = response.owned` is a syntax error (the #353/#332 baseline error). A rename-only copy compiles and passes 6/6. No C read-modify-write. | Partial: 5/5 native cases; the matrix omits part 2 (eligible kinds and exclusions), which its #366 answer named. | Partial: 2/2 native cases; the matrix omits optimized programs, kinds and exclusions, Lua-close GC and the truncated writer root, as in #366. |
+| F1 | DeepSeek Pass. Haiku Pass. Luna Partial: `recovered[0] = recovered[0] + 1` fails typecheck. | Pass: five modules in `examples/` compile with `-c`, as flat names or as `examples.*`; content complete. | Partial: `local info = M.counter_info(start)` forces an `Info?`, so `info == nil` fails typecheck; `local info?` compiles. It read `titan-programmer` only to line 303, before that Option rule. | Pass: the flat module compiles with `-c`; the only Titan-to-C store is `context[0] = n as foreign int`. Content complete. |
+
+Did the two targeted failures recur?
+
+- **Retired-owner events (A1):** no. All three answers take the complete
+  follow-on batch and map the retired registration's events. Luna's wording
+  follows the new sentence ("Take the complete follow-on batch with `drain_if`
+  and map every event in callback order, including events referring to the
+  registration retired in this batch"). Print-mode logs keep only the final
+  message, so whether it read on to Domain adapters is unknown.
+- **C store-back (H1, F1):** no answer stores a C-mode sum back into a C field,
+  but no H1 or F1 answer writes a C read-modify-write at all: their C stores
+  take Titan values (`out.code = 11`, `context[0] = n as foreign int`). These
+  runs therefore show only that the error did not recur. F3 below measures the
+  example directly.
+
+The remaining failures are model-answer errors in material this issue did not
+change, recorded and not fixed here:
+
+- **Inline operation continuation (A1 Haiku and Luna):** both omit it, and
+  Haiku never calls `Task:resume` deferred. #366 round 3 had Haiku and Luna
+  stating the continuation, so the timing list still varies between runs.
+- **`local owned` (H1 DeepSeek):** the #353/#332 baseline syntax error
+  returns, beside the reserved-word list that #366 added to `titan-programmer`.
+- **Retained-write matrix (H1 Haiku and Luna):** Haiku drops part 2, which its
+  #366 answer named; Luna omits parts 1 to 4, as in #366.
+- **Forced Option (F1 Haiku):** `local info = M.counter_info(start)` forces an
+  `Info?`, so `info == nil` does not typecheck. The rule sits at
+  `titan-programmer` line 392; Haiku read only to line 303.
+
+F3, added for this issue, isolates the store-back. Each model answered it once
+with the before cartridges (`b5bef05`) and once with the after cartridges
+(`a662dcdc`), in the same command shape. The judge compiled each module
+unchanged and built its own driver against it through a second `--tree` root,
+with `-I` naming the answer's directory so that both modules import the same
+`stats.h`. The reference solution in `judge/F3/reference` passes the driver.
+All six F3 processes exited 0 and wrote an answer; none was retried.
+
+| Model | Before (`b5bef05`) | After (`a662dcdc`) |
+| --- | --- | --- |
+| DeepSeek | Pass: typed `integer` locals, Titan arithmetic, checked stores. | Pass: `(stats.hits as integer) + 1` and its siblings, plus a bit-range guard; it quotes the new diagnostic. |
+| Haiku | Pass: typed `integer` locals and a bit-range guard. | Pass: the `as integer` form; it cites the new example. |
+| Luna | Pass: the `as integer` form. | Pass: the `as integer` form. |
+
+Every module compiles, and the driver sees two hits, fifteen bytes and flags 9.
+Each overflow probe (a sum past `INT_MAX`, bit 8, a negative byte count) raises
+and leaves its field unchanged, as each explanation says. F3 therefore does not
+separate before from after: asked directly how each update is typed, every
+model already chose Titan arithmetic from rule 9 and "Choose before the
+operation". The #366 store-back failures were slips inside long answers about
+other subjects. Two after answers cite the new example, so it is found and
+applied; F3 does not show that it was needed.
+
+This is **not an all-pass evaluation**. Neither targeted failure recurred, and
+no remaining failure traces to the two additions, so the one allowed revision
+was not used. No answer was repaired before scoring; the rename-only and
+`local info?` copies are diagnostics, and the as-delivered failures stand.
+
+Limitations:
+
+- Each model answered each case once, and answers vary between runs: H1 Haiku
+  and F1 Haiku lost points they had in #366, and A1 Haiku and Luna dropped the
+  inline continuation that their #366 round-3 answers stated.
+- Print-mode logs keep only the final message, so the read-only-cartridges
+  instruction and the reading ranges rest on each answer's disclosure.
+- No H1 or F1 answer exercised the store-back, and F3 is one focused case.
+- Everything ran on Linux x64 with gcc 16.2.1, so there is no macOS, Windows,
+  Clang or LTO claim.
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 197 relative link targets and 68 anchors resolve in the skills tree,
+  including the new `#domain-adapters` pointer, and so do the two in-file
+  anchors of this file.
+- All 102 `titan` fences parse. The new example is a `text` fence because its
+  first line is intentionally invalid.
+- The reserved-word list still equals the 38 keywords in `lexer.lua`.
+- Both example lines were extracted verbatim from the cartridge. The accepted
+  line ran in a program; the rejected line's module reports the quoted
+  diagnostic. With the controls above, that is 12 checks.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-fu/eval` (`prompts.json`, case prompts, answers
+and delivered files, `runs.json`, `smoke/`, `F3/` with its before and after
+runs, `judgments.md`, `diagnostic/`, `run_eval.py`, `judge-run.sh`, the
+memory-off overlay and both read-only cartridge exports), `/tmp/titan-fu/judge/F3`
+(reference, driver, judge script) and `/tmp/titan-fu/logs` (`issue369-*.log`,
+`eval/*.omp.log`), with `/tmp/titan-fu/examples` and `/tmp/titan-fu/mechanical`.
 
 ## Mechanical gates
 
