@@ -387,11 +387,12 @@ Require corrected code and exact explanations of:
   guarantee includes Windows Clang/MSYS2, with the ISO C 6.7.3p6 caveat for
   unqualified access, not strict ISO-C safety. The caller never wraps the
   slot in a fallible ordinary helper;
-- the scalar guarantee is distinct from aggregate byte spills: an aggregate
-  whose mutable address is passed directly to a C or ordinary Titan call has
-  its spill committed only after that call returns normally, so recovery sees
-  a completed callee write but not the partial writes of a callee that raised.
-  Scalar tests do not supply aggregate coverage;
+- the retained-write rule also covers every already-eligible address-exposed
+  aggregate, fixed C array, exact `TValue`, and `Udata *` local: a callee's writes
+  remain visible even when it raises. GC-bearing homes are published into their
+  existing Lua roots at error landings before close/finalizer/GC work; the
+  foreign writer still owns its rooting interval. Scalar toolchain receipts do
+  not establish new aggregate/GC, Clang, LTO, platform, or rare-landing evidence;
 - native C-only consuming `transfer.discard_message` (never raw `ffi.free`),
   no-Lua endpoint release callbacks surviving source-state close, last-Receiver
   drain pinning, and why manual HTTP/TLS/WebSocket/TCP handoffs still need
@@ -559,6 +560,60 @@ unfiltered-every-owner versus filtered-at-least-one-case rule, and a stdout-only
 audit that keeps stderr and failing status. Reject invented
 `TITAN_STDLIB_BROWSER_TEST_IMAGE*` variables or a resurrected size budget.
 
+### W1 — browser JavaScript bindings and a persistent instance (`titan-programmer` + `titan-ffi`)
+
+Ask for one complete browser-target module and its page script. The module
+publishes two closures that share one mutable counter to a JavaScript
+`publish` binding, calls a `measure(bytes)` binding that returns an integer,
+and starts host work that may never settle with a one-string success callable
+and its failure callable. The page imports the generated image, initializes
+and runs it, calls both closures, and disposes it. Require
+`import "browser"`, `browser.callable` on the original closures with fixed
+scalar signatures, `Argument` constructors, `call_integer`, a detachable
+`start` with an exact `function(string, JSHandle)` failure callable, explicit
+`close()` of handles, `BigInt` integers (`5n`) in both directions, resolved
+result Arrays, the default `create(options)` import without a separate
+loader, and `await instance.dispose()` in `finally`. Also ask what happens
+when a binding calls `instance.call` synchronously inside `try/catch`, and
+how a JavaScript-Titan reference cycle is released. Require a promise
+rejection with `TITAN_BROWSER_REENTRY` that the binding's `try/catch` does not
+see, `notify`/`drain` or a handled promise as the alternative, and explicit
+release because neither collector traces the other heap. Reject a
+synchronous reverse call, Number coercion, a raw factory, a retained form for
+forever-pending work, `onNotificationError` as the rejection path, or an
+invented scheduler, native placeholder, or raw-pointer API. The module must
+compile with `titanc --target browser` against the matching installed browser
+SDK.
+
+### H1 — retained writes after a raise (`titan-programmer` + `titan-ffi` + `titan-tester`)
+
+Review a module that lets C fill an automatic response struct with an owning
+pointer through a mutable address, then calls a Titan helper that raises while
+a `defer` releases the pointer, and a proposal to move the struct behind a
+pointer local or heap box "so recovery sees the C writes". Add an exact
+`TValue` out-parameter variant that stores a fresh object before raising and
+one that clears it. Require the retained-write rule (the struct is its own
+stable home, so the `defer` releases exactly once and nothing rolls back),
+rejection of the workaround, root publication of the GC forms before recovery
+can close frames, run `__close` or finalizers, or collect, collectability of a
+cleared old object, the foreign writer's continuing rooting obligation, and
+the raw-alias, asynchronous-write, and backing-lifetime limits. Then ask for
+the native regression plan: real `-O2`/`-O3` native programs, every eligible
+kind and exclusion, fresh-object survival and old-object finalization during a
+full GC in Lua close with the foreign writer's own root truncated, and no new
+Clang, LTO, or platform claim. The repaired module must compile natively
+against the matching installed Titan.
+
+### J3 — JSON depth on every target (`titan-programmer` + `titan-json` + `titan-tester`)
+
+Review a change that clamps browser `json.encode` depth to 103 and adds
+browser-only boundary tests at that constant. Require the configured
+`max_depth` (default 32) on native and browser targets with no target writer
+cap, shared boundary tests at the configured depth, engine stack exhaustion as
+a fatal engine failure rather than a `json.Error`, and decoding's own depth and
+shared PEG matching-stack policy. Reject the clamp and the browser-only
+constant.
+
 ## Frontmatter-only routing set
 
 Read only each skill's YAML `name` and `description`. Answer `none` when no
@@ -593,8 +648,11 @@ these queries:
     a slice's `compiler_root` in `titan-config.local.lua`, and query hover,
     definition, and `titan/workspaceStatus` on `.titan` files;
 24. change the compiler's completion hole transform and detached descriptor
-    serialization in `titan-compiler`; and
-25. configure `rust-analyzer` in omp `lsp.json` for a Rust repository.
+    serialization in `titan-compiler`;
+25. configure `rust-analyzer` in omp `lsp.json` for a Rust repository;
+26. expose a Titan closure to JavaScript with `titan.browser` and await its
+    result from a web page; and
+27. add `browser.tests` cases for a new `titan.browser` request form.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -612,6 +670,8 @@ selects **programmer + language-server** (not `titan-completion`, which owns
 compiler completion internals, and not `titan-json` merely because `lsp.json` is
 JSON); query 24 selects **completion** (adding programmer only when `.titan`
 files are read or edited); query 25 is a negative control and selects `none`.
+Queries 26 and 27 select **programmer + ffi**, adding **tester** for 27; the
+bridge's promises are JavaScript, not Titan Tasks, so neither selects async.
 
 ## Recorded baseline and post-change results
 
@@ -871,6 +931,79 @@ cartridges for language guidance. Its answer, exact sources and command/status
 receipt are retained as `eval/349-metamethod-answer.md`,
 `eval/349-metamethod-compile-results.json` and
 `logs/349-metamethod-eval-compile.log` in the issue's validation evidence.
+
+### Issues #353/#332 evaluation (2026-11-06)
+
+The evaluated cartridges were `issue-353-skills` at `26f85b10`, based on
+`e6328d3e`. They integrate the removed browser JSON writer cap, persistent
+image lifecycle, browser-only JavaScript bridge, original-callable rooting,
+retained-write recovery, and the owning test layers. No cartridge changed
+during evaluation. Before scoring, this file's TH1 oracle was corrected from
+the obsolete aggregate rollback rule to the maintainer-approved retained-write
+and pre-close root-publication rule; this evaluation file was not an allowed
+input.
+
+Each case ran in a separate `omp -p` process with
+`opencode-go/deepseek-v4.1-flash`, high thinking, only `read,write`, and
+`--no-skills --no-context-files --no-rules --no-session --no-extensions
+--no-prewalk --no-lsp --no-title`. Each process received only its named
+cartridge paths and was forbidden to compile or read manuals, source, tests,
+repository instructions, history, or this file. Routing received only the
+13 YAML name/description pairs. Answers disclosed injected Mnemopi memories
+and, where noticed, project/workstation metadata: the allowed reads were
+cartridge-only, but the contexts were not completely hermetic.
+
+Ten processes exited 0. TH1 reached its 20-minute deadline after writing its
+answer and exited 1; its content is available, but it is not a clean completed
+run. The serial queue stopped there. J1, which had not started, then ran alone;
+no successful case was restarted. Exact commands, statuses, and durations are
+in `evaluations/final332/runs.json` in the workstream evidence directory
+(`/tmp/titan-353` for this run).
+
+| Case | Observed result | Assessment |
+| --- | --- | --- |
+| Routing | The new browser queries 26/27 select programmer + ffi, adding tester only for 27, without async. Query 23 omits the oracle's programmer cartridge; 24 adds it while assuming the compiler source is Titan; 8 conservatively adds ffi to the public callback/adapter route. | Not 27/27 exact. The two new bridge routes are correct; preserve the other mismatches rather than treating the whole routing set as green. |
+| W1 | The unchanged counter module compiles against the composed browser SDK. Its original page runs on Node 26, prints `counter ok [ 3n ]`, preserves shared captures and result Arrays, and disposes a never-settling detachable request. | Pass. The answer also gives strict BigInt, the exact failure callable, promise reentry rejection, explicit release, and cross-heap cycle rules. No browser-page engine run of this evaluator page is claimed. |
+| H1 | The answer explains retained writes and GC publication, but the complete fixture fails parsing at `local owned` (`response_case_test.titan:18`). Its plan also omits the requested optimized/all-kind/exclusion matrix and full GC during Lua close after truncating the writer's root. | Fail as written. The missing test requirements are explicit in the allowed tester cartridge; this is an evaluator omission, not absent reference material. |
+| J3 | The depth/default32/no-target-cap contract is correct. Its complete module compiles and passes 8 cases natively and under Node/Chromium. Its above-cap tests nevertheless catch and merely log every non-JSON error. | Partial: the boundary examples execute, but their broad catch is not valid evidence for fatal engine-failure propagation and can hide an unrelated runtime error. Do not advertise it as an exhaustion test. |
+| FFI13 | The review corrects the prose contracts. Its purported page module has `main()` rather than the standalone signature, so image compilation rejects `--exe`. A separate library compile then rejects `self.on_fetch_success`/`self.on_fetch_failure` and the missing nominal Callable arguments to `browser.start`. | Fail as written. Method binding and explicit callable construction are not interchangeable; no repaired answer is substituted. |
+| FFI14 | Correct stable-home/no-rollback rule; pre-close publication and clearing; writer rooting; raw-alias, asynchronous-write and backing-lifetime limits; scalar versus aggregate/GC toolchain evidence. | Pass, review-only. No module or new execution claim. |
+| F1 | Both delivered dotted filenames fail logical module lookup. With only the directory layout corrected and source/header bytes unchanged, both complete module bodies compile with `-c`. | Fail as delivered; diagnostic compile passes. The export classes, unsafe boundary, ownership and Map rules are otherwise explained. No runtime behavior of those library functions is claimed. |
+| T1 | The unchanged production/test pair compiles and runs 21/21 cases: one parent and twenty isolated named children. Discovery, cleanup, filtering, exit statuses and Runtime modes match the cartridge. | Pass. |
+| A1 | Root ownership and complete follow-on batches are correct, but the answer omits the required synchronous `uv.walk`/Windows-TTY callback exceptions and says subscription publication never enters a Task inline. | Fail: it misses the explicit immediate-operation-continuation versus deferred public `Task:resume` distinction. Both rules are in the supplied async cartridge. |
+| TH1 | A substantial answer exists, with the packet/retirement fundamentals and retained-write publication, but the process expires at 1200.278 s. It omits parts of the late-cancel/admission rubric and writes a guessed `m:init()` while saying the exact spelling is unknown. | Incomplete/deadline, not a clean pass. No complete module or execution is claimed, and no rerun conceals this result. |
+| J1 | Three unchanged complete programs compile and exit 0: union/record round-trip plus null-tail identity, a const integer Array schema, and public custom construction with a private field. Exact decode shape, schema identity, null policy, constructor rules and erased leaves are explained. | Pass. |
+
+This is **not an all-pass evaluation**. Model-answer errors remain separate
+from product regressions and cartridge gaps. The originals are preserved; no
+API or example in the cartridges was changed to accommodate an incorrect
+answer. The path-normalized F1 diagnostic is explicitly separate from its
+as-delivered failure.
+
+Mechanical and documentation evidence:
+
+- All 13 frontmatters have exactly `name` and `description`; 186 relative file
+  targets and 57 anchors resolve in the composed tree.
+- All 98 `titan` fences parse with the current compiler. This is grammar
+  evidence, not a claim that all fences were typechecked.
+- Ten unchanged complete representative modules cover all nine cartridges
+  containing Titan fences. Three standalone programs run, and the tester pair
+  passes five native cases. The other four cartridges contain no Titan fences.
+- Four changed browser documentation examples, extracted verbatim from the
+  language manual and FFI cartridge, compile together and run under Node and
+  Chromium. They exercise exact NUL/0xFF bytes, recovered binding errors,
+  shared captures, decoded result Arrays, explicit release and disposal.
+
+Receipt index: `notes/EVALUATION-FINAL332.md`. Execution logs:
+`logs/final332-evaluator-native.log`, `final332-evaluator-f1-layout.log`,
+`final332-evaluator-j1.log`, `final332-evaluator-ffi13-module.log`,
+`final332-browser-examples.log`, `final332-skills-parser.log`, and
+`final332-skills-representative.log`. Extracted sources, original answers,
+machine-readable command results and mechanical inventories are under
+`evaluations/final332/`. The exercised toolchain is Linux x64, the composed
+Titan candidate `010de910`, Emscripten 6.0.13, Node 26.13.0 and Chrome for
+Testing 156.0.8078.80; these receipts establish no new macOS, Windows, Clang
+or LTO qualification.
 
 ## Mechanical gates
 

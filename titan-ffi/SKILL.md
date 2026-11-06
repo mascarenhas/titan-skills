@@ -1,15 +1,16 @@
 ---
 name: titan-ffi
-description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, or the trusted Lua C API boundary. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, and lifetimes. Do not invoke merely because an implementation is C-backed when no foreign or Lua/C boundary is touched.
+description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, the trusted Lua C API boundary, or the browser-only titan.browser JavaScript bridge. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, lifetimes, and JavaScript bindings and callables. Do not invoke merely because an implementation is C-backed when no foreign, Lua/C, or JavaScript boundary is touched.
 ---
 
 # Titan FFI and Lua escape hatches
 
 Use this skill when Titan code imports a C header, handles a C value, writes a C
-callback, crosses the Lua boundary, dynamically loads Lua code, or touches the
-Lua C API. Titan is a statically typed, ahead-of-time compiler to C. It is not
-Lua with annotations, and neither `value` nor Lua nor C turns off the need to
-design a typed boundary.
+callback, crosses the Lua boundary, dynamically loads Lua code, touches the
+Lua C API, or crosses the browser-only `titan.browser` JavaScript boundary.
+Titan is a statically typed, ahead-of-time compiler to C. It is not Lua with
+annotations, and neither `value` nor Lua nor C turns off the need to design a
+typed boundary.
 
 Load `titan-programmer` first for core language rules. Also load `titan-async`
 when a native callback participates in asynchronous ownership, and
@@ -55,6 +56,7 @@ Before writing code, classify the job:
 | Configure weak maps, finalizers, or the collector | `local gc = import "gc"`, not raw metatable/Lua-stack code |
 | Perform a stack-oriented `lua_*` operation | avoid in application code; it is a narrow audited standard-library exception, described below |
 | Wrap libuv or another async callback API | use this skill for the C surface and the async skill for Task/Runtime ownership; cancellation does not end native ownership |
+| Call JavaScript from Titan, or let JavaScript call a Titan closure (browser target) | `local browser = import "browser"`; see [Browser JavaScript bindings](#browser-javascript-bindings-titanbrowser) |
 
 Do not add a C forwarding function merely because C looks more familiar. If
 Titan can spell the operation through the imported header, keep the call,
@@ -758,12 +760,30 @@ array is not assignable or returnable.
 
 Automatic structs/unions/fixed arrays have ordinary C block lifetime and no
 escape analysis. They also cannot transitively contain GC-bearing FFI storage.
-The compiler spills automatic aggregate bytes across catchable Titan calls so
-mutation completed before a caught error stays visible; this does not extend
-lifetime. Writes made through a raw pointer that C retained (callbacks, other
-threads, an ordinary Titan callee's `*void` context) are untracked: recovery
-reloads the last Titan-committed bytes over them. If a `defer`/`catch` must see
-such writes, use the storage only through a pointer local.
+When an eligible local or parameter's mutable C address is exposed (directly,
+by array decay, through an inline array field or nested subarray, or by an
+exact out-parameter address cast) and recovery reads it, that actual C object
+is its one stable home. Writes that a C or ordinary Titan callee completes
+before raising stay visible to `catch`, `defer`, and later code, for scalars,
+pointers, structs, unions, fixed and nested arrays, and the full automatic FAM
+extent. A caught error is not a transaction that reinstates earlier native
+ownership: do not route a directly tracked out-parameter through a pointer
+local, heap box, or other workaround to dodge recovery. Storage whose mutable
+address is never exposed shows its last completed write. Writes through a raw
+alias that C retained (callbacks, other threads, a retained `*void` context)
+and asynchronous writes are outside this synchronous analysis; keep such
+storage and its dependencies alive through native completion, because a
+pointer view never extends the automatic backing's lifetime.
+
+Exact Lua-internal `TValue` and `Udata *` out-parameters use the same stable C
+home and also keep their existing traced Lua slot. Titan publishes the home
+into that slot after a normal return and, on a raise, before recovery can close
+frames, run `__close` or finalizers, or collect. Clearing publishes nil/NULL, so
+the old object can be collected. A foreign writer still keeps a fresh GC object
+rooted through its whole normal and error-handler handoff; this is not tracing
+of arbitrary C memory. The rule relies on Titan's supported GCC/Clang
+toolchain contract, with ISO C's unqualified-access caveat; see [C storage
+after a caught error](../../../doc/language/c-ffi-expressions.md#c-storage-after-a-caught-error).
 
 ### Source-written owners
 
@@ -1282,6 +1302,149 @@ close. A finalizer must not race an outstanding callback. The async skill owns
 the Runtime/Task protocol; this skill's contribution is to preserve the native
 owner and borrowed-lifetime contract.
 
+# Browser JavaScript bindings (`titan.browser`)
+
+On `--target browser`, `local browser = import "browser"` selects the
+browser-only `titan.browser` module; native builds have no placeholder. It is
+the supported Titan/JavaScript boundary: never cast a closure to an address,
+reach a raw `lua_State *` gateway, use externref, add a synchronous
+JavaScript-to-Titan call, or build a second runtime or compatibility lifecycle.
+
+## Calling JavaScript from Titan
+
+`browser.binding(name)` returns a `JSHandle` for a value the host supplied in
+`create({bindings})`, including `false`, `0`, `null`, and `undefined`; names
+are never global lookups or `eval`. Calls are typed by their result:
+`call_boolean`, `call_integer`, `call_float`, `call_bytes`, `call_handle`, and
+`call_void`, each with a target `JSHandle` and an Array of `browser.Argument`
+(`Argument.is_nil()`, `is_boolean`, `is_integer`, `is_float`, `is_bytes`,
+`is_handle`, `is_callable`). The carrier is an in-process typed ABI, not JSON,
+protobuf, or a transfer packet.
+
+```titan
+local browser = import "browser"
+
+function text_width(text: string): integer
+  local measure = browser.binding("measure")
+  defer measure:close()
+  return browser.call_integer(measure, {browser.Argument.is_bytes(text)})
+end
+```
+
+Integers cross as signed-i64 JavaScript `BigInt` in both directions, even when
+small; a Number is never coerced, so `measure` returns `5n`, not `5`. Floats
+keep their floating tag, NaN, and negative zero. Strings are counted copied
+bytes, not UTF-8 text: a byte result is a `Uint8Array` or a counted
+`{bytes, length}` source. A binding that throws returns normally to the import
+first; Titan then raises `browser.Error`, whose `message` is the copied
+diagnostic and whose `thrown` handle holds the exact thrown JavaScript value.
+Test for it with `error is browser.Error` in a `catch` and `close()` it. A
+Promise is a valid opaque `call_handle` result but not a scalar, byte, or void
+result, and holding it does not handle its rejection.
+
+`JSHandle`, `Callable`, and `Request` are state-owned units with idempotent
+`close()`. Close them explicitly where their lifetime ends; an unreachable
+`JSHandle` also has an allocation-free finalizer, and state close retires every
+remaining unit, including units created by close-phase finalizers.
+
+## Calling Titan from JavaScript
+
+`browser.callable(f)` roots the original Titan closure and its shared capture
+cells in the state registry; it is not a closure snapshot or transfer. The
+function must have fixed parameters and results of nil, boolean, integer,
+float, byte string, `JSHandle`, or `Callable`. Options, open tails, `value`,
+containers, and other nominals are rejected before any call.
+
+```titan
+local browser = import "browser"
+
+function publish_counter()
+  local count = 0
+  local register = browser.binding("register")
+  defer register:close()
+  local increment = browser.callable(function(delta: integer): integer
+    count = count + delta
+    return count
+  end)
+  browser.call_void(register, {browser.Argument.is_callable(increment)})
+end
+```
+
+JavaScript receives a branded wrapper. `await wrapper.call(5n)` and
+`await instance.call(wrapper, 5n)` both resolve the dense decoded result Array
+(`[]`, `[null]`, `[value]`, or every result with trailing nils), here `[5n]`.
+A Promise in that Array stays an opaque element and is not awaited. Wrapper
+`release()`, `Callable:close()`, or disposal ends the root; collecting the
+transient Titan `Callable` does not. Neither collector traces the other heap,
+so a JavaScript object → callable → `JSHandle` cycle needs an explicit release.
+
+Every general call into Titan returns a promise, even for a body with no
+`yield`: an allocation can run abandoned-coroutine cleanup, which switches
+stacks. A call attempted inside a binding or sink rejects with
+`TITAN_BROWSER_REENTRY` as a promise; the binding's own `try/catch` does not
+see it. Await and handle that rejection in the host, or enqueue with
+`instance.notify(wrapper, ...args)` and deliver one detached batch later with
+`await instance.drain()`. `requestDrain` only announces queued work; the bridge
+has no scheduler.
+
+`browser.start(target, args, success, failure)` and `browser.listen(...)`
+admit host work and need both callables; failure has the exact signature
+`function(string, JSHandle)`. The host binding returns
+`{kind: "detachable", promise, cancel?}` for work that might never settle,
+`{kind: "retained", promise, cancel?}` only when settlement is guaranteed, or
+`{kind: "listener", subscribe(emit)}` whose `subscribe` returns an unregister
+function. Each settlement becomes one queued protected notification;
+`Request:cancel()` signals the host but is not retirement.
+`onNotificationError` receives `{kind: "callback" | "cleanup", operation,
+error}` only for errors no caller can receive; it never stands in for a
+request's failure callable.
+
+## Instance lifetime
+
+The generated image is persistent. `initialize()` runs module initializers but
+not `main`; `run(args)` runs `main` once; `main`'s scope `defer`s run at return;
+state finalizers and the final output drain run at `await instance.dispose()`,
+which belongs in `finally`. `create({requireTrace: true})` turns a missing or
+invalid trace map into an ordinary initialization failure before Lua runs;
+`titan-browser-run` sets it unless `--allow-degraded-trace` is given. A failed
+operation keeps its captured Titan error even if its output flush fails or
+disposal interrupts it; each secondary failure is reported once as cleanup.
+
+During state close, synchronous binding calls, copied output, and release stay
+valid until the state's earliest-created registry invalidates last; new
+requests, listeners, and reverse calls are already refused. A trap, abort, or
+completion-protocol failure poisons the instance, and later methods reject that
+saved failure.
+
+## The C SDK and bridge maintenance
+
+C reaches the same boundary through the installed `titan/browser.h`: a checked
+wasm32 slot, response, and completion ABI; the earliest state registry
+(`titan_browser_attach` before `luaL_openlibs` in an independently created
+state); and completion-carrying byte I/O. Each contained entry carries an
+unsigned 64-bit operation identity and exactly one completion record; there is
+no raw native-address or erased-signature call path. Potentially throwing host
+imports fill a response and return normally; trusted adoption, release, and
+state imports never throw. A C pointer is not a root: keep original Titan
+strings, Arrays, and owned buffers on the Lua stack through every borrow with
+the existing save-top, check-stack, push, and `defer` restore pattern.
+
+When changing the bridge itself, keep its ownership invariants: copy byte
+arguments by content (a `Uint8Array` subclass's `slice` may return a view);
+reacquire `HEAPU8` views after any allocation and copy an aliased source
+before growth; keep at most one sink call in flight per stream; capture an
+operation's failure where it occurs; keep promise and listener continuations at
+module scope, capturing only a detachable mailbox cell; and keep the
+Emscripten factory input a fresh null-prototype dictionary, as its code comment
+explains. Once an abort, trap, or protocol failure has poisoned the engine, it
+wins over ordinary import-error conversion: run no C cleanup and write no
+response memory afterwards. Disposal must not retain the Module or instance
+across an awaited host promise, and it saves only the pure `{state, reason}`
+trace snapshot before dropping the Module. See [JavaScript
+bindings](../../../doc/language/standard-library-browser.md), the [loader
+API](../../../doc/language/browser-target.md#the-loader-api), and [browser
+bridge runtime](../../../doc/implementation/browser-bridge.md).
+
 # Lua interoperability
 
 ## The ordinary Lua boundary is already powerful
@@ -1635,24 +1798,25 @@ supply mutable pointer storage; keep consuming decode in its owning function
 pointer to an array cell.
 
 Guard the local immediately after taking ownership with
-`defer transfer.discard_message(raw)`. Recovery-sensitive non-GC scalars whose
-mutable C address is taken have one volatile C home plus a declaration-time
-compiler escape barrier, not a separate snapshot. The empty GNU extended asm
-keeps that home escaped if an ordinary callee is inlined; volatility alone is
-insufficient. Indirect writes before an opaque raise remain visible to catch
-and deferred cleanup, including after an earlier protected assignment.
-`decode_message` itself contains a `catch`/`setjmp` and supported GCC/Clang do
-not inline it. The volatile-home/barrier guarantee is verified with GCC,
-including LTO (production-provider evidence), and with Clang at `-O2`/`-O3`
-without LTO. Clang LTO is not separately verified. This is a supported-toolchain
-guarantee (including Windows Clang/MSYS2), with the ISO C 6.7.3p6 caveat for
-unqualified access to a volatile object, not strict ISO-C safety. See
+`defer transfer.discard_message(raw)`. The guarded pointer local is a
+recovery-sensitive scalar whose mutable C address is taken, so it has one
+volatile C home plus a declaration-time compiler escape barrier, not a
+separate snapshot. The empty GNU extended asm keeps that home escaped if an
+ordinary callee is inlined; volatility alone is insufficient. Indirect writes
+before an opaque raise remain visible to catch and deferred cleanup, including
+after an earlier protected assignment. `decode_message` itself contains a
+`catch`/`setjmp` and supported GCC/Clang do not inline it. For this scalar
+home, the guarantee is verified with GCC, including LTO (production-provider
+evidence), and with Clang at `-O2`/`-O3` without LTO; Clang LTO is not
+separately verified. It is a supported-toolchain guarantee (including Windows
+Clang/MSYS2), with the ISO C 6.7.3p6 caveat for unqualified access to a
+volatile object, not strict ISO-C safety. See
 [recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills)
-for the barrier/LTO assumptions. Aggregates use byte spills instead: passing an
-aggregate's mutable address directly to a C or ordinary Titan call commits its
-spill only after that call returns normally, so a raising callee's partial
-writes are discarded. Untracked-alias/asynchronous C mutation remains outside
-the guarantee.
+for the barrier/LTO assumptions. Other eligible address-exposed kinds,
+aggregates included, use the same retained-write home ([automatic
+storage](#c-arrays-automatic-storage-and-owned-storage)); this scalar toolchain
+evidence is not evidence for those forms. Untracked-alias/asynchronous C
+mutation remains outside the guarantee.
 Never pass the raw slot through an ordinary forwarding helper. Lua code cannot
 call `decode_message` (raw C pointer parameters have no dynamic Lua
 coercion). Stateful decode is not a no-Lua release callback; `discard_message`
@@ -2136,6 +2300,9 @@ searching by analogy.
   actions.
 * `doc/style-guide.md`, especially “Keep Lua and C machinery behind narrow
   audited boundaries,” “Acquire, then defer the close,” and finalizer rules.
+* `doc/language/standard-library-browser.md` and the [loader
+  API](../../../doc/language/browser-target.md#the-loader-api) — browser-only
+  `titan.browser` bindings, callables, requests, errors, and instance lifetime.
 
 ## Implementation documentation
 
@@ -2156,6 +2323,9 @@ searching by analogy.
   and trusted raw-API ledger.
 * `doc/implementation/values-and-gc.md` — roots, stack relocation, barriers,
   native call handoff.
+* `doc/implementation/browser-bridge.md` — the persistent protected gateway,
+  state registry, callable roots, fixed wasm32 layout, and request/byte-I/O
+  ownership of the browser bridge.
 
 ## Compiler and runtime sources
 
@@ -2206,6 +2376,11 @@ searching by analogy.
   transfer's initial 64-byte metadata credit. Transfer still reserves actual
   metadata, alignment, and attachment entries before detachment and derives
   interior pointers only after growth; never add a sizing pass that replays a hook.
+* `titan/browser.browser.titan`, `titan-runtime/titan/browser.h`,
+  `titan-runtime/browser/titan-browser.c`, and the loader
+  `titan-runtime/browser/titan-browser.mjs` with its JavaScript libraries —
+  the browser bridge's Titan API, installed C contract, protected runtime, and
+  JavaScript owner.
 
 ## Focused specs
 
@@ -2221,6 +2396,13 @@ searching by analogy.
   aggregate native Titan suite.
 * GC behavior: `spec/stdlib/titan/peg/tests/gc_test.titan`, the native GC owners,
   and focused runtime GC specs.
+* Browser bridge: the native owner `spec/stdlib/titan/browser/` driven by
+  `spec/fixtures/browser_bridge/integration.mjs` through
+  `spec/coder/browser_bridge_spec.lua`, and the deployment gate
+  `spec/coder/browser_deployment_spec.lua`.
+* Retained recovery writes: `spec/fixtures/error_handling/aggregate_recovery.titan`
+  and `scalar_recovery.titan` through the coder error-handling and
+  stack-object specs.
 
 # Evaluation cases for this skill
 
@@ -2435,6 +2617,61 @@ behavior coverage without private imports or production test hooks.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
 
+## Eval 13 — Browser bindings and a persistent instance
+
+**Prompt:** A browser page lets JavaScript call a Titan counter that shares a
+mutable capture with a second Titan reader, calls a JavaScript
+`measure(bytes)` binding that returns an integer, and starts a host fetch that
+may never settle. A draft passes `5` to the callable, expects
+`await wrapper.call(5)` to return the bare count, calls `instance.call` from
+inside the `measure` binding inside `try/catch`, returns the fetch as
+`{kind: "retained", promise}`, reports the fetch rejection through
+`onNotificationError`, imports the loader separately from the image, and never
+disposes the instance after `run`.
+
+**Pass criteria:** uses `browser.callable` on the original closures and keeps
+their shared capture; fixed scalar signatures; `BigInt` arguments and results
+(`5n`); resolved result Arrays (`[5n]`); explains that the reentrant call
+rejects as a promise the binding's `try/catch` does not observe and uses
+`notify`/`drain` or an awaited, handled promise instead; uses the detachable
+form with mandatory success and exact `(string, JSHandle)` failure callables;
+imports only the generated image's default `create`; awaits `dispose()` in
+`finally`, with finalizers at disposal; closes handles and releases callables,
+including any JavaScript-Titan cycle.
+
+**Fail signals:** Number coercion, a synchronous reverse call, a raw factory or
+separate loader import, the retained form for forever-pending work, relying on
+either collector to break a cross-heap cycle, treating `onNotificationError` as
+the request rejection path, or inventing a scheduler, raw pointer API, or
+native placeholder.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
+
+## Eval 14 — Retained writes after a raise
+
+**Prompt:** A function declares a foreign response struct, lets C fill it
+through `ffi.fill(response)` (the call acquires an owning pointer field), then
+calls a Titan helper that raises; a `defer` frees the owning pointer when it is
+not NULL. A reviewer proposes moving the struct behind a pointer local or heap
+box "so recovery sees the C writes". A second variant stores a fresh Lua object
+into an exact `TValue` out-parameter and then raises; a third clears it.
+
+**Pass criteria:** the address-exposed struct is its own stable home, so the
+`defer` sees the acquired pointer and frees it exactly once; no rollback, and
+the workaround is rejected as unnecessary; the `TValue` home is published into
+its existing root slot before recovery closes frames, runs `__close` or
+finalizers, or collects, and clearing lets the old object be collected; the
+foreign writer still roots a fresh object through its handoff; retained raw
+aliases, asynchronous writes, and backing lifetime stay the foreign code's
+responsibility; the supported GCC/Clang contract keeps its ISO C caveat
+without claiming new Clang, LTO, or platform evidence.
+
+**Fail signals:** describes byte-snapshot rollback for the struct, prescribes
+the pointer-local or heap-box workaround, treats a C pointer as a GC root, or
+claims Clang LTO verification for these forms.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
+
 # Final boundary checklist
 
 Before approving code, answer all of these explicitly:
@@ -2460,5 +2697,8 @@ Before approving code, answer all of these explicitly:
 * If the raw Lua API is used, where are the saved top, maximum reservation,
   per-path ledger, traced survivor, nonyielding rule, and borrowed-pointer audit?
 * Are cleanup and tests located at the owning layer?
+* At a browser JavaScript boundary, are integers `BigInt`, bytes copied,
+  handles and callables closed or released, never-settling host work
+  detachable, and every general call into Titan awaited as a promise?
 
 If any answer is implicit, the boundary is not ready for review.

@@ -252,9 +252,8 @@ for the complete signature table. The main entry points are:
   stays valid until synchronous cancellation/unwind unlink completes. Registrars
   commit packet ownership in C before delivery can raise; immediate channel
   paths allocate no registrar closures/capture boxes, and slow paths add no
-  context userdata. Titan code touches the cell only through a pointer local,
-  never as a by-value aggregate whose try-spill reload would roll back a
-  registrar's packet commit. Do not let that raw borrow escape the call. The
+  context userdata. Titan code reaches the cell through a pointer local; do not
+  let that raw borrow escape the call. The
   traced endpoint is not state-close protection: each registration pins the
   channel or control block until its unregister or its own Task's next locked
   retry acknowledges the wake (wakers never drop pins), and lua_close withdraws
