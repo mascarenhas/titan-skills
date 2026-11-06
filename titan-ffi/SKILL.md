@@ -964,10 +964,24 @@ local c_total = ffi.total() + 1                   -- C-mode `+`, then later conv
 
 Mixed Titan `integer`/`float` operands enter C mode as the configured
 `lua_Integer`/`lua_Number`; they are not first narrowed to the other C operand's
-original type. Unsupported combinations are errors, not a fallback: no
-floating remainder, aggregate operators, arithmetic on `void *`, function
-pointer arithmetic/order, incomplete-object pointer arithmetic, or pointer
-multiply/divide/bitwise/shift.
+original type. A C-mode arithmetic result also drops typedef identity, and a
+store never converts one C integer type to another implicitly. In ordinary
+Titan code, write a read-modify-write of an `int` or `size_t` field or element
+in Titan arithmetic and let the store check the range:
+
+```text
+response.fills = response.fills + 1               -- rejected: the sum is not a C `int`
+response.fills = (response.fills as integer) + 1  -- Titan `+`, then a range-checked store
+```
+
+With `response.fills` a C `int` and `lua_Integer` a `long long`, the first line
+fails with `types in assignment do not match, expected foreign int but found
+foreign long long`. A `foreign function` body types the literal `1` as C `int`,
+so the first line is plain `int` arithmetic there.
+
+Unsupported combinations are errors, not a fallback: no floating remainder,
+aggregate operators, arithmetic on `void *`, function pointer arithmetic/order,
+incomplete-object pointer arithmetic, or pointer multiply/divide/bitwise/shift.
 
 ## Macros and enums
 

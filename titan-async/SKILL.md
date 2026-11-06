@@ -805,7 +805,11 @@ one-based `get(index)`; never use Array length or truthiness for nullable data.
 `drain_if(predicate)` transfers the complete batch if any item matches, otherwise
 nil. `wake_batch()` wakes only a blocked batch reader; it can produce an empty
 batch for a domain-specific stop condition. These three are producer/domain
-control operations, not a second reader queue.
+control operations, not a second reader queue. If mapping a detached batch
+retires a registration that already has queued events, apply the follow-on
+batch rule in [Domain adapters](#domain-adapters): take the complete follow-on
+batch with `drain_if` and map all of its events in callback order, the retired
+registration's included.
 
 The `drain_if` predicate must not yield or mutate the subscription. Domain code
 must not drain the only outcome promised to an already-notified `next()` reader
