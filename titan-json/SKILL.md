@@ -271,6 +271,47 @@ Common grammar labels are `expected_value`, `expected_object_key`,
 and `duplicate_key`. Use the actual raised code rather than matching message
 wording.
 
+An exhaustion test catches only the expected `json.Error` and rethrows
+everything else with a bare `raise`, so an engine or runtime failure keeps its
+original error and traceback. Where no JSON error is expected, it catches
+nothing:
+
+```titan
+local json = import "json"
+local test = import "test"
+
+local function nested(depth: integer): {value}
+  local root: {value} = {}
+  local current = root
+  for _ = 2, depth do
+    local child: {value} = {}
+    current[1] = child
+    current = child
+  end
+  return root
+end
+
+function test_encode_configured_depth(_context: test.Context)
+  local limit = 64
+  local text = json.encode(nested(limit), json.EncodeOption.max_depth(limit))
+  test.assert(#text == 2 * limit, "the configured depth was not honored")
+
+  local rejected = false
+  do
+    json.encode(nested(limit + 1), json.EncodeOption.max_depth(limit))
+  catch
+    if not (error is json.Error) then raise end -- not a JSON limit: propagate
+    local failure = error as json.Error
+    test.assert(failure.code == "limit_exceeded", "wrong code " .. failure.code)
+    rejected = true
+  end
+  test.assert(rejected, "a document deeper than max_depth was accepted")
+end
+```
+
+Decoding uses the same shape with `json.DecodeOption.max_depth` and a nil
+schema placeholder.
+
 ## Parser maintenance and validation
 
 Use the public PEG module and load `titan-pegs` for grammar work. Compile one

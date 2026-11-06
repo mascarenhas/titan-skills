@@ -60,6 +60,27 @@ borrowed values must remain alive through the callback libuv promised, and a
 multi-shot source needs exactly the buffering/waiter state promised by its
 public semantics.
 
+Callback timing has three cases; name all three when reviewing callback or
+wake code:
+
+- **Synchronous-callback exceptions:** `uv.walk` and, on Windows, TTY
+  `uv.read_start`/`uv.tty_set_mode` run their callbacks before the call
+  returns. A callback error is rethrown after native return. These are
+  explicit calls, not preemption.
+- **Inline operation continuation:** when libuv calls a one-shot operation's
+  callback and that callback settles the operation's exact `Completion`
+  (`resolve`/`reject`), the waiting Task resumes inside the callback, runs to
+  its next callback-bearing await, return, or raise, and only then does the
+  callback return to libuv. Copy callback-only results and finish native
+  cleanup before settling. Secondary cases: settlement during registration
+  resumes the Task after registration returns, and settlement from another
+  running Task or a finalizer is queued.
+- **Deferred wakes:** public `Task:resume(token)` and subscription
+  `publish`/`fail`/`finish` wake the waiting Task later and never enter it
+  inline. `Task:resume` serves only an explicit `async.suspend(token)`: a
+  one-shot native operation wakes its Task through its `Completion` (inline,
+  above) and a persistent source through its subscription (deferred).
+
 Evidence: `doc/language/async-io.md`,
 `doc/implementation/libuv-runtime.md`, `titan/async.native.titan`, and issue #82.
 
@@ -1687,9 +1708,10 @@ into cancellation boundaries merely to query shutdown; use `is_closing()`.
 Callbacks copy transient data, publish, and return. Filesystem watcher callbacks
 queue raw notifications; the draining Task performs asynchronous `lstat` and
 maps them. If classification retires a registration and new events reference
-it, take the complete follow-on batch in callback order. Do not filter or
-reorder other registrations' events. Keep exactly one raw event to one public
-event and put recoverable mapping errors in the event payload.
+it, take the complete follow-on batch in callback order and map every event in
+it, the retired registration's included: never filter, discard, or reorder
+events. Keep exactly one raw event to one public event and put recoverable
+mapping errors in the event payload.
 
 Parent stdio classification belongs to `os`, using public UV operations plus
 unrelated platform FFI, and finishes before any descriptor is duplicated.
