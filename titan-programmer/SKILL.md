@@ -2184,6 +2184,15 @@ to the language rules:
   `uv.walk` and Windows TTY read startup, follow their documented timing;
   they are direct calls rather than preemption. Load **Titan async** before
   reasoning about callback order.
+- **Keep C and the Lua C API to what Titan cannot do.** Standard-library or
+  runtime work that touches C (authored C, a C-ABI callback, or a
+  `lua_*`/`luaL_*` call, the browser bridge included) follows the six
+  [guard-rails](../titan-ffi/SKILL.md#guard-rails-for-standard-library-and-runtime-c)
+  in `titan-ffi`: the work in Titan, plain C off the Lua stack, protected work
+  in a Titan `catch`, pins in module variables or owner fields, no pushes to
+  root parameters or locals, and receiver-checked tagged values instead of
+  re-checked signatures. Load `titan-ffi` first; a review justifies every new
+  Lua C API call and authored C line against them.
 - **Keep foreign worker code C-only.** `async.run_foreign` is the one explicit
   worker-pool escape from main-loop Titan execution: the worker performs only
   its C `f(arg)`, never touches the calling state's Titan/Lua objects, and
