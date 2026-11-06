@@ -1907,10 +1907,12 @@ declaration must supply a state. Never store, return, replace, or use an old
 The trusted exception says what audited code may do, not when to use it.
 Every standard-library or runtime change that touches C (authored C, a
 `foreign function` callback, or a `lua_*`/`luaL_*` call, the browser bridge
-included) follows these six rules. A review counts the new Lua C API calls
-and authored C lines in the diff and justifies each one against them. The
-wrong examples come from the first browser bridge (titan PR #364): its C
-runtime `titan-runtime/browser/titan-browser.c` and its Titan side
+included) follows these six rules, whose normative text is the style guide's
+[Write native bindings Titan-first](../../../doc/style-guide.md#write-native-bindings-titan-first).
+A review counts the new Lua C API calls and authored C lines in the
+diff and justifies each one against them. The wrong examples come from the
+first browser bridge (titan PR #364): its C runtime
+`titan-runtime/browser/titan-browser.c` and its Titan side
 `titan/browser.browser.titan`.
 
 1. **Layering.** Write the work in Titan, and make a C-ABI callback a Titan
@@ -1936,10 +1938,11 @@ runtime `titan-runtime/browser/titan-browser.c` and its Titan side
    model: recover the state, owner, handler closure and entry; push the owner
    when the handler may remove its last other home; call the entry; restore
    the stack top (`timer_callback` and its handler `timer_deliver` in
-   `titan/uv/uv.native.titan`). *Wrong:* every bridge entry runs a C worker
-   under `protected_entry`'s `lua_pcall`, and `complete_failure` adds three
-   more (`original_trace`, `error_description`, `restore_trace`) to rebuild
-   the message and trace. *Right:* `step` and `step_trampoline` below.
+   `titan/uv/uv.native.titan`). *Wrong:* the initialize, main, invoke and
+   release entries each run a C worker under `protected_entry`'s `lua_pcall`,
+   and `complete_failure` adds three more (`original_trace`,
+   `error_description`, `restore_trace`) to rebuild the message and trace.
+   *Right:* `step` and `step_trampoline` below.
 4. **Pinning.** Per-state roots live in a module variable (a Map or Array)
    or in an owner record's field, as `loop.handles` does: `timer_init` sets
    `loop.handles[timer] = true` and `timer_closed` clears it. No `luaL_ref`,
@@ -1960,9 +1963,9 @@ runtime `titan-runtime/browser/titan-browser.c` and its Titan side
    inside `if #arguments > 8 then`, which `slots` still points into after the
    block. *Right:* `sum` below.
 6. **Don't duplicate checks the receiver makes.** Where the other side of a
-   boundary is dynamically typed, marshal by runtime type into a tagged value
-   (a union such as titan#371's `BrowserValue`) and let the receiving code
-   decide what it accepts. Do not build parallel signature or descriptor
+   boundary is dynamically typed, marshal by runtime type into one tagged
+   union at the boundary and let the receiving code decide what it accepts.
+   Do not build parallel signature or descriptor
    machinery that re-checks the same thing on both sides. *Wrong:* `callable`
    reflects a closure's signature into kind descriptors, and the loader's
    `snapshotArguments` re-checks each argument against them before Titan's
@@ -2097,7 +2100,7 @@ For rule 6 the sender picks the variant from a value's runtime type, and the
 receiver cases on it and raises for what it rejects:
 
 ```titan
-union Value -- the shape of titan#371's BrowserValue, trimmed
+union Value -- one tagged union at the boundary
   is_nil()
   is_integer(integer)
   is_bytes(string)
@@ -2553,7 +2556,8 @@ searching by analogy.
 * `doc/language/standard-library-gc.md` — weak maps, finalizers, collector
   actions.
 * `doc/style-guide.md`, especially “Keep Lua and C machinery behind narrow
-  audited boundaries,” “Acquire, then defer the close,” and finalizer rules.
+  audited boundaries,” “Write native bindings Titan-first,” “Acquire, then
+  defer the close,” and finalizer rules.
 * `doc/language/standard-library-browser.md` and the [loader
   API](../../../doc/language/browser-target.md#the-loader-api) — browser-only
   `titan.browser` bindings, callables, requests, errors, and instance lifetime.
