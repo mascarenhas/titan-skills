@@ -206,18 +206,17 @@ emulate this with Lua `pcall` or a status-code protocol.
 Give a real `foreign *void` local its packet in its own declaration (or through
 one C out-argument call, as `Receiver:wait` does), guard it immediately with
 `defer transfer.discard_message(raw)`, and pass that exact local directly
-(`transfer.decode_message(raw)` passes `&raw`). Recovery-sensitive
-non-GC scalars whose mutable address is taken use one volatile home plus a
-declaration-time compiler escape barrier, so an indirect clear before an
-opaque raise is visible to catch/deferred cleanup. Earlier protected
-assignments leave no stale spill. The barrier preserves the home even if an
-ordinary callee is inlined; volatility alone is insufficient. Decode itself
-contains `catch`/`setjmp` and supported GCC/Clang do not inline it. The
-volatile-home/barrier guarantee is verified with GCC, including LTO
-(production-provider evidence), and with Clang at `-O2`/`-O3` without LTO.
-Clang LTO is not separately verified. This supported-toolchain guarantee
-includes Windows Clang/MSYS2 but retains the ISO C 6.7.3p6 unqualified-access
-caveat; see
+(`transfer.decode_message(raw)` passes `&raw`). The local's mutable address is
+exposed, so recovery uses its one volatile home plus a declaration-time
+compiler escape barrier: an indirect clear before an opaque raise is visible to
+catch/deferred cleanup, and earlier protected assignments leave no stale
+value. The barrier preserves the home even if an ordinary callee is inlined;
+volatility alone is insufficient. Decode itself contains `catch`/`setjmp` and
+supported GCC/Clang do not inline it. For this scalar home the guarantee is
+verified with GCC, including LTO (production-provider evidence), and with
+Clang at `-O2`/`-O3` without LTO. Clang LTO is not separately verified. This
+supported-toolchain guarantee includes Windows Clang/MSYS2 but retains the
+ISO C 6.7.3p6 unqualified-access caveat; see
 [recovery storage and LTO](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
 Never wrap the raw slot in an ordinary forwarding helper: its own entry can
 fail before decode takes ownership.
@@ -645,10 +644,14 @@ never dropping the pin in the waker (thread channels and joins do). The Task's
 it again (`channel_unregister_send_wait` clears `wait.message` and discards the
 pending packet outside the domain mutex). Channel
 fast paths use no registrar closure or mutable capture box; do not replace these
-with a fresh per-wait userdata. When a `defer`/`catch` reads an automatic
-context after the wait raises, use it only through a `foreign *T` pointer local:
-a by-value aggregate written in that protected body gets a longjmp-safe spill,
-and recovery reloads stale Titan-written bytes over the callbacks' raw writes.
+with a fresh per-wait userdata. A callback that later writes through a
+retained `context` pointer is not a tracked synchronous out-argument: keep the
+context storage and every callback dependency alive through native
+completion, because neither a borrowed pointer nor caught-error recovery
+extends that lifetime. Context storage whose mutable address is passed
+directly to a C or Titan call keeps that callee's writes after a raise, so it
+needs no pointer-local workaround ([C storage after a caught
+error](../../../doc/language/c-ffi-expressions.md#c-storage-after-a-caught-error)).
 
 `prepare_native_retirement` strongly retains `owner` through callback return and
 committed readiness. That GC root is not a cross-state-close native pin:

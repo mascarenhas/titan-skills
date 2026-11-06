@@ -39,7 +39,8 @@ work crosses one of these boundaries:
 - **[`titan-websocket`](../titan-websocket/SKILL.md)** — WebSocket clients, HTTP upgrades,
   message framing, origin/subprotocol policy, Ping/Close, and session cleanup.
 - **`titan-ffi`** — C `foreign import`, C operators and ownership, foreign
-  callbacks, the Lua C API, and the `titan.lua` dynamic escape hatch.
+  callbacks, the Lua C API, the `titan.lua` dynamic escape hatch, and the
+  browser-only `titan.browser` JavaScript bridge.
 - **`titan-pegs`** — `titan.peg`, relabel grammars, combinators, and parser error
   design.
 - **`titan-reflect`** — `titan.reflect`, runtime value inspection, nominal type queries,
@@ -1199,10 +1200,11 @@ cannot be re-exported. Circular imports are compile-time errors.
 Canonical short imports are:
 
 ```text
-coroutine uv async timer io fs path net ssl url http websocket os peg string test lua gc math iteration reflect sqlite3 json protobuf transfer thread
+coroutine uv async timer io fs path net ssl url http websocket os peg string test lua gc math iteration reflect sqlite3 json protobuf transfer thread browser
 ```
 
-They mean the corresponding `titan.*` logical modules.
+They mean the corresponding `titan.*` logical modules. `titan.browser` exists
+only on `--target browser`.
 
 Lua always loads Titan standard modules by qualified name, such as
 `require "titan.fs"`; it does not replace Lua's own `os`, `io`, `math`, or
@@ -1960,6 +1962,21 @@ fail below them, and image bytes, linear memory, Node RSS, Chromium renderer
 RSS, and Linux VmData or Darwin VSZ measure different things. See
 [browser limits](../../../doc/language/browser-target.md#limits).
 
+A generated browser `.mjs` embeds Titan's loader and default-exports
+`create(options)`; a page imports it directly and deploys only the three image
+files. The instance is persistent: `run(args)` initializes when needed and runs
+`main` once, `main`'s scope `defer`s run when it returns, and the Lua state,
+its finalizers and its JavaScript-callable handles live until
+`await instance.dispose()`, which belongs in `finally`. JavaScript interop uses
+the browser-only `titan.browser` module (`import "browser"`; native builds have
+no placeholder): explicit `create({bindings})`, typed `Argument` carriers,
+signed-i64 `BigInt` integers, Number floats, copied byte strings, state-owned
+`JSHandle`/`Callable`/`Request` owners, and promise-returning calls from
+JavaScript into Titan. There is no synchronous JavaScript-to-Titan call. Load
+`titan-ffi` for the bridge rules; see [JavaScript
+bindings](../../../doc/language/standard-library-browser.md) and the [loader
+API](../../../doc/language/browser-target.md#the-loader-api).
+
 Use the matched installed `lua`. A dotted module maps dots to directories;
 `titanc app.check` finds folder `app/check/check.titan` before flat
 `app/check.titan`. `--tree ROOT` changes the source root. Useful driver options
@@ -2114,10 +2131,13 @@ to the language rules:
   compiled-only providers. Put behavior with the owner of its state (the shell
   facade is in `os`) or export one complete operation (`Coroutine:transfer`
   for async). Make keeps no import lists: `titanc --incremental` orders the
-  module graph. The thirteen browser-subset modules (`coroutine`, `gc`,
+  module graph. The thirteen shared browser-subset modules (`coroutine`, `gc`,
   `iteration`, `math`, `test`, `reflect`, `json`, `protobuf`, `transfer`,
-  `peg`, `string`, `url`, `path`) must not gain an import path to `uv`,
-  `async`, or any other native-only module; see
+  `peg`, `string`, `url`, `path`) keep native source and interface parity and
+  must not gain an import path to `uv`, `async`, or any other native-only
+  module. The browser provider's fourteenth module, `titan.browser`, is the
+  reviewed browser-only exception: it imports only `gc` and `reflect`, has no
+  native placeholder or interface, and no native module may import it; see
   [standard-library maintenance](../../../doc/implementation/standard-library-maintenance.md#keep-the-browser-subset-dependency-closed).
 - **Honor the supported trust/concurrency model.** Do not harden one imagined
   race when the API requires callers to serialize all mutations. Partial

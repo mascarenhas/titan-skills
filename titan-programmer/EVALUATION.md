@@ -559,6 +559,60 @@ unfiltered-every-owner versus filtered-at-least-one-case rule, and a stdout-only
 audit that keeps stderr and failing status. Reject invented
 `TITAN_STDLIB_BROWSER_TEST_IMAGE*` variables or a resurrected size budget.
 
+### W1 — browser JavaScript bindings and a persistent instance (`titan-programmer` + `titan-ffi`)
+
+Ask for one complete browser-target module and its page script. The module
+publishes two closures that share one mutable counter to a JavaScript
+`publish` binding, calls a `measure(bytes)` binding that returns an integer,
+and starts host work that may never settle with a one-string success callable
+and its failure callable. The page imports the generated image, initializes
+and runs it, calls both closures, and disposes it. Require
+`import "browser"`, `browser.callable` on the original closures with fixed
+scalar signatures, `Argument` constructors, `call_integer`, a detachable
+`start` with an exact `function(string, JSHandle)` failure callable, explicit
+`close()` of handles, `BigInt` integers (`5n`) in both directions, resolved
+result Arrays, the default `create(options)` import without a separate
+loader, and `await instance.dispose()` in `finally`. Also ask what happens
+when a binding calls `instance.call` synchronously inside `try/catch`, and
+how a JavaScript-Titan reference cycle is released. Require a promise
+rejection with `TITAN_BROWSER_REENTRY` that the binding's `try/catch` does not
+see, `notify`/`drain` or a handled promise as the alternative, and explicit
+release because neither collector traces the other heap. Reject a
+synchronous reverse call, Number coercion, a raw factory, a retained form for
+forever-pending work, `onNotificationError` as the rejection path, or an
+invented scheduler, native placeholder, or raw-pointer API. The module must
+compile with `titanc --target browser` against the matching installed browser
+SDK.
+
+### H1 — retained writes after a raise (`titan-programmer` + `titan-ffi` + `titan-tester`)
+
+Review a module that lets C fill an automatic response struct with an owning
+pointer through a mutable address, then calls a Titan helper that raises while
+a `defer` releases the pointer, and a proposal to move the struct behind a
+pointer local or heap box "so recovery sees the C writes". Add an exact
+`TValue` out-parameter variant that stores a fresh object before raising and
+one that clears it. Require the retained-write rule (the struct is its own
+stable home, so the `defer` releases exactly once and nothing rolls back),
+rejection of the workaround, root publication of the GC forms before recovery
+can close frames, run `__close` or finalizers, or collect, collectability of a
+cleared old object, the foreign writer's continuing rooting obligation, and
+the raw-alias, asynchronous-write, and backing-lifetime limits. Then ask for
+the native regression plan: real `-O2`/`-O3` native programs, every eligible
+kind and exclusion, fresh-object survival and old-object finalization during a
+full GC in Lua close with the foreign writer's own root truncated, and no new
+Clang, LTO, or platform claim. The repaired module must compile natively
+against the matching installed Titan.
+
+### J3 — JSON depth on every target (`titan-programmer` + `titan-json` + `titan-tester`)
+
+Review a change that clamps browser `json.encode` depth to 103 and adds
+browser-only boundary tests at that constant. Require the configured
+`max_depth` (default 32) on native and browser targets with no target writer
+cap, shared boundary tests at the configured depth, engine stack exhaustion as
+a fatal engine failure rather than a `json.Error`, and decoding's own depth and
+shared PEG matching-stack policy. Reject the clamp and the browser-only
+constant.
+
 ## Frontmatter-only routing set
 
 Read only each skill's YAML `name` and `description`. Answer `none` when no
@@ -593,8 +647,11 @@ these queries:
     a slice's `compiler_root` in `titan-config.local.lua`, and query hover,
     definition, and `titan/workspaceStatus` on `.titan` files;
 24. change the compiler's completion hole transform and detached descriptor
-    serialization in `titan-compiler`; and
-25. configure `rust-analyzer` in omp `lsp.json` for a Rust repository.
+    serialization in `titan-compiler`;
+25. configure `rust-analyzer` in omp `lsp.json` for a Rust repository;
+26. expose a Titan closure to JavaScript with `titan.browser` and await its
+    result from a web page; and
+27. add `browser.tests` cases for a new `titan.browser` request form.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -612,6 +669,8 @@ selects **programmer + language-server** (not `titan-completion`, which owns
 compiler completion internals, and not `titan-json` merely because `lsp.json` is
 JSON); query 24 selects **completion** (adding programmer only when `.titan`
 files are read or edited); query 25 is a negative control and selects `none`.
+Queries 26 and 27 select **programmer + ffi**, adding **tester** for 27; the
+bridge's promises are JavaScript, not Titan Tasks, so neither selects async.
 
 ## Recorded baseline and post-change results
 
@@ -871,6 +930,29 @@ cartridges for language guidance. Its answer, exact sources and command/status
 receipt are retained as `eval/349-metamethod-answer.md`,
 `eval/349-metamethod-compile-results.json` and
 `logs/349-metamethod-eval-compile.log` in the issue's validation evidence.
+
+### Issue #332 evaluation draft (not run)
+
+The skills on `issue-353-skills` (base `main` @ `e6328d3`) integrate the
+#353/#332 cutovers: the removed browser JSON writer cap (`titan-json`); the
+generated image's persistent lifecycle and the `browser` short import
+(`titan-programmer`); the `titan.browser` bridge and the retained-write
+recovery rule (`titan-ffi`, with matching `titan-async` and `titan-thread`
+passages); original-callable rooting (`titan-reflect`); and bridge test
+ownership plus the retained-write test matrix (`titan-tester`). The
+`titan-ffi` description changed, so the frontmatter routing set must be rerun
+with queries 26 and 27. New cases W1, H1, and J3 and `titan-ffi` Evals 13 and
+14 are drafted and **unscored**: no evaluator has run them. Rerun F1, T1, A1,
+TH1, and J1 as well, because their cartridges changed.
+
+Run each answer in a fresh cartridge-only process, as in the #349/#350
+record. W1 compile receipts need a scratch tree built with `titanc --target
+browser` against a prefix whose browser SDK was installed from the composed
+`issue-332-final` head (Emscripten 6.0.13, Node 26); running its page script
+additionally needs Node 26 or Chromium. H1 compiles natively against that same
+installation with explicit `--tree` and `--output`. J3 needs no compilation
+unless the answer writes tests. Record the evaluator model, its
+injected-context disclosure, and per-case receipts here.
 
 ## Mechanical gates
 

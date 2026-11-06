@@ -155,7 +155,8 @@ case names.
 Do not give a test owner a bare name rewritten by standard-import shorthand:
 `coroutine`, `uv`, `async`, `timer`, `io`, `fs`, `path`, `net`, `ssl`, `url`,
 `http`, `websocket`, `os`, `peg`, `string`, `test`, `lua`, `math`, `gc`,
-`iteration`, `reflect`, `sqlite3`, `json`, `protobuf`, `transfer`, or `thread`.
+`iteration`, `reflect`, `sqlite3`, `json`, `protobuf`, `transfer`, `thread`, or
+`browser`.
 A bare Lua-library name can also collide at
 the native opener boundary; `math` is the canonical example. Prefer
 `calc_test`, `math_spec`, `tests.math`, or a qualified owner such as
@@ -650,7 +651,7 @@ not a module build graph. `test.tests` remains the explicit first root, and
 
 The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names the owners that
 `make titan-stdlib-browser-test` runs under Node and headless Chromium (emsdk,
-Node 24, Chromium, the browser SDK, and the installed native provider
+Node 26, Chromium, the browser SDK, and the installed native provider
 required). All of them build into one `--target browser --test` image,
 `images/stdlib.{mjs,wasm,wasm.map}` under `out/browser-stdlib` or
 `TITAN_BROWSER_TEST_BUILD_DIR`, beside `roots.txt`, `members.md`, and each
@@ -685,6 +686,17 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
   `.native.titan` contributor; never copy it into a browser variant. Derive
   target facts (`size_t` width, pointer width, string limits, endianness,
   locale, nesting limits) from the target instead of skipping them.
+- Browser-only `titan.browser` behavior lives in its target-specific owner
+  `browser.tests` (`spec/stdlib/titan/browser/tests.browser.titan`, which
+  imports the helper module `browser.independent`), outside
+  `TITAN_STDLIB_BROWSER_TEST_ROOTS`. It needs explicit JavaScript bindings and
+  the real linked bridge, so `spec/coder/browser_bridge_spec.lua` and the
+  `browser-playwright` CI cells build it with its independent-state C helper
+  and drive it from `spec/fixtures/browser_bridge/integration.mjs` with
+  deterministic test bindings. Keep public bridge behavior there; Busted owns
+  SDK/header/provider inventories, native-target absence, generated mechanics,
+  and link artifacts, not mock public behavior. A compiled image is not bridge
+  qualification, and engine or platform receipts are separate evidence.
 - Keep module-specific support beside its owner, for example
   `fs/test_support.titan`. Put something under `support/` only when it expresses
   a genuinely cross-module testing contract.
@@ -1853,15 +1865,14 @@ with unclaimed attachments released before GC. Pre-reserve the Lua stack before
 arming an allocator fault so it lands inside decode's body rather than its
 entry preamble, which leaves the packet to the guard. Cover a local assigned
 in an earlier protected region as well as a packet acquired in its own
-declaration. Recovery-sensitive non-GC scalars whose mutable C address is
-taken have one volatile home plus a declaration-time compiler escape barrier;
-a decoder that clears then raises must leave catch and the guard seeing nil,
-never a stale spill. Decode's own `catch`/`setjmp` prevents inlining by
-supported GCC/Clang: native decode coverage is not an inlining test. The
-volatile-home/barrier guarantee is verified with GCC, including LTO
-(production-provider evidence), and with Clang at `-O2`/`-O3` without LTO.
-Clang LTO is not separately verified. Separately exercise ordinary inlinable
-scalar callees at
+declaration. The guarded pointer local is a recovery-sensitive scalar with one
+volatile home plus a declaration-time compiler escape barrier; a decoder that
+clears then raises must leave catch and the guard seeing nil, never a stale
+value. Decode's own `catch`/`setjmp` prevents inlining by supported GCC/Clang:
+native decode coverage is not an inlining test. For this scalar home the
+guarantee is verified with GCC, including LTO (production-provider evidence),
+and with Clang at `-O2`/`-O3` without LTO; Clang LTO is not separately
+verified. Separately exercise ordinary inlinable scalar callees at
 `-O2`/`-O3`, with no normal-path read: write through the address, then raise
 from a checked return conversion, while the protected body returns directly.
 This terminal error shape exposes GCC's dead-store deletion without a barrier.
@@ -1872,6 +1883,29 @@ not just validation/thread receives. This supported GCC/Clang guarantee
 (including Windows Clang/MSYS2) retains the ISO C 6.7.3p6 unqualified-access
 caveat, not strict ISO-C safety; see
 [recovery storage](../../../doc/implementation/error-handling.md#setjmp-sensitive-localparameter-spills).
+
+The general retained-write rule for every eligible address-exposed kind
+belongs to the owning coder layer as real native programs
+(`spec/fixtures/error_handling/aggregate_recovery.titan`, built at `-O2` and
+`-O3` with `-Werror`), not only generated-C text. Cover C integer, floating,
+enum, and pointer homes; structs, unions, fixed, nested, typedef, and
+inline-field arrays; the full FAM extent; named and supported lambda
+parameters; and the const/captured and non-address-exposed exclusions. Mutate
+through the actual address, then raise explicitly, through a checked-return
+conversion, or from C before a normal return; recovery must see the current
+writes, including after an earlier protected assignment. For both exact GC
+forms (`TValue` and `Udata *`), store a fresh real userdata, raise, force a
+full GC during Lua close, and require the stored object intact; also clear
+the old value before raising and prove the old object was finalized during
+close. Keep the foreign writer's own root alive through error handling and let
+close truncate it before the collection, so the caller's pre-close
+publication is what preserves the value; a globally rooted sentinel proves
+only classification. Cover normal-return root commits and an early failure
+before a later defer-tail GC declaration. A generated-C oracle that pins
+publication at the three landing sites is structural evidence, not an
+executed run of the rare re-armed-close and unwind-guard landings, and these
+Linux receipts claim no new Clang, LTO, or platform qualification.
+
 Captured locals cannot supply mutable pointer storage; keep consuming decode in
 its owning function, or use a by-value `foreign *Slot` pointer to an array
 cell. Lua code in an independent state cannot call `decode_message`; use an
