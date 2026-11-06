@@ -1467,6 +1467,8 @@ runs, `judgments.md`, `diagnostic/`, `run_eval.py`, `judge-run.sh`, the
 memory-off overlay and both read-only cartridge exports), `/tmp/titan-fu/judge/F3`
 (reference, driver, judge script) and `/tmp/titan-fu/logs` (`issue369-*.log`,
 `eval/*.omp.log`), with `/tmp/titan-fu/examples` and `/tmp/titan-fu/mechanical`.
+They are archived as the `issue-369-validation-archive` release on
+mascarenhas/titan (the compiled `eval/build` outputs are left out).
 
 ## Mechanical gates
 
