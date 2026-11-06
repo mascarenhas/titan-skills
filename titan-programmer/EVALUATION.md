@@ -1005,6 +1005,134 @@ Titan candidate `010de910`, Emscripten 6.0.13, Node 26.13.0 and Chrome for
 Testing 156.0.8078.80; these receipts establish no new macOS, Windows, Clang
 or LTO qualification.
 
+### Issue #366 re-evaluation (2026-11-06)
+
+titan#366 asked for one clarification at each location where a #353/#332
+answer failed. The evaluated cartridges were `issue-366-cartridge-clarity`
+at `1e0c8415`, based on `aa03f9a`, whose `SKILL.md` text equals the
+#353/#332 input `26f85b10`; A1's second round used `7d5ecc56`. Every added
+statement was checked against titan master `843b446e`. The reserved words
+were checked against `lexer.lua` and `grammar.md`, module lookup against
+`driver.lua` and `folder-modules.md`, and the bridge against
+`browser.browser.titan` and `standard-library-browser.md`. Callback timing
+was checked against `async.native.titan`, `async-io.md` and the uv contract
+notes.
+
+| Case | Clarification |
+| --- | --- |
+| H1 | `titan-programmer` lists the 38 reserved words beside the `Name`/`AnyName` rule: a member may be named `owned`, but `local owned` does not parse. `titan-tester` shows the retained-write matrix as a five-part checklist. Its "Public UV and generic async boundary tests" section moved verbatim out from under the evaluation-appendix heading into the numbered body, and the layer-choice section points to it. |
+| FFI13 | `titan-ffi` adds a complete page module with the exact `main`, `browser.callable` for both callbacks, and `browser.start`. Beside it is the rule that a colon-declared method is not a field value. |
+| F1 | `titan-programmer` adds a file-name versus logical-name table. The right layout is `ring/main.titan`, not `ring.main.titan`; a relative header sits beside its importer; operands are dotted names. |
+| A1 | `titan-async` lists, beside the scheduling invariant, the three callback-timing cases a review must name: the synchronous `uv.walk` and Windows-TTY callbacks; the inline operation continuation; and the deferred wakes from `Task:resume` and subscriptions. |
+| J3 | `titan-json` adds an exhaustion-test template that rethrows anything except the expected `json.Error`. |
+
+That source check corrects one point of the #353/#332 A1 assessment.
+Subscription `publish`, `fail` and `finish` wake the reader through
+`Task:resume`, which never enters a Task inline (`async-io.md`: "Producer
+notifications use the same token-based deferred wake"). The baseline was
+therefore right that publication never enters the Task inline. Its A1 failure
+stands on the omitted synchronous `uv.walk`/Windows-TTY callbacks and the
+missing inline operation-continuation distinction.
+
+Each answer came from a fresh `omp -p` process with the #353/#332 command
+shape: high thinking, only `read,write`, `--no-skills --no-context-files
+--no-rules --no-session --no-extensions --no-prewalk --no-lsp --no-title`,
+`--approval-mode yolo` and `--max-time 20m`. The prompts were the preserved
+ones, with only the cartridge paths changed. Each case ran with
+`opencode-go/deepseek-v4.1-flash`, `anthropic/claude-haiku-5-5` and
+`openai-codex/gpt-6-luna`, one serial queue per provider. Each run added
+`--config` with an overlay setting `memory.backend: "off"`. A smoke prompt
+reported no injected memories for any model, while a control without the
+overlay reported one. The harness's workstation/project block (OS,
+architecture, model, working directory) remained, so the runs were memory-free
+but not completely hermetic. All 18 processes (15 in round 1, 3 in the A1
+rerun) exited 0 and wrote an answer; none was retried.
+
+Delivered complete modules were compiled unchanged with the session SDK
+(validation profile, Linux x64; Emscripten 6.0.13 and Node 26.13.0 for
+browser images). Code that appeared only in `answer.md` was extracted
+verbatim. H1 and J3 ran as native `--test` executables, F1 compiled with `-c`
+as delivered, FFI13 built browser images, and A1 is review-only.
+
+Round 1 left one gap: no A1 answer named every timing case, and none stated the
+inline operation continuation. The A1 list was revised once, to name the three
+cases a callback or wake review must cover and to say the operation callback
+resumes its Task immediately, inside that callback. A1 alone was then rerun
+with all three models. No other cartridge text changed between the rounds.
+
+| Case | Baseline (#353/#332, DeepSeek) | DeepSeek | Haiku | Luna |
+| --- | --- | --- | --- | --- |
+| H1 | Fail: `local owned` does not parse. The matrix omits optimized programs, kinds and exclusions, and Lua-close GC with the writer's root truncated. | Partial: the five-part matrix is complete and no local uses a reserved word. `response.fills = response.fills + 1` fails typecheck: it stores a C-mode `long long` into an `int` field. | Pass: 4/4 native cases, and the matrix names all five parts. | Partial: 2/2 native cases. The matrix omits optimized programs, exclusions, Lua-close GC and the truncated writer root. |
+| FFI13 | Fail: `main()`, `self.on_fetch_*` as method values, and no Callables for `browser.start`. | Partial: exact `main` and two `browser.callable` lambdas passed to `start`; its own page prints `5n 5n`. As delivered, the file `counter.page.titan` is not found as `counter.page` (the F1 error). The page ran after path-only staging. | Pass: the complete page module builds as a browser image. | Pass: Titan code marked illustrative, exact `main` stated; the fragment compiles as a library. |
+| F1 | Fail: `ring.main.titan` and `plugin.main.titan` are not found. | Pass: two flat modules compile with `-c`. | Pass: seven flat modules compile with `-c`. | Partial: the flat layout is found, but `recovered[0] = recovered[0] + 1` fails typecheck (the same C-mode narrowing). |
+| A1, round 1 | Fail: omits the `uv.walk`/Windows-TTY callbacks and the inline-continuation versus deferred `Task:resume` distinction. | Partial: walk/TTY explicit and `Task:resume` deferred; the inline continuation is only implied. | Fail: omits both walk/TTY and the inline continuation; it correctly treats publication as deferred. | Partial: names walk/TTY and defers `Task:resume`, but omits the inline continuation. |
+| A1, round 2 | — | Partial: walk/TTY explicit, but limits inline completion to registration. | Partial: walk/TTY explicit; still omits the inline continuation. | Partial: walk/TTY and the inline continuation explicit, but it discards events of owners retired in the batch. |
+| J3 | Partial: the above-cap tests catch and log every non-JSON error. | Pass: 12/12 native cases; its one catch helper rethrows anything except `json.Error`. | Pass: 6/6 native cases; every catch rethrows. | Pass: plan only, stating the rethrow rule. |
+
+Did each baseline failure recur?
+
+- **H1:** no local uses a reserved word. Two of three plans contain the whole
+  five-part matrix.
+- **FFI13:** no answer repeats the `main`, method-value or Callable errors.
+- **F1:** no answer uses a dotted file name.
+- **J3:** no test catches and passes an unexpected failure.
+- **A1:** after the revision, all three answers name the synchronous callbacks.
+  Only Luna states the inline operation continuation correctly, so A1 remains
+  the weakest case.
+
+The remaining errors are model-answer errors, not gaps in the clarified
+text:
+
+- **C-mode store-back (H1 DeepSeek, F1 Luna):** both compile failures add a
+  Titan integer to a C `int` and store the result back. `titan-ffi`
+  "C operator mode" says mixed Titan operands enter C mode as `lua_Integer`
+  and are not narrowed, but it has no worked store-back example. That is a
+  candidate follow-up outside this issue's five locations.
+- **Dotted file name (FFI13 DeepSeek):** this repeats the layout error that
+  the new table addresses.
+- **Discarded events (Luna's round-2 A1):** discarding retired-owner events
+  contradicts the programmer cartridge's no-discard retirement-boundary rule.
+
+This is **not an all-pass evaluation**. No answer was repaired before scoring.
+The FFI13 path-only staging is a diagnostic; its as-delivered lookup failure
+stands.
+
+Limitations:
+
+- Each case has one answer per model and round, and answers vary between runs:
+  Luna fixed the A1 timing but regressed on batch handling.
+- Browser images ran on Node 26 only, and a page ran only when delivered
+  complete. Haiku's FFI13 page was illustrative and was not run.
+- Everything ran on Linux x64, so there is no macOS, Windows, Clang or LTO
+  claim.
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 187 relative link targets and 58 anchors resolve, including the new tester
+  pointer.
+- All 100 `titan` fences parse: the 98 earlier ones plus the two new examples.
+- The reserved-word list equals the 38 keywords in `lexer.lua`.
+- Both new examples were extracted verbatim and run:
+  - The page module builds a browser image, and a harness page drives its
+    success and failure callbacks on Node 26.
+  - The JSON template passes natively and on Node.
+- Derived controls:
+  - `--exe` rejects the `main()` variant.
+  - `session.on_done` is a field-lookup error, while a bound `session:on_done`
+    works as a callable.
+  - A non-JSON raise inside the template's protected block fails its test.
+- Probes:
+  - `local owned` and a parameter named `type` do not parse.
+  - Members named `owned` and `type` work.
+  - The layout diagnostics match the new table.
+
+Receipts are in `/tmp/titan-366/eval` (prompts, answers, process logs,
+`runs-all.json`, `round2/`, `smoke/`) and `/tmp/titan-366/logs`
+(`issue366-*.log`, `eval/*.omp.log`), with `/tmp/titan-366/examples` and
+`/tmp/titan-366/mechanical`. They are archived as the
+`issue-366-validation-archive` release on mascarenhas/titan.
+
 ## Mechanical gates
 
 For every update:
