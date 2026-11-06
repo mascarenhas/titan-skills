@@ -614,6 +614,32 @@ a fatal engine failure rather than a `json.Error`, and decoding's own depth and
 shared PEG matching-stack policy. Reject the clamp and the browser-only
 constant.
 
+### F2 — Titan-first native callback binding (`titan-programmer` + `titan-ffi`)
+
+Supply an authored header whose `static inline` `items_each(first, last,
+visit, userdata)` calls `void (*)(int item, void *userdata)` once per item,
+and ask for trusted standard-library module `items` with
+`each(first: integer, last: integer, callback: function (integer))`. The Titan
+callback runs once per item and may raise; after a raise the remaining items
+skip it, and once `items_each` returns, `each` raises the same error value. The
+callback stays pinned for the native call. Also ask for a runnable demo, the
+`titanc` command, and a justification of every `lua_*`/`luaL_*` call and
+authored C line. Require the Titan-first trampoline: a `foreign function` with
+the exact `items_visit` signature that recovers the state, the owner, the
+handler closure and its native entry through the `titan/ffi.h` bridges, calls
+the entry and restores the stack top, and does nothing else. The handler is
+Titan, and its function-level `catch` latches the first error (`defer` where
+cleanup is needed). The callback is pinned in a per-call owner record's field
+or a module variable, and a local roots the owner for the call. The callback
+stack is reserved before entering C. Reject a C trampoline that calls the
+callback through `lua_pcall`, a `lua_pcall` of a C helper that Lua never sees,
+C data routed through the Lua stack, `luaL_ref` or registry and uservalue
+tables, and pushing parameters or locals to root them. The delivered modules
+must compile unchanged and the demo must run. The judge also runs its own
+driver: item order, a non-string error value surfacing unchanged, skipped
+items, an empty range, a nested call, and a full collection inside every
+callback.
+
 ## Frontmatter-only routing set
 
 Read only each skill's YAML `name` and `description`. Answer `none` when no
@@ -1159,6 +1185,118 @@ Receipts are in `/tmp/titan-366/eval` (prompts, answers, process logs,
 (`issue366-*.log`, `eval/*.omp.log`), with `/tmp/titan-366/examples` and
 `/tmp/titan-366/mechanical`. They are archived as the
 `issue-366-validation-archive` release on mascarenhas/titan.
+
+### Issue #370 evaluation (2026-11-06)
+
+titan#370 adds guard-rails against C and Lua C API overuse in
+standard-library and runtime code. The style guide's new "Write native
+bindings Titan-first" section holds the six rules' normative text, and
+`standard-library-maintenance.md` pairs each with a #364 bridge
+counterexample. `titan-ffi` adds "Guard-rails for standard-library and
+runtime C": the six rules with wrong and right examples, and a compiled
+`counter` binding. Its Titan `foreign function` trampoline calls a handler
+whose function-level `catch` latches the error; an owner field pins the
+callback, a local roots the owner, the callback stack is reserved before C
+runs, and an outer-block local keeps an owned buffer. The callback,
+bridge-maintenance, review and checklist sections point to the rules, and
+`titan-programmer` points to them for any standard-library or runtime work
+that touches C. The new case is F2.
+
+The before cartridges were `main` at `1d49841`, the after cartridges
+`issue-370-c-api-guardrails` at `04a38ffe`; each was exported read-only. After
+the evaluation, three edits that F2 does not exercise landed: the rules and
+the source map cite the style guide as their normative text, rule 6 is
+phrased generically instead of naming a future bridge API, and rule 3's wrong
+example names the four bridge entries that use `protected_entry` instead of
+"every bridge entry". The recipe that F2 measures (rules 1 and 3 to 5, the
+`counter` binding and its notes) is unchanged. Every statement was checked
+against titan master `f01e6c9f`:
+
+- the counterexamples against `titan-browser.c`
+  (`titan_browser_root_callable`, `root_callable_worker`, `protected_entry`,
+  `complete_failure`), `browser.browser.titan` (`invoke`, `request`,
+  `callable`) and the loader's `snapshotArguments`;
+- the trampoline against `timer_callback` and `timer_deliver`, `uv.run`'s
+  `LUA_MINSTACK` reservation and the HTTP parser's `callback_state`, and the
+  record-field intrinsic against `checker/native_record_fields.lua`;
+- rooting against `values-and-gc.md`, "The function frame" and "Home roots";
+  the generated C of the `counter` example confirms that a handler entry
+  reserves its frame before its protected block begins.
+
+Each answer came from a fresh `omp -p` process with the #366 command shape:
+high thinking, only `read,write`, `--no-skills --no-context-files --no-rules
+--no-session --no-extensions --no-prewalk --no-lsp --no-title`,
+`--approval-mode yolo`, `--max-time 20m` and the memory-off overlay, one
+serial queue per provider. The before and after prompts differed only in the
+cartridge paths. A smoke prompt reported no injected memories for any model;
+a DeepSeek control without the overlay reported one. The workstation block
+remained, so the runs were memory-free but not completely hermetic. All six
+scored processes exited 0 and wrote an answer; none was retried.
+
+DeepSeek (`opencode-go/deepseek-v4.1-flash`) is the acceptance floor, because
+it is the model used for implementation and review: its after answer must
+pass. Haiku (`anthropic/claude-haiku-5-5`) and Luna (`openai-codex/gpt-6-luna`)
+are additional signal. The one allowed revision was reserved for a DeepSeek
+miss traced to wording or placement, or for a plain text defect that Haiku or
+Luna exposed; none was needed.
+
+Delivered modules were compiled unchanged with the session SDK (titan 0.6.0-1
+from master `f01e6c9f`, validation profile, Linux x64), DeepSeek's before
+bridge with its own `--c-source items_bridge.c`. Each demo ran. The judge's
+driver was built against each unchanged `items` module through a second
+`--tree` root and run. The reference solution in `eval/F2/reference` compiles,
+its demo runs, and it passes the driver.
+
+| Model | Before (`1d49841`) | After (`04a38ffe`) |
+| --- | --- | --- |
+| DeepSeek | Fail: an authored C trampoline (`items_call_visit` in `items_bridge.c`) calls the callback through `lua_rawgeti` and `lua_pcallk` (rules 1 and 3), and pins it with `luaL_ref` in the registry after a `lua_pushtvalue` (rule 4). The error waits on the Lua stack. Demo and driver pass. | Pass: a Titan `foreign function` recovers the state, owner, handler and entry, calls the entry and restores the top; the handler's function-level `catch` latches the first error; owner fields pin the callback and a local roots the owner; `LUA_MINSTACK` is reserved before `items_each`; the error is raised after return. No authored C, `lua_pcall`, registry or push. Demo and driver pass. |
+| Haiku | Fail: an authored `static inline` trampoline (`items_bridge_visit`) calls the callback with `lua_pcallk` (rules 1 and 3) and roots the parameter with `lua_pushtvalue` (rule 5). Demo and driver pass. | Pass: the same shape as DeepSeek's; demo and driver pass. |
+| Luna | Fail: authored `items_lua_visit` and `items_each_lua` call the callback with `lua_pcall` (rules 1 and 3), and the parameter is pushed to root it (rule 5). Demo and driver pass. | Partial: the binding has the whole shape and passes the driver, but the demo declares `main()`, so it builds a library and no program runs. |
+
+Every before answer works: its demo and the driver pass. That is the #364
+situation, where tests pass while the C and Lua C API layering is wrong.
+Every after answer drops the authored C, the manual protected call, the
+registry pin and the rooting push. The after answers follow the cartridge
+model closely (DeepSeek and Haiku keep its `Run`, `step` and
+`step_trampoline` names), so F2 shows that the model is found and applied,
+not that it is derived independently. Luna's `main()` repeats the FFI13
+baseline error, which the programmer cartridge's standalone-`main` rule
+already covers, so it is not a #370 wording gap.
+
+Limitations:
+
+- Each model ran once per round, and answers vary between runs.
+- Print-mode logs keep only the final message, so the read-only-cartridges
+  instruction rests on each answer's disclosure; all six name only the two
+  cartridges.
+- F2 exercises rules 1 and 3 to 5, and rule 2 by the absence of a C helper.
+  Rules 2 and 6 rest on compiled examples, not on an evaluation case.
+- F2's callback is synchronous. A trampoline called later, such as uv's,
+  needs a module or loop pin and an owner push, which the cartridge describes
+  and F2 does not exercise.
+- Everything ran on Linux x64, so there is no macOS, Windows, Clang or LTO
+  claim.
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 196 relative link targets and 67 anchors resolve in the skills tree, and 57
+  targets and 37 anchors in the four edited titan docs.
+- All 102 `titan` fences parse: the 100 earlier ones plus `counter.titan` and
+  the rule-6 union example.
+- The reserved-word list still equals the 38 keywords in `lexer.lua`.
+- The new cartridge examples were extracted verbatim and run with drivers:
+  the `counter` binding (a full collection inside every callback, a raise, a
+  nested call, and both buffer paths of `sum`), the rule-2 C function, and
+  the rule-6 receiver.
+- `git diff --check` is clean in both worktrees.
+
+Receipts are in `/tmp/titan-370/eval` (prompt template, prompts, answers,
+delivered files, per-round `runs.json`, `smoke/`, `reference/`, `driver/`,
+`run_eval.py`, `judge-run.sh` and the memory-off overlay) and
+`/tmp/titan-370/logs` (`issue370-*.log`, `eval/*.omp.log`), with
+`/tmp/titan-370/examples` and `/tmp/titan-370/mechanical`. They are archived
+as the `issue-370-validation-archive` release on mascarenhas/titan.
 
 ## Mechanical gates
 

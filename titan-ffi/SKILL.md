@@ -50,11 +50,11 @@ Before writing code, classify the job:
 | Call an ordinary C declaration in a header | `foreign import "header.h"`, then `ffi.member` |
 | Store a fixed C object or buffer owned by Titan | `.new()` / `.new_array(...)`, normally with an explicit `owned` type when it escapes |
 | Pass a C callback implemented in a small C-only body | top-level restricted `foreign function` |
-| Pass an ordinary Titan closure to C | **unsupported**; redesign around a restricted foreign function or a narrowly justified C shim |
+| Pass an ordinary Titan closure to C | **unsupported** in applications; redesign around a restricted foreign function or a narrowly justified C shim. Standard-library and runtime code run Titan from a C callback through the [guard-rail trampoline](#guard-rails-for-standard-library-and-runtime-c) |
 | Call a Lua function already supplied as a value | give it a Titan function type and call it normally |
 | Compile Lua text/binary, execute a Lua file, or load a Lua/C/Titan module | `local lua = import "lua"` |
 | Configure weak maps, finalizers, or the collector | `local gc = import "gc"`, not raw metatable/Lua-stack code |
-| Perform a stack-oriented `lua_*` operation | avoid in application code; it is a narrow audited standard-library exception, described below |
+| Perform a stack-oriented `lua_*` operation | avoid in application code; it is a narrow audited standard-library exception, described below with the guard-rails that limit it |
 | Wrap libuv or another async callback API | use this skill for the C surface and the async skill for Task/Runtime ownership; cancellation does not end native ownership |
 | Call JavaScript from Titan, or let JavaScript call a Titan closure (browser target) | `local browser = import "browser"`; see [Browser JavaScript bindings](#browser-javascript-bindings-titanbrowser) |
 
@@ -1287,13 +1287,14 @@ there; its transfer protocol never shares host GC objects or Titan closures.
 
 Titan's internal UV/HTTP/coroutine callback bridges use private
 `titan/ffi.h` bridges to recover generated `CClosure`, `Udata`, and native-entry
-internals before calling exact compiler-generated entries. This compiler/runtime-
-private callback set is separate from ordinary trusted modules that use narrow
-Lua C API operations. It is an audited compiler/runtime
-contract, **not** a general callback recipe. Do not copy it into application
-code or make it a public ABI. If the restricted body cannot express the
-boundary, pause and design one narrow C shim rather than constructing a second
-untyped callback runtime.
+internals before calling exact compiler-generated entries. In standard-library
+and runtime code, this trampoline is how a C callback runs Titan: follow the
+[guard-rails](#guard-rails-for-standard-library-and-runtime-c) and their
+`counter` binding rather than a C shim that calls Lua. It is an audited
+compiler/runtime contract, **not** an application recipe or a public ABI. In
+application code, if the restricted body cannot express the boundary, pause and
+design one narrow C shim rather than constructing a second untyped callback
+runtime.
 
 For async native APIs, cancellation of the waiting Task does not terminate the
 C request. The complete callback owner—including strings, buffers, callback
@@ -1458,14 +1459,18 @@ state); and completion-carrying byte I/O. Each contained entry carries an
 unsigned 64-bit operation identity and exactly one completion record; there is
 no raw native-address or erased-signature call path. Potentially throwing host
 imports fill a response and return normally; trusted adoption, release, and
-state imports never throw. A C pointer is not a root: keep original Titan
-strings, Arrays, and owned buffers on the Lua stack through every borrow with
-the existing save-top, check-stack, push, and `defer` restore pattern.
+state imports never throw. A C pointer is not a root: keep the original Titan
+string, Array, or owned buffer reachable through every borrow. In Titan, a
+parameter or a local of an enclosing block already does that (rule 5 of the
+[guard-rails](#guard-rails-for-standard-library-and-runtime-c)); C code keeps
+it in a Lua stack slot below the top.
 
-When changing the bridge itself, keep its ownership invariants: copy byte
-arguments by content (a `Uint8Array` subclass's `slice` may return a view);
-reacquire `HEAPU8` views after any allocation and copy an aliased source
-before growth; keep at most one sink call in flight per stream; capture an
+Changes to the bridge itself follow those guard-rails; its current C runtime
+and Titan side are their counterexamples, which titan#371 rewrites. Keep its
+ownership invariants: copy byte arguments by content (a `Uint8Array`
+subclass's `slice` may return a view); reacquire `HEAPU8` views after any
+allocation and copy an aliased source before growth; keep at most one sink
+call in flight per stream; capture an
 operation's failure where it occurs; keep promise and listener continuations at
 module scope, capturing only a detachable mailbox cell; and keep the
 Emscripten factory input a fresh null-prototype dictionary, as its code comment
@@ -1882,10 +1887,9 @@ function/method/lambda has a read-only built-in `L` typed as the current
 binding. Its stack effects, allocation, callbacks, and longjmp behavior need
 API-specific knowledge that ordinary FFI declarations do not encode.
 
-The project currently permits a narrow audited exception in private code of
-`titan.peg`, `titan.string`, `titan.lua`, `titan.iteration`, `titan.gc`, and
-`titan.test`, plus the one-slot Receiver string-copy helper in `titan.async`.
-Treat this section as a review checklist for that trusted code,
+The project permits a narrow audited exception in private standard-library
+code. Its inventory is the code itself: every `ffi.lua_*` and `ffi.luaL_*` call
+under `titan/`. Treat this section as a review checklist for that trusted code,
 not permission to scatter `lua_*` calls through applications. Prefer:
 
 * a typed Lua callable passed into Titan;
@@ -1897,6 +1901,219 @@ not permission to scatter `lua_*` calls through applications. Prefer:
 A `foreign function` gets no built-in `L`; an explicit C parameter or other C
 declaration must supply a state. Never store, return, replace, or use an old
 `L` after its current call contract.
+
+## Guard-rails for standard-library and runtime C
+
+The trusted exception says what audited code may do, not when to use it.
+Every standard-library or runtime change that touches C (authored C, a
+`foreign function` callback, or a `lua_*`/`luaL_*` call, the browser bridge
+included) follows these six rules, whose normative text is the style guide's
+[Write native bindings Titan-first](../../../doc/style-guide.md#write-native-bindings-titan-first).
+A review counts the new Lua C API calls and authored C lines in the
+diff and justifies each one against them. The wrong examples come from the
+first browser bridge (titan PR #364): its C runtime
+`titan-runtime/browser/titan-browser.c` and its Titan side
+`titan/browser.browser.titan`.
+
+1. **Layering.** Write the work in Titan, and make a C-ABI callback a Titan
+   `foreign function`. Author C only where Titan cannot: an exact exported C
+   name (an Emscripten export), a protected call before any Titan module
+   exists (running the image initializer), or a fact the FFI cannot express,
+   such as a function-like macro (`setuvalue` in uv's `titan_uv_push_owner`).
+   Keep such C a shim that recovers its context and hands over to Titan at
+   once. *Wrong:* `titan_browser_root_callable` validates the closure, copies
+   its signature into a new userdata
+   (`callable->kinds[i] = signature->parameters[i]`) and roots it, all in C.
+   *Right:* `step_trampoline` below.
+2. **Plain C stays plain C.** Data that only C uses lives in C locals,
+   formals and return codes, never on the Lua stack. Never `lua_pcall` a C
+   function that Lua never sees just to get a protected region: return a
+   status from it. *Wrong:* `titan_browser_root_callable` pushes the C
+   function `root_callable_worker` and its `&context` as light userdata, then
+   runs `lua_pcall(L, 4, 0, 0)` only so that `luaL_ref` may raise, be caught,
+   `luaL_unref`'d and raised again. *Right:* `next_generation` below.
+3. **Protected work belongs in Titan.** A boundary that must catch raises
+   calls a Titan function whose body uses `catch` and `defer`, with `error`
+   and `traceback` available there. The native callback trampolines are the
+   model: recover the state, owner, handler closure and entry; push the owner
+   when the handler may remove its last other home; call the entry; restore
+   the stack top (`timer_callback` and its handler `timer_deliver` in
+   `titan/uv/uv.native.titan`). *Wrong:* the initialize, main, invoke and
+   release entries each run a C worker under `protected_entry`'s `lua_pcall`,
+   and `complete_failure` adds three more (`original_trace`,
+   `error_description`, `restore_trace`) to rebuild the message and trace.
+   *Right:* `step` and `step_trampoline` below.
+4. **Pinning.** Per-state roots live in a module variable (a Map or Array)
+   or in an owner record's field, as `loop.handles` does: `timer_init` sets
+   `loop.handles[timer] = true` and `timer_closed` clears it. No `luaL_ref`,
+   registry tables or userdata uservalue tables for this. *Wrong:*
+   `root_callable_worker` stores `luaL_ref(L, 2)` slots in a table hanging off
+   a registry userdata's uservalue, with generations in a second one.
+   *Right:* the `progress` and `handler` fields of `Run` below.
+5. **Rooting.** A Titan parameter is rooted by its caller's provenance, and a
+   local by its frame slot, which is refreshed at its declaration and at every
+   assignment and is reused by sibling scopes once its block ends
+   ([the function frame](../../../doc/implementation/values-and-gc.md#1-the-function-frame-reserved-nil-initialized-stack-slots)
+   and [home roots](../../../doc/implementation/values-and-gc.md#2-home-roots-shadow-slots-and-borrowed-c-copies)).
+   Declare a value that must outlive an inner block in the outer block, and
+   copy an argument into a local before removing its last other home. Never
+   `lua_pushtvalue` a parameter or local just to keep it alive. *Wrong:*
+   `invoke` in `browser.browser.titan` pushes its parameters
+   (`ffi.lua_pushtvalue(L, target)`) and an `owned` buffer `extra` declared
+   inside `if #arguments > 8 then`, which `slots` still points into after the
+   block. *Right:* `sum` below.
+6. **Don't duplicate checks the receiver makes.** Where the other side of a
+   boundary is dynamically typed, marshal by runtime type into one tagged
+   union at the boundary and let the receiving code decide what it accepts.
+   Do not build parallel signature or descriptor
+   machinery that re-checks the same thing on both sides. *Wrong:* `callable`
+   reflects a closure's signature into kind descriptors, and the loader's
+   `snapshotArguments` re-checks each argument against them before Titan's
+   own entry checks the call again. *Right:* `twice` below.
+
+The model for rules 1 and 3 to 5 binds a C function that calls back once per
+step, on the calling thread, before it returns:
+
+```c
+/* counter.h */
+#ifndef COUNTER_H
+#define COUNTER_H
+#include <stddef.h>
+
+typedef void (*counter_step)(int done, int total, void *data);
+
+/* Calls step once per unit of work, synchronously; keeps neither pointer. */
+static inline void counter_run(int total, counter_step step, void *data) {
+  for (long long done = 1; done <= total; done++) step((int)done, total, data);
+}
+
+static inline long long counter_sum(const int *values, size_t count) {
+  long long sum = 0;
+  for (size_t i = 0; i < count; i++) sum += values[i];
+  return sum;
+}
+#endif
+```
+
+```titan
+-- counter.titan
+foreign import "lua.h"
+foreign import "titan/ffi.h"
+foreign import "counter.h"
+
+-- The native entry of `step`: L, module, closure, then step's parameters.
+foreign type StepEntry = function (*lua_State, *Udata, *CClosure, *Udata, lua_Integer, lua_Integer): void
+
+local record Run              -- per-call owner; `run`'s local roots it (rule 5)
+  state: foreign *lua_State   -- the caller's L, read only during the call
+  handler: function (Run, integer, integer)  -- the exact function value
+  progress: function (integer, integer)      -- pinned by this field (rule 4)
+  failed: boolean
+  failure: value
+end
+
+-- Rule 3: the protected work is Titan; the whole body is the protected block.
+local function step(run: Run, done: integer, total: integer)
+  if not run.failed then run.progress(done, total) end
+catch
+  run.failed = true
+  run.failure = error
+end
+
+-- Rule 1: the C-ABI callback is a Titan foreign function that recovers the
+-- state, owner, handler and entry, calls the entry and restores the top.
+local foreign function step_trampoline(done: int, total: int, data: *void)
+  local owner = data as foreign *Udata
+  local L = ffi.titan_record_field(owner, "Run", "state")
+  local handler = ffi.lmacro_clCvalue(ffi.titan_record_field(owner, "Run", "handler"))
+  local module = ffi.lmacro_uvalue(handler.upvalue[0])
+  local entry = ffi.lmacro_pvalue(handler.upvalue[2]) as foreign StepEntry
+  local top = ffi.lua_gettop(L)
+  entry(L, module, handler, owner, done as foreign lua_Integer, total as foreign lua_Integer)
+  ffi.lua_settop(L, top)
+end
+
+function run(total: integer, progress: function (integer, integer))
+  local owner = Run { state = L, handler = step, progress = progress, failed = false, failure = nil }
+  -- `step`'s entry reserves its frame before its catch, so reserve it here.
+  if ffi.lua_checkstack(L, ffi.LUA_MINSTACK) == 0 then raise "cannot reserve callback stack" end
+  ffi.counter_run(total, step_trampoline, owner as foreign *void)
+  if owner.failed then raise owner.failure end -- after the native call returns
+end
+
+-- Rule 5: `values` is rooted by its caller; `extra` is declared in the outer
+-- block because `slots` may point into its buffer after the `if` ends.
+function sum(values: {integer}): integer
+  local small = foreign int.new_array(8)
+  local slots: foreign *int = small
+  local extra: (owned int[])?
+  if #values > 8 then
+    local buffer: owned int[] = foreign int.new_array(#values)
+    extra = buffer
+    slots = buffer
+  end
+  for index = 1, #values do slots[index - 1] = values[index] end
+  return ffi.counter_sum(slots, #values)
+end
+```
+
+These bridges are private to standard-library and runtime code; application
+code never uses them:
+
+* `ffi.titan_record_field(owner, "Run", "state")` works only inside a
+  `foreign function` of a module that directly imports `titan/ffi.h`, for a
+  record declared in that module. A traced field reads as a `TValue`, a raw C
+  field as its C value.
+* A Titan function value is a C closure: `upvalue[0]` holds the module
+  userdata and `upvalue[2]` its native entry. Store the function itself in a
+  field of its exact type, so no callable adjustment wraps it. Give the handler
+  fixed parameters and no results. Its entry then takes `L`, the module, the
+  closure and the parameters in their generated C types (`*Udata` for a
+  record, `lua_Integer` for an integer), and returns nothing; convert each C
+  argument with `as`.
+* `run`'s local `owner` roots the owner, and with it the callback and handler,
+  for the whole native call, so the trampoline pushes nothing. A callback that
+  arrives later, such as a uv handle's, has no such frame: pin its owner in a
+  module or owner Map, and when the handler removes that entry, push the owner
+  before calling the entry (uv's `titan_uv_push_owner`).
+* `state = L` keeps the caller's state only for this call, as the HTTP
+  parser's `callback_state` does, because `counter_run` calls back on the
+  calling thread before it returns. Never keep `L` past the call.
+* A function-level `catch` makes the handler's whole body the protected block,
+  and `run` raises the latched error after the native call returns. The entry
+  reserves its frame just before that catch begins, so keep the handler small
+  and reserve `LUA_MINSTACK` before entering C, as `uv.run` does. Then no raise
+  crosses the C frames.
+
+When C must stay (rule 2), it takes formals and returns a status, and its
+caller raises once the C state is consistent:
+
+```c
+static int next_generation(uint32_t *generation) {
+  if (*generation == UINT32_MAX) return -1; /* exhausted */
+  *generation += 1;
+  return 0;
+}
+```
+
+For rule 6 the sender picks the variant from a value's runtime type, and the
+receiver cases on it and raises for what it rejects:
+
+```titan
+union Value -- one tagged union at the boundary
+  is_nil()
+  is_integer(integer)
+  is_bytes(string)
+end
+
+function twice(...: Value): Value
+  case ...[1]
+  when is_integer(n) then return Value.is_integer(n * 2)
+  when is_bytes(text) then return Value.is_bytes(text .. text)
+  end
+  raise "twice expects an integer or bytes"
+end
+```
 
 ## The stack transaction pattern
 
@@ -2043,9 +2260,11 @@ Keep these facts separate:
   run when the call is translated back; a restricted `foreign function` has no
   such Titan frame.
 
-Semantic state belongs in the Lua registry or GC-traced Lua/Titan objects, not
-mutable translation-unit C globals. That is what gives each Lua state an
-independent module instance and makes multi-state loading correct.
+Per-state semantic state belongs in module variables or GC-traced Titan owners
+(guard-rail 4), not mutable translation-unit C globals; registry access is for
+protocols that already live there, such as `package.loaded`. That is what
+gives each Lua state an independent module instance and makes multi-state
+loading correct.
 
 # Ownership and cleanup review
 
@@ -2153,6 +2372,8 @@ maps/finalizers.
 **Right:** write a `foreign function` with direct C parameters and a C-only
 body when possible. If it cannot reach the required state safely, design a
 small explicit C boundary; do not forge compiler closure internals.
+Standard-library code that must run Titan from the callback uses the
+guard-rail trampoline (rule 3) instead.
 
 ### Borrowed pointer used as owner -> retain the owner
 
@@ -2204,14 +2425,17 @@ metamethods, or a missing upvalue take different paths.
 **Right:** snapshot `lua_gettop`, immediately `defer lua_settop`, reserve the
 maximum, keep an explicit ledger, and trace survivors before restoration.
 
-### Lua as convenient implementation language -> typed Titan first
+### C or Lua as convenient implementation language -> typed Titan first
 
-**Wrong:** generate/load Lua to avoid modeling a closed operation in Titan, or
-use `titan.lua.require` for a module known at compile time.
+**Wrong:** generate/load Lua, or write authored C and raw `lua_*` calls, to
+avoid modeling a closed operation in Titan; or use `titan.lua.require` for a
+module known at compile time.
 
 **Right:** use Titan records/unions/functions and static `import`. Load Lua only
 when dynamic Lua execution or run-time Lua module discovery is the actual
-feature. Review loaded code with the same seriousness as native C.
+feature. Review loaded code with the same seriousness as native C. In
+standard-library and runtime code, keep C within the six
+[guard-rails](#guard-rails-for-standard-library-and-runtime-c).
 
 # Explicit unsupported-feature wall
 
@@ -2332,7 +2556,8 @@ searching by analogy.
 * `doc/language/standard-library-gc.md` — weak maps, finalizers, collector
   actions.
 * `doc/style-guide.md`, especially “Keep Lua and C machinery behind narrow
-  audited boundaries,” “Acquire, then defer the close,” and finalizer rules.
+  audited boundaries,” “Write native bindings Titan-first,” “Acquire, then
+  defer the close,” and finalizer rules.
 * `doc/language/standard-library-browser.md` and the [loader
   API](../../../doc/language/browser-target.md#the-loader-api) — browser-only
   `titan.browser` bindings, callables, requests, errors, and instance lifetime.
@@ -2729,6 +2954,9 @@ Before approving code, answer all of these explicitly:
   `value`/`value` equality distinguished?
 * If the raw Lua API is used, where are the saved top, maximum reservation,
   per-path ledger, traced survivor, nonyielding rule, and borrowed-pointer audit?
+* In standard-library or runtime code, is each new `lua_*`/`luaL_*` call and
+  authored C line justified against the six
+  [guard-rails](#guard-rails-for-standard-library-and-runtime-c)?
 * Are cleanup and tests located at the owning layer?
 * At a browser JavaScript boundary, are integers `BigInt`, bytes copied,
   handles and callables closed or released, never-settling host work
