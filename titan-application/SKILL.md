@@ -100,11 +100,15 @@ when the SDK's headers and providers resolve to the same paths and all other
 inputs, options, and the native toolchain are unchanged: every object, native
 C node, and final link is reused, and `titanc` compiles and links nothing
 despite new timestamps and inodes. The digest cache may rehash those files
-first. Moving the SDK so its headers or providers resolve to a different
-physical path, or retargeting a symlink, can legitimately miss. Opaque native
-mechanisms (`@file` arguments, `-fplugin`, `-specs`, `-wrapper`, `-Xclang` or
-`-Xlinker`) or an uncertified toolchain make the affected native C nodes or
-final link uncacheable, so they run on every build, republished or not.
+first. With this explicit output tree, moving the tree or an identical SDK
+prefix also keeps certified objects and native final links; the first build
+after a move may preprocess generated C once to confirm it is unchanged, and
+reused objects keep their original embedded debug paths. An SDK reached
+through a symlink is not relocatable, so retargeting that symlink can
+legitimately miss. Opaque native mechanisms (`@file` arguments, `-fplugin`,
+`-specs`, `-wrapper`, `-Xclang` or `-Xlinker`) or an uncertified toolchain
+make the affected native C nodes or final link uncacheable, so they run on
+every build, republished or not.
 
 Titan keeps a disposable digest cache at `build/.titan/digests`. It reuses
 hashes only when precise device/inode, size, mode, and nanosecond mtime/ctime

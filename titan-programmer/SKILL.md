@@ -2036,10 +2036,24 @@ build with valid outputs and certificates, when the SDK's headers and providers
 still resolve to the same paths and all other inputs, options, and the native
 toolchain are unchanged: objects, native C nodes, and final links are reused,
 with no compilation or linking despite new timestamps and inodes. The digest
-cache may rehash first; an SDK moved to a different physical path or a
-retargeted symlink can legitimately miss. Opaque native mechanisms (`@file`,
-`-fplugin`, `-specs`, `-wrapper`, `-Xclang`, `-Xlinker`) or an uncertified
-toolchain keep the affected native nodes or final link uncacheable either way.
+cache may rehash first.
+
+With an explicit `-o`/`--output` tree, moving the built output tree or an
+identical SDK prefix also preserves reuse when all other inputs and generated-C
+semantics are unchanged. Certification identifies the SDK prefix, the output
+root, and the compiler's own source checkout (when it runs from source) by
+root-relative paths, including their path operands in compile commands and the
+SDK include directories; the user source tree is not a compiler-owned root.
+Reused objects keep their original embedded debug and diagnostic paths. The
+first build after a move may preprocess generated C to verify its semantics
+before accepting the objects; later receipt hits avoid repeating that work.
+Changed user-source spelling, external-input bindings, symlink targets, or
+path-sensitive macro values such as `__FILE__` and `__BASE_FILE__` still cause
+misses. Source-adjacent builds without `-o` miss conservatively when moved.
+
+Opaque native mechanisms (`@file`, `-fplugin`, `-specs`, `-wrapper`, `-Xclang`,
+`-Xlinker`) or an uncertified toolchain keep the affected native nodes or final
+link uncacheable either way.
 
 Keep the source-path spelling stable: `--tree src` and an absolute spelling
 can produce different code locations and legitimately miss. Equivalent
