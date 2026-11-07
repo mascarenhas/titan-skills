@@ -1359,7 +1359,7 @@ are never global lookups or `eval`. Calls into JavaScript use
 `target:call(...: BrowserValue): BrowserValue`, which returns one
 `BrowserValue` marshalled by runtime type:
 
-```titan
+```text
 union BrowserValue
   is_nil()
   is_boolean(boolean)
@@ -1390,7 +1390,7 @@ local type Value = browser.BrowserValue
 function text_width(text: string): integer
   local measure = browser.binding("measure")
   defer measure:close()
-  case measure:call(Value.is_bytes(text))
+  case measure:call(Value.is_string(text))
   when is_integer(width) then return width
   end
   raise "measure must return a BigInt"
@@ -1435,7 +1435,7 @@ function publish_counter()
   local count = 0
   local register = browser.binding("register")
   defer register:close()
-  local increment = function(...: browser.BrowserValue): browser.BrowserValue
+  local increment = function(...: Value): Value
     case ...[1]
     when is_integer(delta) then
       count = count + delta
@@ -1496,7 +1496,7 @@ function main(args: {string}): integer
   local report = browser.binding("report") -- the callbacks use it after main
   local fetch = browser.binding("fetch_text")
   defer fetch:close() -- start invokes the binding synchronously
-  local done = function(...: browser.BrowserValue): browser.BrowserValue
+  local done = function(...: Value): Value
     case ...[1]
     when is_string(body) then
       report:call(Value.is_string("loaded " .. body))
@@ -1504,7 +1504,7 @@ function main(args: {string}): integer
     end
     raise "done expected a string body"
   end
-  local failed = function(...: browser.BrowserValue): browser.BrowserValue
+  local failed = function(...: Value): Value
     case ...[1]
     when is_string(message) then
       case ...[2]
@@ -1552,9 +1552,9 @@ saved failure.
 ## The C SDK and bridge maintenance
 
 C reaches the same boundary through the installed `titan/browser.h`: a checked
-wasm32 slot, response, and completion ABI; the earliest state-token list
-(`titan_browser_attach` before `luaL_openlibs` in an independently created
-state); C→Titan callable pin/unpin shims; and completion-carrying byte I/O.
+wasm32 slot, response, and completion ABI, and the state record (`attach`
+before `luaL_openlibs` in an independently created state, with the cross-state
+token→record map in the JavaScript registry).
 Each contained entry carries an unsigned 64-bit operation identity and exactly
 one completion record. Potentially throwing host imports fill a response and
 return normally; trusted adoption, release, and state imports never throw. A C
@@ -2013,16 +2013,49 @@ initial browser bridge at commit `843b446e` (titan PR #364, before titan#371's
 rewrite): `titan-runtime/browser/titan-browser.c`,
 `titan/browser.browser.titan`, and `titan-runtime/browser/titan-browser.mjs`.
 
-1. **Layering.** Write the work in Titan, and make a C-ABI callback a Titan
-   `foreign function`. Author C only where Titan cannot: an exact exported C
-   name (an Emscripten export), a protected call before any Titan module
-   exists (running the image initializer), or a fact the FFI cannot express,
-   such as a function-like macro (`setuvalue` in uv's `titan_uv_push_owner`).
-   Keep such C a shim that recovers its context and hands over to Titan at
-   once. *Wrong:* `titan_browser_root_callable` validates the closure, copies
-   its signature into a new userdata
-   (`callable->kinds[i] = signature->parameters[i]`) and roots it, all in C.
-   *Right:* `step_trampoline` below.
+### Where each piece of a native boundary goes
+
+| Boundary need | Placement |
+| --- | --- |
+| Called by C through a function pointer (libuv callbacks, `__gc` and other `lua_CFunction`s) | `local foreign function` in the Titan module, address taken |
+| Called by name from C or generated code where any C symbol works | Public `foreign function` in the Titan module; C callers use the generated `.titan.h` (or mangled declaration), using header-free C primitive parameters when public consumers should not need a `foreign import` |
+| Needs an exact unmangled C symbol (an Emscripten export, a symbol a C library looks up) | Compiler-generated one-line forward to a public `foreign function` (with `__attribute__((weak))` when the owning module may be absent), never a hand-written runtime C wrapper |
+| Program entry and image lifecycle (native `main`, browser `initialize`/`entry`/`close`) | Compiler-generated launcher sharing one error-conversion (`errmsg_tostring`) and trace implementation; protected `lua_pcall`s live there, not in runtime libraries |
+| Data and roots | Per-state roots in module variables or owner fields; cross-state maps with the host that already owns the lifetime (the browser's JS registry), not C statics in runtime code; the Lua registry only to anchor an object before any module variable exists, explicitly justified |
+| C struct access and marshalling | In Titan through `foreign import`; headers hold only struct layouts, declarations, and one-line inline macro bridges (`lmacro_*` in `titan/ffi.h`) for macros the FFI cannot spell |
+| Test-only C | In test fixtures (`spec/fixtures/`), never in the runtime or standard library |
+
+For example, `browserentry.lua` generates a one-line weak forward for the exact
+Emscripten export `titan_browser_invoke`, while `titan/browser.browser.titan`
+implements the public `foreign function invoke` using the uv-trampoline shape:
+
+```c
+extern int titan_browser_\u2133_invoke_titan(
+    unsigned long long operation_id, unsigned int state, unsigned int slot,
+    unsigned int generation, unsigned int argc,
+    const void *args) __attribute__((weak));
+
+int titan_browser_invoke(uint64_t operation_id, uint32_t state, uint32_t slot,
+        uint32_t generation, uint32_t argc, const titan_browser_value *args) {
+    return titan_browser_\u2133_invoke_titan
+        ? titan_browser_\u2133_invoke_titan(operation_id, state, slot, generation, argc, args)
+        : (!operation_id || !titan_browser_entry_allowed(operation_id, TITAN_BROWSER_INVOKE) ? -1
+            : titan_browser_invalid_entry(operation_id, TITAN_BROWSER_INVOKE,
+                  "browser state is closed, closing or uninitialized"));
+}
+```
+
+1. **Layering.** Write the work in Titan; do not add hand-written runtime C
+   files for standard-library bindings. Follow the placement table above, and
+   use one-line inline macro bridges (`lmacro_*` in `titan/ffi.h` or
+   `titan_uv_push_owner` in `titan/uv/callback.h`) only for macros the FFI
+   cannot spell. *Wrong:* a 600-line runtime C file (`titan-browser.c` at
+   `843b446e`) hand-writing the Emscripten exports, the launcher
+   `protected_entry`, a C `states` linked list, and
+   `titan_browser_root_callable` (validating the closure, copying its signature
+   into a new userdata, and rooting it in C). *Right:* `step_trampoline` below,
+   and `browserentry.lua`'s one-line weak forwards to `titan.browser`'s public
+   `foreign function`s.
 2. **Plain C stays plain C.** Data that only C uses lives in C locals,
    formals and return codes, never on the Lua stack. Never `lua_pcall` a C
    function that Lua never sees just to get a protected region: return a
@@ -2036,7 +2069,7 @@ rewrite): `titan-runtime/browser/titan-browser.c`,
    model: recover the state, owner, handler closure and entry; push the owner
    when the handler may remove its last other home; call the entry; restore
    the stack top (`timer_callback` and its handler `timer_deliver` in
-   `titan/uv/uv.native.titan`). *Wrong:* the initialize, main, invoke and
+   `titan/uv/uv.native.titan`). *Wrong:* the invoke and
    release entries each run a C worker under `protected_entry`'s `lua_pcall`,
    and `complete_failure` adds three more (`original_trace`,
    `error_description`, `restore_trace`) to rebuild the message and trace.
@@ -2733,10 +2766,10 @@ searching by analogy.
   metadata, alignment, and attachment entries before detachment and derives
   interior pointers only after growth; never add a sizing pass that replays a hook.
 * `titan/browser.browser.titan`, `titan-runtime/titan/browser.h`,
-  `titan-runtime/browser/titan-browser.c`, and the loader
+  `titan-compiler/browserentry.lua`, and the loader
   `titan-runtime/browser/titan-browser.mjs` with its JavaScript libraries —
-  the browser bridge's Titan API, installed C contract, protected runtime, and
-  JavaScript owner.
+  the browser bridge's Titan API and foreign trampolines, installed C contract,
+  generated launcher and weak forwards, and JavaScript owner.
 
 ## Focused specs
 
