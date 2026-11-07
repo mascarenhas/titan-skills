@@ -568,18 +568,21 @@ publishes two closures that share one mutable counter to a JavaScript
 and starts host work that may never settle with a one-string success callable
 and its failure callable. The page imports the generated image, initializes
 and runs it, calls both closures, and disposes it. Require
-`import "browser"`, `browser.callable` on the original closures with fixed
-scalar signatures, `Argument` constructors, `call_integer`, a detachable
-`start` with an exact `function(string, JSHandle)` failure callable, explicit
-`close()` of handles, `BigInt` integers (`5n`) in both directions, resolved
-result Arrays, the default `create(options)` import without a separate
-loader, and `await instance.dispose()` in `finally`. Also ask what happens
-when a binding calls `instance.call` synchronously inside `try/catch`, and
-how a JavaScript-Titan reference cycle is released. Require a promise
-rejection with `TITAN_BROWSER_REENTRY` that the binding's `try/catch` does not
-see, `notify`/`drain` or a handled promise as the alternative, and explicit
-release because neither collector traces the other heap. Reject a
-synchronous reverse call, Number coercion, a raw factory, a retained form for
+`import "browser"`, `BrowserValue` constructors (`is_callable`, `is_bytes`,
+`is_string`, `is_integer`, `is_nil`), `target:call(...)` with `case` on the
+returned `BrowserValue`, a detachable `target:start(completion, failure, ...)`
+whose failure callable handles `(is_string(message), is_handle(thrown))` and
+closes `thrown`, explicit `close()` of `BrowserHandle`s, `BigInt` integers
+(`5n`) in both directions, single bare resolved values from `call`, the default
+`create(options)` import without a separate loader, and
+`await instance.dispose()` in `finally`. Also ask what happens when a binding
+calls `instance.call` synchronously inside `try/catch`, and how a
+JavaScript-Titan reference cycle is released. Require a promise rejection with
+`TITAN_BROWSER_REENTRY` that the binding's `try/catch` does not see,
+`notify`/`drain` or a handled promise as the alternative, and explicit release
+because neither collector traces the other heap. Reject a synchronous reverse
+call, Number coercion, removed `JSHandle`/`Argument`/`Callable`/
+`browser.callable`/`call_<kind>` names, a raw factory, a retained form for
 forever-pending work, `onNotificationError` as the rejection path, or an
 invented scheduler, native placeholder, or raw-pointer API. The module must
 compile with `titanc --target browser` against the matching installed browser

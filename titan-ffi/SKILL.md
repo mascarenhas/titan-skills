@@ -1353,71 +1353,111 @@ JavaScript-to-Titan call, or build a second runtime or compatibility lifecycle.
 
 ## Calling JavaScript from Titan
 
-`browser.binding(name)` returns a `JSHandle` for a value the host supplied in
-`create({bindings})`, including `false`, `0`, `null`, and `undefined`; names
-are never global lookups or `eval`. Calls are typed by their result:
-`call_boolean`, `call_integer`, `call_float`, `call_bytes`, `call_handle`, and
-`call_void`, each with a target `JSHandle` and an Array of `browser.Argument`
-(`Argument.is_nil()`, `is_boolean`, `is_integer`, `is_float`, `is_bytes`,
-`is_handle`, `is_callable`). The carrier is an in-process typed ABI, not JSON,
-protobuf, or a transfer packet.
+`browser.binding(name)` returns a `BrowserHandle` for a value the host supplied
+in `create({bindings})`, including `false`, `0`, `null`, and `undefined`; names
+are never global lookups or `eval`. Calls into JavaScript use
+`target:call(...: BrowserValue): BrowserValue`, which returns one
+`BrowserValue` marshalled by runtime type:
+
+```titan
+union BrowserValue
+  is_nil()
+  is_boolean(boolean)
+  is_integer(integer)
+  is_float(float)
+  is_string(string)
+  is_bytes(string)
+  is_handle(BrowserHandle)
+  is_callable(function (...: BrowserValue): BrowserValue)
+end
+```
+
+| JavaScript | `BrowserValue` | JavaScript, back |
+| --- | --- | --- |
+| `undefined`, `null` | `is_nil()` | `null` |
+| boolean | `is_boolean(boolean)` | boolean |
+| `BigInt` (signed i64, range-checked) | `is_integer(integer)` | `BigInt` |
+| `Number` | `is_float(float)` | `Number` (NaN, `-0` kept) |
+| string (well-formed UTF-16) | `is_string(string)`, UTF-8 encoded | string, UTF-8 decoded |
+| `Uint8Array` | `is_bytes(string)`, copied | `Uint8Array` copy |
+| the wrapper of a Titan callable | `is_callable(fn)`, the original function | the same wrapper |
+| any other value, JS functions included | `is_handle(BrowserHandle)` | the retained value |
 
 ```titan
 local browser = import "browser"
+local type Value = browser.BrowserValue
 
 function text_width(text: string): integer
   local measure = browser.binding("measure")
   defer measure:close()
-  return browser.call_integer(measure, {browser.Argument.is_bytes(text)})
+  case measure:call(Value.is_bytes(text))
+  when is_integer(width) then return width
+  end
+  raise "measure must return a BigInt"
 end
 ```
 
 Integers cross as signed-i64 JavaScript `BigInt` in both directions, even when
-small; a Number is never coerced, so `measure` returns `5n`, not `5`. Floats
-keep their floating tag, NaN, and negative zero. Strings are counted copied
-bytes, not UTF-8 text: a byte result is a `Uint8Array` or a counted
-`{bytes, length}` source. A binding that throws returns normally to the import
-first; Titan then raises `browser.Error`, whose `message` is the copied
-diagnostic and whose `thrown` handle holds the exact thrown JavaScript value.
-Test for it with `error is browser.Error` in a `catch` and `close()` it. A
-Promise is a valid opaque `call_handle` result but not a scalar, byte, or void
-result, and holding it does not handle its rejection.
+small; a `Number` is never coerced (`5` arrives as `is_float(5.0)`), so
+`measure` returns `5n`, not `5`. Out-of-range `BigInt` values raise
+`TypeError`. Floats keep their floating tag, NaN, and negative zero.
+`is_string` carries UTF-8 text and crosses as a JavaScript string (invalid
+UTF-8 from Titan raises, and an ill-formed UTF-16 JavaScript string with a lone
+surrogate raises `TypeError`); `is_bytes` carries copied binary bytes and
+crosses as a `Uint8Array` copy. A binding that throws returns normally to the
+import first; Titan then raises `browser.BrowserError`, whose `message` is the
+copied diagnostic and whose `thrown` handle holds the exact thrown JavaScript
+value. Test for it with `error is browser.BrowserError` in a `catch` and
+`close()` it. A Promise returned by a binding arrives as `is_handle` and
+holding it does not handle its rejection.
 
-`JSHandle`, `Callable`, and `Request` are state-owned units with idempotent
+`BrowserHandle` and `BrowserRequest` are state-owned units with idempotent
 `close()`. Close them explicitly where their lifetime ends; an unreachable
-`JSHandle` also has an allocation-free finalizer, and state close retires every
-remaining unit, including units created by close-phase finalizers.
+`BrowserHandle` also has an allocation-free finalizer, and state close retires
+every remaining unit, including units created by close-phase finalizers.
 
 ## Calling Titan from JavaScript
 
-`browser.callable(f)` roots the original Titan closure and its shared capture
-cells in the state registry; it is not a closure snapshot or transfer. The
-function must have fixed parameters and results of nil, boolean, integer,
-float, byte string, `JSHandle`, or `Callable`. Options, open tails, `value`,
-containers, and other nominals are rejected before any call.
+A Titan function `fn: function (...: BrowserValue): BrowserValue` crosses into
+JavaScript as `BrowserValue.is_callable(fn)` (or as the `completion`/`failure`
+arguments of `target:start` / `target:listen`). It is pinned when it first
+crosses into JavaScript in a per-state module variable: one slot and one
+JavaScript wrapper per function per state, so the same function always reaches
+JavaScript as the same wrapper, and passing that wrapper back to Titan recovers
+the original function and its shared capture cells. There is no separate
+`Callable` record or `browser.callable` wrapper.
 
 ```titan
 local browser = import "browser"
+local type Value = browser.BrowserValue
 
 function publish_counter()
   local count = 0
   local register = browser.binding("register")
   defer register:close()
-  local increment = browser.callable(function(delta: integer): integer
-    count = count + delta
-    return count
-  end)
-  browser.call_void(register, {browser.Argument.is_callable(increment)})
+  local increment = function(...: browser.BrowserValue): browser.BrowserValue
+    case ...[1]
+    when is_integer(delta) then
+      count = count + delta
+      return Value.is_integer(count)
+    end
+    raise "increment expects an integer"
+  end
+  register:call(Value.is_callable(increment))
 end
 ```
 
 JavaScript receives a branded wrapper. `await wrapper.call(5n)` and
-`await instance.call(wrapper, 5n)` both resolve the dense decoded result Array
-(`[]`, `[null]`, `[value]`, or every result with trailing nils), here `[5n]`.
-A Promise in that Array stays an opaque element and is not awaited. Wrapper
-`release()`, `Callable:close()`, or disposal ends the root; collecting the
-transient Titan `Callable` does not. Neither collector traces the other heap,
-so a JavaScript object → callable → `JSHandle` cycle needs an explicit release.
+`await instance.call(wrapper, 5n)` marshal arguments by runtime type into
+`BrowserValue` and resolve to the single decoded return value (`null` for
+`is_nil()`, `5n` here for `is_integer(5)`). Returning a `BrowserHandle` that
+holds a `Promise` or thenable causes the user-facing `call` promise to adopt
+it, while internal operation admission and `dispose()` depend only on the Wasm
+entry's completion. A callable stays pinned while any holder needs it (a live
+JavaScript wrapper, or an active request or listener); wrapper `release()`,
+request retirement, and state close drop their holds. Neither collector traces
+the other heap, so a JavaScript object → callable wrapper → `BrowserHandle`
+cycle needs an explicit `release()` or `close()`.
 
 Every general call into Titan returns a promise, even for a body with no
 `yield`: an allocation can run abandoned-coroutine cleanup, which switches
@@ -1428,49 +1468,68 @@ see it. Await and handle that rejection in the host, or enqueue with
 `await instance.drain()`. `requestDrain` only announces queued work; the bridge
 has no scheduler.
 
-`browser.start(target, args, success, failure)` and `browser.listen(...)`
-admit host work and need both callables; failure has the exact signature
-`function(string, JSHandle)`. The host binding returns
-`{kind: "detachable", promise, cancel?}` for work that might never settle,
-`{kind: "retained", promise, cancel?}` only when settlement is guaranteed, or
-`{kind: "listener", subscribe(emit)}` whose `subscribe` returns an unregister
-function. Each settlement becomes one queued protected notification;
-`Request:cancel()` signals the host but is not retirement.
-`onNotificationError` receives `{kind: "callback" | "cleanup", operation,
-error}` only for errors no caller can receive; it never stands in for a
-request's failure callable.
+`target:start(completion, failure, ...: BrowserValue): BrowserRequest` and
+`target:listen(completion, failure, ...: BrowserValue): BrowserRequest` admit
+host work and take `BrowserValue` callables for both `completion` and
+`failure`. One-shot `start` `completion` receives one `BrowserValue` argument
+(the settled value marshalled by runtime type, with `undefined` mapped to
+`is_nil()`); `listen` passes each emitted argument marshalled by runtime type;
+`failure` receives `(BrowserValue.is_string(message),
+BrowserValue.is_handle(thrown))`, where `thrown` is always a `BrowserHandle`
+even for a thrown primitive. Type errors in `completion` or `failure` occur at
+delivery time in `drain()` and are reported through `onNotificationError`. The
+host binding returns `{kind: "detachable", promise, cancel?}` for work that
+might never settle, `{kind: "retained", promise, cancel?}` only when settlement
+is guaranteed, or `{kind: "listener", subscribe(emit)}` whose `subscribe`
+returns an unregister function. `BrowserRequest:cancel()` signals the host but
+is not physical retirement. `onNotificationError` receives
+`{kind: "callback" | "cleanup", operation, error}` only for errors no caller
+can receive; it never stands in for a request's `failure` callable.
 
 A complete page module that starts one host request:
 
 ```titan
 local browser = import "browser"
+local type Value = browser.BrowserValue
 
 function main(args: {string}): integer
   local report = browser.binding("report") -- the callbacks use it after main
   local fetch = browser.binding("fetch_text")
   defer fetch:close() -- start invokes the binding synchronously
-  local done = browser.callable(function(body: string)
-    browser.call_void(report, {browser.Argument.is_bytes("loaded " .. body)})
-  end)
-  local failed = browser.callable(function(message: string, thrown: browser.JSHandle)
-    thrown:close()
-    browser.call_void(report, {browser.Argument.is_bytes("failed " .. message)})
-  end)
-  browser.start(fetch, {browser.Argument.is_bytes(args[1])}, done, failed)
+  local done = function(...: browser.BrowserValue): browser.BrowserValue
+    case ...[1]
+    when is_string(body) then
+      report:call(Value.is_string("loaded " .. body))
+      return Value.is_nil()
+    end
+    raise "done expected a string body"
+  end
+  local failed = function(...: browser.BrowserValue): browser.BrowserValue
+    case ...[1]
+    when is_string(message) then
+      case ...[2]
+      when is_handle(thrown) then
+        thrown:close()
+        report:call(Value.is_string("failed " .. message))
+        return Value.is_nil()
+      end
+    end
+    raise "failed expected (is_string, is_handle)"
+  end
+  fetch:start(done, failed, Value.is_string(args[1]))
   return 0
 end
 ```
 
 Only this exact exported `main(args: {string}): integer` makes a page image;
-`main()` is an ordinary library function, so `--exe` fails. `browser.start`
-takes two `Callable`s from `browser.callable`, never bare functions; keep its
-returned `Request` only to cancel or close it. The success parameters match
-the host promise's resolution: one value here (a `Uint8Array`), `undefined`
-for none, or a dense Array for several. Main's `defer`s run before the
-page's later `drain()` delivers the outcome, so leave open what the callbacks
-use; `dispose()` retires it. A colon-declared method is not a field value: for
-`function Session:on_done(body: string)`, `session.on_done` is a field lookup
-and fails to typecheck. Pass `browser.callable(session:on_done)` (a bound
+`main()` is an ordinary library function, so `--exe` fails. `fetch:start` takes
+two `function (...: BrowserValue): BrowserValue` callables before the variadic
+`BrowserValue` arguments; keep its returned `BrowserRequest` when you need to
+cancel or close it. Main's `defer`s run before the page's later `drain()`
+delivers the outcome, so leave open what the callbacks use; `dispose()` retires
+it. A colon-declared method is not a field value: for
+`function Session:on_done(...: BrowserValue): BrowserValue`, `session.on_done`
+is a field lookup and fails to typecheck. Pass `session:on_done` (a bound
 method) or a lambda.
 
 ## Instance lifetime
@@ -1493,21 +1552,20 @@ saved failure.
 ## The C SDK and bridge maintenance
 
 C reaches the same boundary through the installed `titan/browser.h`: a checked
-wasm32 slot, response, and completion ABI; the earliest state registry
+wasm32 slot, response, and completion ABI; the earliest state-token list
 (`titan_browser_attach` before `luaL_openlibs` in an independently created
-state); and completion-carrying byte I/O. Each contained entry carries an
-unsigned 64-bit operation identity and exactly one completion record; there is
-no raw native-address or erased-signature call path. Potentially throwing host
-imports fill a response and return normally; trusted adoption, release, and
-state imports never throw. A C pointer is not a root: keep the original Titan
-string, Array, or owned buffer reachable through every borrow. In Titan, a
-parameter or a local of an enclosing block already does that (rule 5 of the
+state); C→Titan callable pin/unpin shims; and completion-carrying byte I/O.
+Each contained entry carries an unsigned 64-bit operation identity and exactly
+one completion record. Potentially throwing host imports fill a response and
+return normally; trusted adoption, release, and state imports never throw. A C
+pointer is not a root: keep the original Titan string, Array, or owned buffer
+reachable through every borrow. In Titan, a parameter or a local of an
+enclosing block already does that (rule 5 of the
 [guard-rails](#guard-rails-for-standard-library-and-runtime-c)); C code keeps
 it in a Lua stack slot below the top.
 
-Changes to the bridge itself follow those guard-rails; its current C runtime
-and Titan side are their counterexamples, which titan#371 rewrites. Keep its
-ownership invariants: copy byte arguments by content (a `Uint8Array`
+Changes to the bridge itself follow those guard-rails. Keep its ownership
+invariants: copy byte arguments by content (a `Uint8Array`
 subclass's `slice` may return a view); reacquire `HEAPU8` views after any
 allocation and copy an aliased source before growth; keep at most one sink
 call in flight per stream; capture an
@@ -1951,9 +2009,9 @@ included) follows these six rules, whose normative text is the style guide's
 [Write native bindings Titan-first](../../../doc/style-guide.md#write-native-bindings-titan-first).
 A review counts the new Lua C API calls and authored C lines in the
 diff and justifies each one against them. The wrong examples come from the
-first browser bridge (titan PR #364): its C runtime
-`titan-runtime/browser/titan-browser.c` and its Titan side
-`titan/browser.browser.titan`.
+initial browser bridge at commit `843b446e` (titan PR #364, before titan#371's
+rewrite): `titan-runtime/browser/titan-browser.c`,
+`titan/browser.browser.titan`, and `titan-runtime/browser/titan-browser.mjs`.
 
 1. **Layering.** Write the work in Titan, and make a C-ABI callback a Titan
    `foreign function`. Author C only where Titan cannot: an exact exported C
@@ -2920,28 +2978,31 @@ This case is intentionally unscored until run in a fresh cartridge-only context.
 **Prompt:** A browser page lets JavaScript call a Titan counter that shares a
 mutable capture with a second Titan reader, calls a JavaScript
 `measure(bytes)` binding that returns an integer, and starts a host fetch that
-may never settle. A draft passes `5` to the callable, expects
-`await wrapper.call(5)` to return the bare count, calls `instance.call` from
-inside the `measure` binding inside `try/catch`, returns the fetch as
+may never settle. A draft passes `5` to the callable, uses removed
+`browser.callable`/`call_integer`/`Argument`, calls `instance.call` from inside
+the `measure` binding inside `try/catch`, returns the fetch as
 `{kind: "retained", promise}`, reports the fetch rejection through
 `onNotificationError`, imports the loader separately from the image, and never
 disposes the instance after `run`.
 
-**Pass criteria:** uses `browser.callable` on the original closures and keeps
-their shared capture; fixed scalar signatures; `BigInt` arguments and results
-(`5n`); resolved result Arrays (`[5n]`); explains that the reentrant call
-rejects as a promise the binding's `try/catch` does not observe and uses
-`notify`/`drain` or an awaited, handled promise instead; uses the detachable
-form with mandatory success and exact `(string, JSHandle)` failure callables;
-imports only the generated image's default `create`; awaits `dispose()` in
-`finally`, with finalizers at disposal; closes handles and releases callables,
-including any JavaScript-Titan cycle.
+**Pass criteria:** exports the original `function (...: BrowserValue):
+BrowserValue` closures with `BrowserValue.is_callable` and keeps their shared
+capture; uses `target:call(...)` and cases on `BrowserValue`; `BigInt`
+arguments and results (`5n`), resolving to the single bare value (`5n`);
+explains that the reentrant call rejects as a promise the binding's `try/catch`
+does not observe and uses `notify`/`drain` or an awaited, handled promise
+instead; uses `fetch:start(done, failed, ...)` with the detachable form and a
+failure callable that expects `(is_string(message), is_handle(thrown))` and
+closes `thrown`; imports only the generated image's default `create`; awaits
+`dispose()` in `finally`, with finalizers at disposal; closes `BrowserHandle`s
+and releases callable wrappers, including any JavaScript-Titan cycle.
 
-**Fail signals:** Number coercion, a synchronous reverse call, a raw factory or
-separate loader import, the retained form for forever-pending work, relying on
-either collector to break a cross-heap cycle, treating `onNotificationError` as
-the request rejection path, or inventing a scheduler, raw pointer API, or
-native placeholder.
+**Fail signals:** Number coercion, a synchronous reverse call, removed
+`JSHandle`/`Argument`/`Callable`/`browser.callable`/`call_<kind>` names, a raw
+factory or separate loader import, the retained form for forever-pending work,
+relying on either collector to break a cross-heap cycle, treating
+`onNotificationError` as the request rejection path, or inventing a scheduler,
+raw pointer API, or native placeholder.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
 

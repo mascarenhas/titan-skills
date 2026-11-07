@@ -139,17 +139,11 @@ The `type` part requires an alias because it is a reserved word.
 pointers; `native_entry` is a `foreign *void` address without a callable
 Titan signature. Raw invocation belongs at an audited FFI/Lua boundary.
 
-When an inspected callable becomes a long-lived root, as
-`titan.browser.callable` makes one, inspect the original `value` once and
-require `is_titan_function` with a fixed signature (no `vararg_descriptor` or
-`flexret_descriptor`). Root the original value, never the inspection's
+When an inspected callable becomes a long-lived root at a dynamic boundary,
+inspect the original `value` once and require `is_titan_function` with the
+expected signature. Root the original value, never the inspection's
 `callable` part, which is a generic `function (...: value): (...: value)` view;
-do not cast or coerce the original to a variadic function first. Map each
-fixed descriptor to the kinds the boundary supports (for the browser bridge:
-nil, boolean, integer, float, string bytes, and the named `JSHandle` and
-`Callable` nominals) and reject Options, open tails, `value`, Arrays, Maps,
-and other nominals. Zero results differ from one nil result, and trailing nil
-results keep their exact count.
+do not cast or coerce the original to a variadic function first.
 
 Owned C variants retain their owner in `value` and expose a borrowed `payload`
 address plus byte `size`; counted Arrays also expose `count`. Keep the owner
