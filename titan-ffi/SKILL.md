@@ -2049,7 +2049,7 @@ int titan_browser_invoke(uint64_t operation_id, uint32_t state, uint32_t slot,
    files for standard-library bindings. Follow the placement table above, and
    use one-expression inline bridges (`lmacro_*` in `titan/ffi.h`) for macros,
    internal fields of incomplete structs, and `const` casts that the FFI cannot
-   spell. The libuv binding's one C helper, `titan_uv_push_owner` in
+   spell. The libuv callbacks' one C helper, `titan_uv_push_owner` in
    `titan/uv/callback.h`, wraps the `setuvalue` macro the FFI cannot spell; it
    predates this rule and is not a model for new multi-statement helpers.
    *Wrong:* a 600-line runtime C file (`titan-browser.c` at
