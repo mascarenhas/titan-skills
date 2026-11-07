@@ -1267,8 +1267,9 @@ static `const char *`, nil is contextual `NULL`, and a numeral has its C99 type
 `-`, instead takes the C type its context expects when that type holds the
 value: a declaration with an explicit C type, an assignment to a C-typed local,
 field, or element, an argument for a C-typed parameter, or a return. Integer
-numerals adapt only to C integer types and float numerals only to C floating
-types. So `ffi.malloc(16)` passes a `size_t` and
+numerals adapt only to non-enum C integer types (an enum still needs an
+enumerator or a cast) and float numerals only to C floating types. So
+`ffi.malloc(16)` passes a `size_t` and
 `local b: foreign unsigned char = 255` is accepted, while `300` there keeps its
 `int` type and is rejected. A numeric `for` bound takes the control variable's
 type, and a C operator operand keeps its C99 type. Conditions use C

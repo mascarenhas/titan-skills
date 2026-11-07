@@ -1487,29 +1487,30 @@ overflow, and the Titan form is preferred when the value can reach the limit.
 It adds that promotion still makes an `unsigned char` or `short` sum an `int`,
 how to cast the literal for a wider C type, and that a literal sum stored into
 a wider C type is rejected. "Signature and body limits" gives the foreign-body
-numeral rule. F3 above now accepts the C `int` sum when the answer states its
-undefined overflow.
+numeral rule, including that enum targets do not adapt. F3 above now accepts
+the C `int` sum when the answer states its undefined overflow.
 
 No fresh-agent evaluation was run for this update. Every added statement was
-checked against titan `issue-373-c99-literals` at `12c47fd2` (validation
-profile, Linux x64, gcc 16.2.1) by compiling 23 checks on a review slice:
+checked against titan `issue-373-c99-literals` at `ff26ecff` (validation
+profile, Linux x64, gcc 16.2.1) by compiling 24 checks on a review slice:
 
 - the two example lines, extracted verbatim and wrapped in programs: the C
   form bumps a field twice and reads 2; the Titan form also raises
   `numeric value is outside the range of foreign int` at `INT_MAX` and leaves
   the field unchanged;
-- 17 controls behind the prose: the literal types (`0xFFFFFFFF`,
+- 18 controls behind the prose: the literal types (`0xFFFFFFFF`,
   `c_unsigned + -1` at run time, `3000000000` as `long` on LP64,
   `c_float * 2` and `c_float * 0.5`), non-literal operands (a local and
   `(1 + 2)`), the unchanged comparison, the `unsigned char` and `short`
   promotions with the quoted diagnostic, the wider store, the cast-literal
   shift, `size_t` and element read-modify-writes, and the foreign-body rules
   (`ffi.malloc(16)`, `255` and `300` into `unsigned char`, an integer literal
-  into `float`, an operator operand);
+  into `float`, an operator operand, an enum target);
 - F3's three claims (the `int` sum compiles, the non-literal `size_t` sum and
   the promoted `flags` update are rejected).
 
-On master `c149571f`, 12 of the 20 non-F3 checks fail, as expected.
+On master `c149571f`, 12 of the 20 checks that predate the enum and F3
+controls fail, as expected.
 
 Final-tree checks:
 
