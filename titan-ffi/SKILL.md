@@ -2022,7 +2022,7 @@ rewrite): `titan-runtime/browser/titan-browser.c`,
 | Needs an exact unmangled C symbol (an Emscripten export, a symbol a C library looks up) | Compiler-generated one-line forward to a public `foreign function` (with `__attribute__((weak))` when the owning module may be absent), never a hand-written runtime C wrapper |
 | Program entry and image lifecycle (native `main`, browser `initialize`/`entry`/`close`) | Compiler-generated launcher sharing one error-conversion (`errmsg_tostring`) and trace implementation; protected `lua_pcall`s live there, not in runtime libraries |
 | Data and roots | Per-state roots in module variables or owner fields; cross-state maps with the host that already owns the lifetime (the browser's JS registry), not C statics in runtime code; the Lua registry only to anchor an object before any module variable exists, explicitly justified |
-| C struct access and marshalling | In Titan through `foreign import`; headers hold only struct layouts, declarations, and one-line inline macro bridges (`lmacro_*` in `titan/ffi.h`) for macros the FFI cannot spell |
+| C struct access and marshalling | In Titan through `foreign import`; headers hold only struct layouts, declarations, and one-expression inline bridges (`lmacro_*` in `titan/ffi.h`) for macros, internal fields of incomplete structs, and `const` casts that the FFI cannot spell |
 | Test-only C | In test fixtures (`spec/fixtures/`), never in the runtime or standard library |
 
 For example, `browserentry.lua` generates a one-line weak forward for the exact
@@ -2712,9 +2712,9 @@ searching by analogy.
   and trusted raw-API ledger.
 * `doc/implementation/values-and-gc.md` — roots, stack relocation, barriers,
   native call handoff.
-* `doc/implementation/browser-bridge.md` — the persistent protected gateway,
-  state registry, callable roots, fixed wasm32 layout, and request/byte-I/O
-  ownership of the browser bridge.
+* `doc/implementation/browser-bridge.md` — the generated browser launcher and
+  weak forwards, foreign entry points, state records, Titan-owned callable pin
+  table, fixed wasm32 layout, and request/listener ownership.
 
 ## Compiler and runtime sources
 
