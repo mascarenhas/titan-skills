@@ -2047,9 +2047,10 @@ int titan_browser_invoke(uint64_t operation_id, uint32_t state, uint32_t slot,
 
 1. **Layering.** Write the work in Titan; do not add hand-written runtime C
    files for standard-library bindings. Follow the placement table above, and
-   use one-line inline macro bridges (`lmacro_*` in `titan/ffi.h` or
-   `titan_uv_push_owner` in `titan/uv/callback.h`) only for macros the FFI
-   cannot spell. *Wrong:* a 600-line runtime C file (`titan-browser.c` at
+   use one-expression inline bridges (`lmacro_*` in `titan/ffi.h` or
+   `titan_uv_push_owner` in `titan/uv/callback.h`) for macros, internal fields
+   of incomplete structs, and `const` casts that the FFI cannot spell.
+   *Wrong:* a 600-line runtime C file (`titan-browser.c` at
    `843b446e`) hand-writing the Emscripten exports, the launcher
    `protected_entry`, a C `states` linked list, and
    `titan_browser_root_callable` (validating the closure, copying its signature
