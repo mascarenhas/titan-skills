@@ -962,22 +962,39 @@ local titan_total = (ffi.total() as integer) + 1  -- Titan integer `+`
 local c_total = ffi.total() + 1                   -- C-mode `+`, then later conversion
 ```
 
-Mixed Titan `integer`/`float` operands enter C mode as the configured
-`lua_Integer`/`lua_Number`; they are not first narrowed to the other C operand's
-original type. A C-mode arithmetic result also drops typedef identity, and a
-store never converts one C integer type to another implicitly. In ordinary
-Titan code, write a read-modify-write of an `int` or `size_t` field or element
-in Titan arithmetic and let the store check the range:
+A numeric literal next to a C arithmetic operand of `+ - * / %`, `& | ~`, or
+`<< >>` takes its C99 type, as in the generated C: a decimal integer is the
+first of `int`, `long`, and `long long` that holds it, a hexadecimal integer
+also tries each unsigned type (`0xFFFFFFFF` is `unsigned int`), and a float is
+`double`. Parentheses and unary `-` or `~` keep a literal a literal. C has no
+negative literals, so `-1` is an `int` and `c_unsigned + -1` is
+`unsigned int`. Any other Titan `integer` or `float` operand (a local, a call,
+`(1 + 2)`) enters as the configured `lua_Integer`/`lua_Number`; it is not first
+narrowed to the C operand's type. Comparisons use that rule for literals too:
+`c_unsigned < -1` compares in `lua_Integer`, where C would compare with
+`UINT_MAX`. All widths come from the active target.
+
+A C-mode arithmetic result drops typedef identity, and a store never converts
+one C integer type to another implicitly. A read-modify-write of a C `int` or
+`size_t` field or element is therefore C arithmetic in that type:
 
 ```text
-response.fills = response.fills + 1               -- rejected: the sum is not a C `int`
+response.fills = response.fills + 1               -- C `int` `+`; overflow is undefined
 response.fills = (response.fills as integer) + 1  -- Titan `+`, then a range-checked store
 ```
 
-With `response.fills` a C `int` and `lua_Integer` a `long long`, the first line
-fails with `types in assignment do not match, expected foreign int but found
-foreign long long`. A `foreign function` body types the literal `1` as C `int`,
-so the first line is plain `int` arithmetic there.
+Use the first line when C's rules are intended. Prefer the Titan form when the
+value can reach the type's limit: at `INT_MAX` its store raises `numeric value
+is outside the range of foreign int` and leaves the field unchanged, where the
+C sum would be undefined behavior. Promotion still applies: an `unsigned char`
+or `short` plus `1` is an `int`, so storing it back is rejected (`expected
+foreign unsigned char but found foreign int`); use the Titan form or a written
+C cast. A wider destination does not widen the arithmetic either:
+`local wide: foreign long long = c_int + 1` is rejected because the sum is an
+`int`. To compute in a wider C type, cast the literal, as in
+`(1 as foreign unsigned long long) << n`. A `foreign function` body types its
+numerals by the same C99 rule and also adapts a literal to a declared target
+(see [Signature and body limits](#signature-and-body-limits)).
 
 Unsupported combinations are errors, not a fallback: no floating remainder,
 aggregate operators, arithmetic on `void *`, function pointer arithmetic/order,
@@ -1244,11 +1261,19 @@ methods, or ordinary members of an imported Titan module. It also has no:
 * concatenation, `is`, Titan `and`/`or`/`not`, variadics/flexible results;
 * `.new()` / `.new_array()` Lua-owned allocation.
 
-Foreign-body literals are C values: booleans are `_Bool`, an integer literal is
-normally C `int`, a float is normally C `double`, a string literal is static
-`const char *`, and nil is contextual `NULL`. Conditions use C scalar truth.
-Numeric `for` uses C comparison/addition; a literal zero step is rejected, and
-a computed step has a trusted nonzero precondition.
+Foreign-body literals are C values: booleans are `_Bool`, a string literal is
+static `const char *`, nil is contextual `NULL`, and a numeral has its C99 type
+(see [C operator mode](#c-operator-mode)). A numeral, including one under unary
+`-`, instead takes the C type its context expects when that type holds the
+value: a declaration with an explicit C type, an assignment to a C-typed local,
+field, or element, an argument for a C-typed parameter, or a return. Integer
+numerals adapt only to C integer types and float numerals only to C floating
+types. So `ffi.malloc(16)` passes a `size_t` and
+`local b: foreign unsigned char = 255` is accepted, while `300` there keeps its
+`int` type and is rejected. A numeric `for` bound takes the control variable's
+type, and a C operator operand keeps its C99 type. Conditions use C
+scalar truth. Numeric `for` uses C comparison/addition; a literal zero step is
+rejected, and a computed step has a trusted nonzero precondition.
 
 The body is inside the unsafe C boundary. Pointer dereference/index and
 function-pointer calls do **not** get ordinary Titan FFI NULL/bounds checks.

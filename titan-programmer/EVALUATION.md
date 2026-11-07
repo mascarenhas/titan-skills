@@ -647,15 +647,19 @@ Stats;` and ask for a minimal module `stats_update` whose `record(stats:
 foreign *Stats, size: integer)` adds one to `hits` and `size` to `bytes`,
 `set_flag(stats, bit)` sets one bit of `flags`, and `snapshot(stats)` returns
 both counters, with a short explanation of how each update is typed and
-checked. A Titan operand puts a C-mode result in `lua_Integer`'s C type,
-arithmetic drops typedef identity, and a store never converts one C integer
-type to another implicitly, so `stats.hits = stats.hits + 1` and its `size_t`
-and `unsigned char` siblings are rejected. Accept Titan arithmetic followed by
-a range-checked store, or a written C cast whose C conversion the answer
-states. The module and header must compile unchanged. The judge's driver,
-built through a second `--tree` root with `-I` naming the answer's directory,
-must observe two hits, fifteen bytes and flags 9, and overflow behavior (a sum
-past `INT_MAX`, bit 8, a negative byte count) that matches the explanation.
+checked. The literal makes `stats.hits = stats.hits + 1` C `int` arithmetic: it
+compiles, and its overflow at `INT_MAX` is undefined. A non-literal Titan
+operand puts a C-mode result in `lua_Integer`'s C type, arithmetic drops typedef
+identity, and a store never converts one C integer type to another implicitly,
+so `stats.bytes = stats.bytes + size` is rejected, and `unsigned char`
+arithmetic promotes to `int`, so a C-mode `flags` update is rejected too. Accept
+Titan arithmetic followed by a range-checked store, or C arithmetic or a
+written C cast whose C behavior the answer states. The module and header must
+compile unchanged. The judge's driver, built through a second `--tree` root
+with `-I` naming the answer's directory, must observe two hits, fifteen bytes
+and flags 9, and overflow behavior (a sum past `INT_MAX`, bit 8, a negative
+byte count) that matches the explanation. An answer that keeps the C `int` sum
+must say its overflow is undefined, and the judge skips that probe for it.
 
 ## Frontmatter-only routing set
 
@@ -1469,6 +1473,56 @@ memory-off overlay and both read-only cartridge exports), `/tmp/titan-fu/judge/F
 `eval/*.omp.log`), with `/tmp/titan-fu/examples` and `/tmp/titan-fu/mechanical`.
 They are archived as the `issue-369-validation-archive` release on
 mascarenhas/titan (the compiled `eval/build` outputs are left out).
+
+### Issue #373 update (2026-11-07)
+
+titan#373 types a numeric literal next to a C arithmetic operand of an
+arithmetic, bitwise or shift operator by C99 rules, lets a foreign-body numeral
+take a fitting C type from its declaration, assignment, argument or return, and
+reports an assignment mismatch once. In `titan-ffi`, "C operator mode" now
+states the literal rule (decimal and hexadecimal candidates, `double` floats,
+unary `-` and `~`, comparisons unchanged) and reverses the #369 example:
+`response.fills = response.fills + 1` is C `int` arithmetic with undefined
+overflow, and the Titan form is preferred when the value can reach the limit.
+It adds that promotion still makes an `unsigned char` or `short` sum an `int`,
+how to cast the literal for a wider C type, and that a literal sum stored into
+a wider C type is rejected. "Signature and body limits" gives the foreign-body
+numeral rule. F3 above now accepts the C `int` sum when the answer states its
+undefined overflow.
+
+No fresh-agent evaluation was run for this update. Every added statement was
+checked against titan `issue-373-c99-literals` at `12c47fd2` (validation
+profile, Linux x64, gcc 16.2.1) by compiling 23 checks on a review slice:
+
+- the two example lines, extracted verbatim and wrapped in programs: the C
+  form bumps a field twice and reads 2; the Titan form also raises
+  `numeric value is outside the range of foreign int` at `INT_MAX` and leaves
+  the field unchanged;
+- 17 controls behind the prose: the literal types (`0xFFFFFFFF`,
+  `c_unsigned + -1` at run time, `3000000000` as `long` on LP64,
+  `c_float * 2` and `c_float * 0.5`), non-literal operands (a local and
+  `(1 + 2)`), the unchanged comparison, the `unsigned char` and `short`
+  promotions with the quoted diagnostic, the wider store, the cast-literal
+  shift, `size_t` and element read-modify-writes, and the foreign-body rules
+  (`ffi.malloc(16)`, `255` and `300` into `unsigned char`, an integer literal
+  into `float`, an operator operand);
+- F3's three claims (the `int` sum compiles, the non-literal `size_t` sum and
+  the promoted `flags` update are rejected).
+
+On master `c149571f`, 12 of the 20 non-F3 checks fail, as expected.
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 199 relative link targets and 70 anchors resolve, including the two new
+  in-file anchors of `titan-ffi`.
+- All 102 `titan` fences parse. The example stays a `text` fence because its
+  lines are fragments.
+- The reserved-word list still equals the 38 keywords in `lexer.lua`.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-373/review-scratch` (`skills-check/` with the
+extractor, controls and logs, and `mechanical/`).
 
 ## Mechanical gates
 
