@@ -1628,6 +1628,13 @@ function BrowserPin:identity(): (integer, integer, integer)
 function BrowserPin:close()
 ```
 
+- **HANDLE arguments are borrowed.** C keeps every handle slot it passes to
+  `titan_browser_call_sync`; the callee receives its own `BrowserHandle`, whose
+  `close()` or collection never retires C's slot.
+- **On V8 the poison is generic.** Authored C that calls a suspending import
+  (`emscripten_sleep`) inside the callback poisons the instance with
+  `"a synchronous C callback ended by an exception"`, not a named switch
+  diagnostic.
 - **The pin.** `browser.pin(fn)` adds one hold on `fn`'s callable slot.
   `identity()` returns `(state, slot, generation)`, which C copies into a
   `titan_browser_identity` used as the callback's user data.
@@ -1651,12 +1658,9 @@ function BrowserPin:close()
   After any status, the caller `free`s `message`, `trace`, and the bytes of a
   STRING or BYTES result. In a Titan test, `defer` those frees right after
   creating the record.
-- **Borrowed handles.** HANDLE arguments are borrowed: C keeps each slot it
-  passes, and the callee's `BrowserHandle` is its own, so closing or
-  collecting it never retires C's slot. A HANDLE result is valid while its
-  `BrowserHandle` is open. A CALLABLE result keeps no hold of its own: it is
-  valid only while a `BrowserPin` or a live JavaScript wrapper holds the
-  function.
+- **Results.** A HANDLE result is valid while its `BrowserHandle` is open. A
+  CALLABLE result keeps no hold of its own: it is valid only while a
+  `BrowserPin` or a live JavaScript wrapper holds the function.
 - **Where it runs.** The callback runs whenever the instance is open: idle,
   between turns, or nested in a binding that a Task called. It runs on a Lua
   callback thread of its own, so a parked drive's frames stay untouched.
@@ -1671,11 +1675,9 @@ function BrowserPin:close()
   `TITAN_BROWSER_REENTRY`. The JavaScript that dispatched the event can start
   one, and that entry starts after the callback returns.
 - **Exceptions poison.** A callback that an exception unwinds instead of
-  returning poisons the instance with `TITAN_BROWSER_PROTOCOL`, and authored C
-  that calls a suspending import there (`emscripten_sleep`) does that. On V8
-  the engine's `SuspendError` unwinds before Titan's own check runs, so the
-  report is the generic `"a synchronous C callback ended by an exception"`,
-  not a named switch diagnostic.
+  returning poisons the instance with `TITAN_BROWSER_PROTOCOL`. A suspending
+  import is one such exception: on V8 the engine's `SuspendError` unwinds
+  before Titan's own check runs.
 - **Stack.** The callback's C frames use the interrupted code's linear stack
   (a Task's is 256 KiB). Deep recursion fails Emscripten's stack check and
   poisons the instance.
