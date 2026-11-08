@@ -1544,17 +1544,23 @@ operation keeps its captured Titan error even if its output flush fails or
 disposal interrupts it; each secondary failure is reported once as cleanup.
 
 During state close, synchronous binding calls, copied output, and release stay
-valid until the state's earliest-created registry invalidates last; new
-requests, listeners, and reverse calls are already refused. A trap, abort, or
-completion-protocol failure poisons the instance, and later methods reject that
-saved failure.
+valid until the module-owned browser record is finalized in Lua's natural
+order. Finalizers of later-created values, including modules importing
+`titan.browser`, run before that invalidation. Earlier-registered finalizers
+see an invalidated state: close and callable release are no-ops, while binding
+calls raise (a Lua finalizer warning on stderr). New requests, listeners and
+reverse calls are already refused. A trap, abort or completion-protocol failure
+poisons the instance, and later methods reject that saved failure.
 
 ## The C SDK and bridge maintenance
 
 C reaches the same boundary through the installed `titan/browser.h`: a checked
-wasm32 slot, response, and completion ABI, and the state record (`attach`
-before `luaL_openlibs` in an independently created state, with the cross-state
-token→record map in the JavaScript registry).
+wasm32 slot, response, and completion ABI. `titan.browser` allocates its state
+record in owned module storage, registers an ordinary Titan finalizer through
+`gc.finalizable`, and publishes its address in the JavaScript token→record map.
+C-created states load the module normally, with no attachment operation or
+special bootstrap order. `titan.lua` is native-only; the standard library
+creates no independent browser state.
 Each contained entry carries an unsigned 64-bit operation identity and exactly
 one completion record. Potentially throwing host imports fill a response and
 return normally; trusted adoption, release, and state imports never throw. A C
