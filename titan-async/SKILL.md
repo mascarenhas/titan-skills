@@ -1899,9 +1899,9 @@ turn-based driver runs them instead of libuv. For the full contract, read
   waiting"`.
 - **Wait for the host through requests:** use `await`, `await_cleanup` or
   `suspend` around a `BrowserHandle:start`/`listen` request, and give
-  `suspend` a cancel action that cancels the request. Authored C that
-  suspends the whole WebAssembly stack inside a Task (`emscripten_sleep`,
-  `EM_ASYNC_JS`) stalls every other Task until it returns.
+  `suspend` a cancel action that cancels the request. An Emscripten operation
+  that suspends the whole WebAssembly stack inside a Task (`emscripten_sleep`,
+  authored `EM_ASYNC_JS`) stalls every other Task until it returns.
 - **Bootstrap result:**
   - `run()` resolves `returned` with `main`'s integer.
   - A failed `main` Task prints its uncaught report on stderr, and `run()`
@@ -2351,7 +2351,7 @@ handles.
 ### 16. Browser drive and synchronous callbacks
 
 **Prompt:** On the browser target, a draft calls `async.loop()` from a
-JavaScript call made during a drive. A Task polls a C helper that calls
+JavaScript call made during a drive. A Task calls directly imported
 `emscripten_sleep` until a fetch completes, and an html5 click callback
 (through `titan_browser_call_sync`) calls `async.yield()` so that the Task
 can run.
