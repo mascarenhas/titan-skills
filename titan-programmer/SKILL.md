@@ -2159,10 +2159,19 @@ to the language rules:
   module graph. The thirteen shared browser-subset modules (`coroutine`, `gc`,
   `iteration`, `math`, `test`, `reflect`, `json`, `protobuf`, `transfer`,
   `peg`, `string`, `url`, `path`) keep native source and interface parity and
-  must not gain an import path to `uv`, `async`, or any other native-only
-  module. The browser provider's fourteenth module, `titan.browser`, is the
-  reviewed browser-only exception: it imports only `gc`, has no
-  native placeholder or interface, and no native module may import it; see
+  must not gain an import path to `uv`, `async`, `timer`, `titan.browser`, or
+  a native-only module.
+  - `async` and `timer` reach the browser through their own variants: the
+    `titan/async/*.browser.titan` contributors and `titan/timer.browser.titan`.
+    Only those files may import `titan.browser`.
+  - A new public `async` member that the browser cannot provide is recorded
+    in the member inventory, and a member added to `timer.native.titan` needs
+    its browser twin.
+  - `titan.browser` is the reviewed browser-only exception: it imports only
+    `gc`, has no native placeholder or interface, and no native module may
+    import it.
+
+  See
   [standard-library maintenance](../../../doc/implementation/standard-library-maintenance.md#keep-the-browser-subset-dependency-closed).
 - **Honor the supported trust/concurrency model.** Do not harden one imagined
   race when the API requires callers to serialize all mutations. Partial

@@ -1,6 +1,6 @@
 ---
 name: titan-async
-description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, coalescing Receiver slots, external prepared waits, cancellation, terminal listeners, fixed-arity combinators, and the cooperative libuv continuation runtime. Use when working on Titan async.run/run_with_cleanup/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, or public titan.uv callbacks, generic await/subscriptions, external_wake_t, and native ownership code.
+description: Write, review, and test Titan asynchronous code with async Tasks, timers, channels, coalescing Receiver slots, external prepared waits, cancellation, terminal listeners, fixed-arity combinators, the cooperative libuv continuation runtime, and its browser driver. Use when working on Titan async.run/run_with_cleanup/loop, suspend/resume, Task status or cancellation, join/any/race/all, timer.sleep/Ticker, low-level coroutine interaction, public titan.uv callbacks, generic await/subscriptions, external_wake_t, native ownership code, or async/timer on the browser target (owner-state drives, callTask, exit and disposal, synchronous C callbacks).
 ---
 
 # Titan async
@@ -21,6 +21,9 @@ Titan async is **cooperative, single-loop continuation execution**:
   bootstrap drives it on the Lua main thread. Callback-only code may own a
   separate `uv.loop_t` and call `uv.run` without any Tasks. Never drive a loop
   recursively, including a different loop from a callback.
+- On the browser target, a turn-based driver on the instance's owner state
+  replaces libuv, and this invariant is unchanged
+  ([The browser target](#the-browser-target)).
 - A Task runs synchronously until it yields an async operation, returns, or
   raises. Libuv does not preempt that continuation with unrelated loop events,
   and another Task cannot preempt it. Explicit low-level calls with synchronous
@@ -74,7 +77,7 @@ wake code:
   callback return to libuv. Copy callback-only results and finish native
   cleanup before settling. Secondary cases: settlement during registration
   resumes the Task after registration returns, and settlement from another
-  running Task or a finalizer is queued.
+  running Task, a finalizer, or a browser synchronous C callback is queued.
 - **Deferred wakes:** public `Task:resume(token)` and subscription
   `publish`/`fail`/`finish` wake the waiting Task later and never enter it
   inline. `Task:resume` serves only an explicit `async.suspend(token)`: a
@@ -82,7 +85,7 @@ wake code:
   above) and a persistent source through its subscription (deferred).
 
 Evidence: `doc/language/async-io.md`,
-`doc/implementation/libuv-runtime.md`, `titan/async.native.titan`, and issue #82.
+`doc/implementation/libuv-runtime.md`, `titan/async/`, and issue #82.
 
 ## Choose the public layer
 
@@ -421,7 +424,7 @@ occurs only when a typed view projects that payload. Identity comparison,
 `status():as_string()`, and tag-only status inspection do not project it.
 `async.version()` returns libuv's version string.
 
-Evidence: `titan/async.native.titan`, `titan/async.native.titan`, and
+Evidence: `titan/async/async.titan`, `titan/async/runtime.native.titan`, and
 `doc/language/async-io.md`.
 
 `run_with_cleanup` enters its wrapper even after cancellation while still
@@ -831,7 +834,7 @@ while the first is suspended. Producer cleanup may use `await_cleanup`; its
 supplied drain callback transfers unread resource-bearing events for disposal
 before domain handles are closed. One subscription need not own one handle.
 
-Evidence: `titan/async.native.titan`, `doc/language/async-io.md`, and the native async
+Evidence: `titan/async/async.titan`, `doc/language/async-io.md`, and the native async
 subscription/await tests. For domain admission checks, preserve established
 error and cancellation precedence before querying a shared reservation.
 
@@ -979,7 +982,7 @@ The exact result/error owners follow one positional pattern:
 Only `join` has a unary form. There is intentionally no unary `any`, `race`,
 or `all`, and no variadic or Array-taking form.
 
-Evidence: `titan/async.native.titan` and `doc/language/async-io.md`.
+Evidence: `titan/async/async.titan` and `doc/language/async-io.md`.
 
 ### Exact channel surface
 
@@ -1010,7 +1013,7 @@ standalone OS worker threads (`thread.spawn*`, `Thread`), and bounded thread
 groups (`thread.group`, `Group`), load the peer
 [`titan-thread` skill](../titan-thread/SKILL.md).
 
-Evidence: `titan/async.native.titan` and `doc/language/async-io.md`.
+Evidence: `titan/async/async.titan` and `doc/language/async-io.md`.
 
 ## Start and drive Tasks correctly
 
@@ -1399,7 +1402,7 @@ This is **not** an invitation to fence native one-shot operations: accepted
 native operations settle their exact public await capability.
 
 Evidence: `doc/language/async-io.md`,
-`doc/implementation/libuv-runtime.md`, `titan/async.native.titan`, and
+`doc/implementation/libuv-runtime.md`, `titan/async/async.titan`, and
 `spec/stdlib/titan/uv/task_tests/continuations_test.titan`.
 
 ## Terminal listeners are synchronous observation, not Tasks
@@ -1542,7 +1545,8 @@ function Ticker:tick(): boolean
 function Ticker:close()
 ```
 
-`Ticker` has a local native field; its constructor is **not public**. Use
+`Ticker` has only local fields (a native timer, or on the browser a host
+request); its constructor is **not public**. Use
 `timer.ticker`. It incidentally satisfies the exact public `io.Closer`
 Interface.
 
@@ -1591,9 +1595,16 @@ Ticker/subscription.
 `ResumeToken` remains the explicit `suspend`/`Task:resume(token)` capability;
 native one-shot adapters settle their own await capabilities.
 
-Evidence: `titan/timer.native.titan`,
+On the browser, `timer` keeps this API on the SDK's JavaScript timers:
+`sleep` arms one `setTimeout` (cancellation clears it), `sleep(0)` and
+`yield()` arm none and resume in a later driver turn, a Ticker runs on
+`setInterval` and closes with its Runtime, and delays follow the browser's
+clamping and background-tab throttling
+(`doc/language/standard-library-timer.md#on-the-browser`).
+
+Evidence: `titan/timer.native.titan`, `titan/timer.browser.titan`,
 `doc/language/standard-library-timer.md`, and
-`spec/stdlib/titan/timer/tests.titan`.
+`spec/stdlib/titan/timer/tests/`.
 
 ## Bounded channels
 
@@ -1642,7 +1653,7 @@ delimiter raises. Reader close discards its own saved suffix and returns nil for
 new reads. Writer close preserves a suffix already transferred to the Reader,
 but the next underlying channel receive observes close.
 
-Evidence: `doc/language/async-io.md`, `titan/async.native.titan`, and
+Evidence: `doc/language/async-io.md`, `titan/async/async.titan`, and
 `spec/stdlib/titan/async/tests/channel_test.titan`.
 
 ## Public UV adapters and native binding ownership
@@ -1742,7 +1753,8 @@ wait cancellation. Libuv orders accepted writes; do not add another write queue.
 Subscription buffers are justified by promised event semantics, not scheduling.
 
 Evidence: `doc/implementation/libuv-extension-guide.md`,
-`doc/implementation/libuv-runtime.md`, `titan/uv/`, `titan/async.native.titan`, and
+`doc/implementation/libuv-runtime.md`, `titan/uv/`, the `.native.titan`
+contributors of `titan/async/`, and
 the consumer implementations in `fs`, `net`, `os`, and `timer`.
 
 ## Raw Titan coroutines are a separate low-level API
@@ -1838,6 +1850,87 @@ code should still use Task APIs for scheduling and I/O.
 Evidence: `doc/language/coroutines.md`, `titan/coroutine.titan`,
 and `doc/implementation/coroutines.md`.
 
+## The browser target
+
+On `--target browser`, `async` and `timer` keep this cartridge's contracts. A
+turn-based driver runs them instead of libuv. For the full contract, read
+`doc/language/async-io.md#the-browser-target`; for the loader entries, read
+`doc/language/browser-target.md#task-form-calls`, `#exit` and
+`#disposal-with-a-running-runtime`.
+
+- **Absent members:** these need libuv or another thread and do not exist on
+  the browser:
+  - `current_loop`;
+  - `await_with`, `await_cleanup_with`, `await_cancellable_with` and
+    `await_cancellable`;
+  - `run_foreign`;
+  - the external-wait functions;
+  - `version`;
+  - Receivers (`receiver`, `send`, `Receiver`).
+
+  `ExternalWait` remains only as a type, so `run_with_cleanup`'s `final_wait`
+  is always `nil`. `uv` is native-only.
+- **One driver, on the owner state:** only the Lua state that runs the
+  instance's entries drives. In any other state, such as one that C created:
+  - `async.loop()` raises `"async.loop must be driven by the browser
+    instance's owner state"`;
+  - starting a Task raises `"async Runtime is unavailable in a non-owner
+    browser state"`.
+- **Drives are explicit and end with their entry:**
+  - `run()` runs `main` as a Task through the async bootstrap (a program
+    that links `async` and is not built with `--no-uv-bootstrap`).
+  - A `call()` drives only if its callable calls `async.loop()`.
+  - `instance.callTask(callable, args, {signal})` (or `callable.callTask`)
+    runs the callable as a Task and drives. An `AbortSignal` cancels that
+    Task, and a failed Task rejects with `TITAN_BROWSER_TITAN`.
+  - A handler on an idle instance may `async.run`; that Task runs at the next
+    drive.
+  - A JavaScript call made outside any binding during a drive is queued. It
+    runs between turns, outside any Task, and `async.loop()` there raises
+    `"async.loop is already being driven"`. A call made from inside a binding
+    rejects with `TITAN_BROWSER_REENTRY`.
+- **Turns:** a turn first delivers the host work queued when it began. It
+  then runs at most 64 Tasks that were ready before it, and gives the event
+  loop back for one macrotask. `async.yield()` therefore never resumes in the
+  same browser task.
+- **Idle detection:** if every Task waits and no wake source remains (queued
+  host work, an open request or listener, or an open `BrowserPin`), the
+  driver stops the Runtime with `"async Runtime became idle while Tasks were
+  waiting"`.
+- **Wait for the host through requests:** use `await`, `await_cleanup` or
+  `suspend` around a `BrowserHandle:start`/`listen` request, and give
+  `suspend` a cancel action that cancels the request. Authored C that
+  suspends the whole WebAssembly stack inside a Task (`emscripten_sleep`,
+  `EM_ASYNC_JS`) stalls every other Task until it returns.
+- **Bootstrap result:**
+  - `run()` resolves `returned` with `main`'s integer.
+  - A failed `main` Task prints its uncaught report on stderr, and `run()`
+    resolves `failed` with status 1 and the Task's message and trace.
+  - A cancelled `main` resolves `returned` with status 1.
+  - An exit that any Task requests resolves `exited` with its code, even
+    after `main` failed.
+- **Exit:** `request_exit(code)` latches the instance as exited when the
+  drive ends. Later entries reject with `TITAN_BROWSER_EXITED`, and nothing
+  closes the page or the Node process.
+- **Disposal:** `dispose()` cancels every unfinished Task with `"instance
+  disposed"` and drives their cleanup, even when no drive is running.
+  - Cleanup may await host work started before `dispose()`.
+  - `start` and `listen` raise `browser.BrowserError` (`"browser state is
+    closing"`).
+  - A `timer.sleep` in cleanup raises the Task's cancellation.
+- **Synchronous C callbacks (no-switch mode):** code that runs through
+  `titan_browser_call_sync` (see `titan-ffi`) runs outside every Task, even
+  when it is nested in a binding that a Task called.
+  - `async.running()` raises `"asynchronous operation must be called from an
+    async Task"` (`"async Runtime is not active"` when no Runtime is active),
+    so `await`, `yield` and `suspend` raise.
+  - Settlements, `Task:resume`, `Task:cancel`, publishing to a subscription
+    and `async.run` take effect in a later turn.
+  - `fatal` and `Completion:fatal` still raise `"async fatal callback must
+    run outside an async Task"` while a Task called the binding.
+  - Explicit coroutine switches raise `"coroutine.<operation> is unavailable
+    in a synchronous callback"`, and `coroutine.running()` is `nil`.
+
 ## Test async behavior in native Titan
 
 Repository standard-library behavior belongs under `spec/stdlib/titan/` and
@@ -1899,6 +1992,19 @@ source variant. A fresh-process public boundary belongs in a focused compiled
 Titan child launched by the native parent, with an explicit result file removed
 by `defer`.
 
+`async.tests` and `timer.tests` are browser owners too. Keep their shared
+cases portable. Put a case that needs `uv`, a thread, or `support.async`'s
+native-only `drive.native.titan` helpers in a `.native.titan` contributor.
+`make titan-stdlib-browser-test` runs the portable cases under Node and
+Chromium.
+
+Driver, turn, disposal and synchronous-callback behavior that needs
+JavaScript bindings belongs in the scheduler gate `async.browser_tests`
+(`spec/stdlib/titan/async/browser_tests/`). `spec/coder/browser_scheduler_spec.lua`
+builds it and drives it with `spec/fixtures/browser_scheduler/scheduler.mjs`.
+The harness asserts the number of passing cases, so a new case also updates
+the count in `scheduler.mjs` and the spec's `"gate":N`.
+
 Useful commands from the repository root:
 
 ```sh
@@ -1906,11 +2012,12 @@ make titan-stdlib-test TITAN_FILTER='async[.]tests[.]'
 make titan-stdlib-test TITAN_FILTER='timer[.]tests[.]'
 make titan-stdlib-test TITAN_FILTER='uv[.]task_tests[.]'
 make stdlib-test
+make titan-stdlib-browser-test
 ```
 
 Evidence: `doc/language/standard-library-test.md`,
 `spec/stdlib/titan/support/runtime.titan`,
-`spec/stdlib/titan/support/async.titan`, and
+`spec/stdlib/titan/support/async/`, and
 `doc/implementation/libuv-extension-guide.md`.
 
 ## Async review checklist
@@ -1969,6 +2076,9 @@ Before accepting Task/application code, verify:
   dynamic extent alone grants no final-epoch authority. Body/peer/alias use or
   close outside owning cleanup remains forbidden, and a logical close cannot
   withdraw unfinished native ownership.
+- On the browser target, it waits for host work through requests, never
+  through `emscripten_sleep` or `EM_ASYNC_JS` inside a Task. Only the owner
+  state drives, and no code that a synchronous C callback runs needs a Task.
 
 Before accepting a UV binding change or public adapter, also verify:
 
@@ -2238,6 +2348,28 @@ handles.
 `from_transfer_payload` decoders, or use `external_wake_t:register` instead of
 `:reserve` + `:activate`.
 
+### 16. Browser drive and synchronous callbacks
+
+**Prompt:** On the browser target, a draft calls `async.loop()` from a
+JavaScript call made during a drive. A Task polls a C helper that calls
+`emscripten_sleep` until a fetch completes, and an html5 click callback
+(through `titan_browser_call_sync`) calls `async.yield()` so that the Task
+can run.
+
+**Pass:**
+- Drive through `run()`, `callTask`, or a `call()` whose callable calls
+  `async.loop()`. A queued call runs outside any Task, and its `async.loop()`
+  raises `"async.loop is already being driven"`.
+- Wait for the fetch with `await` or `suspend` around a host request, and
+  explain that `emscripten_sleep` stalls every Task.
+- In the callback, settle or `Task:resume`, which takes effect in a later
+  turn, because `async.yield()` raises there.
+
+**Fail:**
+- Invent a second driver or a nested loop.
+- Treat `emscripten_sleep` as a Task wait.
+- Expect the callback to resume a Task inline.
+
 ## Source map
 
 - Issue and maintainer corrections: GitHub issue `#82`, “Overhaul the Titan
@@ -2246,9 +2378,13 @@ handles.
   `doc/language/async-io.md` and `doc/language/standard-library-transfer.md`.
 - Public timer contract: `doc/language/standard-library-timer.md`.
 - Public low-level coroutine contract: `doc/language/coroutines.md`.
-- Public sources/signatures: `titan/async.native.titan`, `titan/transfer.titan`,
-  `titan/timer.native.titan`, and `titan/coroutine.titan`.
-- Runtime/Task and generic operation sources: `titan/async.native.titan`.
+- Public sources/signatures: `titan/async/` (shared main `async.titan`;
+  native contributors `runtime`, `external`, `receiver` and `foreign`
+  `.native.titan`; browser contributors `runtime.browser.titan` and
+  `external.browser.titan`), `titan/transfer.titan`, `titan/timer.native.titan`,
+  `titan/timer.browser.titan`, and `titan/coroutine.titan`.
+- Runtime/Task and generic operation sources: `titan/async/async.titan`, with
+  each target's driver in `runtime.native.titan` or `runtime.browser.titan`.
 - Public callback and external-wake binding: `titan/uv/`
   (`titan/uv/external_wake.titan`, `titan/uv/sync.titan`) and
   `doc/language/standard-library-uv.md`.
@@ -2263,6 +2399,9 @@ handles.
   `spec/stdlib/titan/uv/public_tests/`,
   `spec/stdlib/titan/uv/runtime_tests.titan`, and
   `spec/stdlib/titan/coroutine/`.
+- Browser driver: `doc/implementation/libuv-runtime.md#browser-driver` and the
+  scheduler gate `spec/stdlib/titan/async/browser_tests/` with
+  `spec/fixtures/browser_scheduler/` and `spec/coder/browser_scheduler_spec.lua`.
 
 ### Supervised failure propagation
 

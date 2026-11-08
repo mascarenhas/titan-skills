@@ -1065,7 +1065,8 @@ Every added statement was checked against titan master `843b446e`. The
 reserved words were checked against `lexer.lua` and `grammar.md`, module
 lookup against `driver.lua` and `folder-modules.md`, and the bridge against
 `browser.browser.titan` and `standard-library-browser.md`. Callback timing
-and watcher drains were checked against `async.native.titan`,
+and watcher drains were checked against `async.native.titan` (now the
+`titan/async/` folder),
 `fs.native.titan`, `async-io.md`, `standard-library-fs.md` and the uv
 contract notes.
 

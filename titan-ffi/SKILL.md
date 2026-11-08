@@ -1,6 +1,6 @@
 ---
 name: titan-ffi
-description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, the trusted Lua C API boundary, or the browser-only titan.browser JavaScript bridge. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, lifetimes, and JavaScript bindings and callables. Do not invoke merely because an implementation is C-backed when no foreign, Lua/C, or JavaScript boundary is touched.
+description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, the trusted Lua C API boundary, or the browser-only titan.browser JavaScript bridge. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, lifetimes, JavaScript bindings and callables, and Emscripten APIs through C helpers with synchronous C callbacks into Titan (browser.pin, titan_browser_call_sync). Do not invoke merely because an implementation is C-backed when no foreign, Lua/C, or JavaScript boundary is touched.
 ---
 
 # Titan FFI and Lua escape hatches
@@ -57,6 +57,7 @@ Before writing code, classify the job:
 | Perform a stack-oriented `lua_*` operation | avoid in application code; it is a narrow audited standard-library exception, described below with the guard-rails that limit it |
 | Wrap libuv or another async callback API | use this skill for the C surface and the async skill for Task/Runtime ownership; cancellation does not end native ownership |
 | Call JavaScript from Titan, or let JavaScript call a Titan closure (browser target) | `local browser = import "browser"`; see [Browser JavaScript bindings](#browser-javascript-bindings-titanbrowser) |
+| Run Titan code from a C callback that an Emscripten API calls synchronously (html5 events), or call Emscripten C APIs | a `--c-source` helper plus `browser.pin` and `titan_browser_call_sync`; see [Synchronous C callbacks and Emscripten APIs](#synchronous-c-callbacks-and-emscripten-apis) |
 
 Do not add a C forwarding function merely because C looks more familiar. If
 Titan can spell the operation through the imported header, keep the call,
@@ -1397,6 +1398,8 @@ browser-only `titan.browser` module; native builds have no placeholder. It is
 the supported Titan/JavaScript boundary: never cast a closure to an address,
 reach a raw `lua_State *` gateway, use externref, add a synchronous
 JavaScript-to-Titan call, or build a second runtime or compatibility lifecycle.
+C that an Emscripten API calls synchronously reaches Titan only through a
+[pin and `titan_browser_call_sync`](#synchronous-c-callbacks-and-emscripten-apis).
 
 ## Calling JavaScript from Titan
 
@@ -1590,6 +1593,13 @@ invalid trace map into an ordinary initialization failure before Lua runs;
 operation keeps its captured Titan error even if its output flush fails or
 disposal interrupts it; each secondary failure is reported once as cleanup.
 
+A program that links `async` (and is not built with `--no-uv-bootstrap`)
+runs `main` as a Task: `run()` drives until every Task finishes.
+`instance.callTask` runs a callable as a Task. A Task's
+`request_exit` latches the instance as exited, and `dispose()` cancels the
+unfinished Tasks with `"instance disposed"` and drives their cleanup. The
+`titan-async` section "The browser target" lists the results and rules.
+
 During state close, synchronous binding calls, copied output, and release stay
 valid until the module-owned browser record is finalized in Lua's natural
 order. Finalizers of later-created values, including modules importing
@@ -1598,6 +1608,88 @@ see an invalidated state: close and callable release are no-ops, while binding
 calls raise (a Lua finalizer warning on stderr). New requests, listeners and
 reverse calls are already refused. A trap, abort or completion-protocol failure
 poisons the instance, and later methods reject that saved failure.
+
+## Synchronous C callbacks and Emscripten APIs
+
+Emscripten's C APIs (`emscripten.h`, `emscripten/html5.h`, and the rest) and
+`EM_JS` or `EM_ASM` blocks go in a `--c-source` helper, behind a small header
+with ordinary C types that Titan imports. Titan's C importer does not handle
+`emscripten/html5.h` yet
+([#380](https://github.com/mascarenhas/titan/issues/380)).
+
+An API that calls back into C runs that callback synchronously, with
+JavaScript frames above it, so the callback is not a loader entry. To run
+Titan code there, pin a handler and have C call `titan_browser_call_sync`:
+
+```text
+record BrowserPin
+function pin(callback: function (...: BrowserValue): BrowserValue): BrowserPin
+function BrowserPin:identity(): (integer, integer, integer)
+function BrowserPin:close()
+```
+
+- **HANDLE arguments are borrowed.** C keeps every handle slot it passes to
+  `titan_browser_call_sync`; the callee receives its own `BrowserHandle`, whose
+  `close()` or collection never retires C's slot.
+- **On V8 the poison is generic.** Authored C that calls a suspending import
+  (`emscripten_sleep`) inside the callback poisons the instance with
+  `"a synchronous C callback ended by an exception"`, not a named switch
+  diagnostic.
+- **The pin.** `browser.pin(fn)` adds one hold on `fn`'s callable slot.
+  `identity()` returns `(state, slot, generation)`, which C copies into a
+  `titan_browser_identity` used as the callback's user data.
+  - Root the pin and an `owned *titan_browser_identity` (for example in a
+    module-level list) before C receives the identity.
+  - Unregister the C callback before you close the pin.
+  - `close()` is idempotent, and an unreachable pin closes itself.
+  - `pin` raises `"browser state is closing"` while its state closes.
+- **The call.** C passes a zero-initialized `titan_browser_sync_result`:
+  `titan_browser_call_sync(&identity, argc, args, &result)`. The status is
+  also stored in `result.status`:
+  - `TITAN_BROWSER_OK`: `result.value` holds the result.
+  - `TITAN_BROWSER_TITAN_ERROR`: the function raised, and `message` and the
+    raw `trace` describe it. A stale identity whose function nothing holds
+    any more fails this way with `"browser callable is released"`.
+  - `TITAN_BROWSER_STATE`: refused without running Titan, because the state
+    is closing, the instance is disposing, exited or poisoned, or callbacks
+    nest too deeply.
+  - `TITAN_BROWSER_MEMORY`: no message, trace or value.
+
+  After any status, the caller `free`s `message`, `trace`, and the bytes of a
+  STRING or BYTES result. In a Titan test, `defer` those frees right after
+  creating the record.
+- **Results.** A HANDLE result is valid while its `BrowserHandle` is open. A
+  CALLABLE result keeps no hold of its own: it is valid only while a
+  `BrowserPin` or a live JavaScript wrapper holds the function.
+- **Where it runs.** The callback runs whenever the instance is open: idle,
+  between turns, or nested in a binding that a Task called. It runs on a Lua
+  callback thread of its own, so a parked drive's frames stay untouched.
+- **No switching.** The callback cannot suspend. Explicit coroutine switches
+  raise, `coroutine.running()` is `nil`, and `async` behaves as outside a
+  Task (see the `titan-async` section "The browser target").
+- **Wake source.** An open owner-state pin is a drive wake source:
+  `relinquish(true)` waits instead of returning idle, so a Task waiting on a
+  callback keeps its Runtime alive while the pin is open.
+- **Reentry.** A binding that the callback's Titan code calls cannot start
+  another entry: `call`, `callTask`, `drain` and `run` reject with
+  `TITAN_BROWSER_REENTRY`. The JavaScript that dispatched the event can start
+  one, and that entry starts after the callback returns.
+- **Exceptions poison.** A callback that an exception unwinds instead of
+  returning poisons the instance with `TITAN_BROWSER_PROTOCOL`. A suspending
+  import is one such exception: on V8 the engine's `SuspendError` unwinds
+  before Titan's own check runs.
+- **Stack.** The callback's C frames use the interrupted code's linear stack
+  (a Task's is 256 KiB). Deep recursion fails Emscripten's stack check and
+  poisons the instance.
+- **The bracket.** `titan_browser_callback_enter` and
+  `titan_browser_callback_leave` bracket a standard library's hand-written
+  trampolines, which run on the callback thread (`frame->L`). They are not an
+  application API.
+
+The html5 click counter is the worked example: the C helper, the rooted pins
+and the page. It is in
+[synchronous C callbacks](../../../doc/language/standard-library-browser.md#synchronous-c-callbacks),
+and its fixture is `spec/fixtures/browser_bridge/counter.{h,c,titan,mjs}`.
 
 ## The C SDK and bridge maintenance
 
@@ -2747,7 +2839,9 @@ searching by analogy.
   defer the close,” and finalizer rules.
 * `doc/language/standard-library-browser.md` and the [loader
   API](../../../doc/language/browser-target.md#the-loader-api) — browser-only
-  `titan.browser` bindings, callables, requests, errors, and instance lifetime.
+  `titan.browser` bindings, callables, requests, errors, instance lifetime,
+  and synchronous C callbacks; [C helpers and Emscripten
+  APIs](../../../doc/language/browser-target.md#c-helpers-and-emscripten-apis).
 
 ## Implementation documentation
 
@@ -2845,6 +2939,10 @@ searching by analogy.
   `spec/fixtures/browser_bridge/integration.mjs` through
   `spec/coder/browser_bridge_spec.lua`, and the deployment gate
   `spec/coder/browser_deployment_spec.lua`.
+* Synchronous C callbacks: `spec/stdlib/titan/browser/tests.browser.titan`
+  (`call_sync` statuses, borrowed handles, callback threads) and the html5
+  click counter `spec/fixtures/browser_bridge/counter.{h,c,titan,mjs}`, which
+  `browser_bridge_spec.lua` runs in Chromium.
 * Retained recovery writes: `spec/fixtures/error_handling/aggregate_recovery.titan`
   and `scalar_recovery.titan` through the coder error-handling and
   stack-object specs.
@@ -3143,6 +3241,38 @@ statement needs `;` when it would otherwise continue the cast.
 silent unsigned truncation, freeing borrowed bytes, accepting unrelated object
 or function pointers directly, or claiming raw memory safety from `is`.
 
+## Eval 16 — Emscripten callback into Titan
+
+**Prompt:** A draft does three things:
+- It `foreign import`s `emscripten/html5.h`, and registers a click callback
+  whose user data is a Titan closure cast to a pointer.
+- From the callback it calls `titan_browser_call_sync`, frees nothing
+  afterwards, and closes the pin before unregistering the callback.
+- Its handler calls `coroutine.yield` to hand control to a parked Task.
+
+**Pass criteria:**
+- It moves the html5 calls into a `--c-source` helper behind a small header
+  (#380).
+- It pins the handler and roots the pin and an `owned` identity before C
+  sees the identity, then unregisters before closing the pin.
+- It zero-initializes the result and frees `message`, `trace` and any STRING
+  or BYTES bytes after every status.
+- It treats HANDLE arguments as borrowed.
+- It explains that switches raise in the callback, so the handler settles or
+  resumes a Task, which runs in a later turn.
+- It notes that a suspending import there poisons the instance, generically
+  on V8.
+
+**Fail signals:**
+- A closure-to-address cast, or a claim that the direct `html5.h` import
+  works.
+- Freeing or closing C's handle slots from Titan.
+- Treating a CALLABLE result as holding its function.
+- Expecting the callback to resume a Task inline, or expecting a named switch
+  diagnostic on V8.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
+
 # Final boundary checklist
 
 Before approving code, answer all of these explicitly:
@@ -3174,5 +3304,9 @@ Before approving code, answer all of these explicitly:
 * At a browser JavaScript boundary, are integers `BigInt`, bytes copied,
   handles and callables closed or released, never-settling host work
   detachable, and every general call into Titan awaited as a promise?
+* For a synchronous C callback, are the pin and its identity rooted before C
+  sees them and the callback unregistered before the pin closes? Is every
+  result buffer freed, and is no switch or suspending import attempted inside
+  the callback?
 
 If any answer is implicit, the boundary is not ready for review.
