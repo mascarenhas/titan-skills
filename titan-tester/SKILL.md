@@ -556,8 +556,8 @@ through `support.async.cleanup_task`) immediately after acquisition. Later
 `Context:cleanup` runs after that per-case Runtime has ended and is suitable
 only for non-Runtime resources. Several explicit sessions may run sequentially
 in one executable. See `spec/stdlib/titan/support/runtime.titan`,
-`support/async.titan`, and current cases in `timer/tests.titan`, `net/tests.titan`,
-and `uv/task_tests/`.
+`support/async/` (its `drive.native.titan` part is native-only), and current
+cases in `timer/tests/`, `net/tests.titan`, and `uv/task_tests/`.
 
 Do not copy these source-private helpers into a public standard module. A
 project that chooses `--no-uv-bootstrap` must own an equivalent supervisor and
@@ -681,16 +681,21 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
   `async/tests/`, `coroutine/tests/`, `http/tests/`, `peg/tests/`, and
   `uv/task_tests/` are current examples. The contributors are not submodules;
   all cases still have the one logical owner such as `async.tests`.
-- An owner in `TITAN_STDLIB_BROWSER_TEST_ROOTS` may import only the browser
-  standard-library modules (`coroutine`, `gc`, `iteration`, `math`, `test`,
-  `reflect`, `json`, `protobuf`, `transfer`, `peg`, `string`, `url`, `path`),
-  owner-local support, and `support.common.titan`. Put a case that needs `lua`,
-  `fs`, `thread`, `support.command`, `support.runtime`, or another
-  native-only facility in the module's native-only owner (`test.host_tests`,
-  `reflect.lua_tests`, `json.lua_tests`, `protobuf.resource_tests`) or a
-  `.native.titan` contributor; never copy it into a browser variant. Derive
-  target facts (`size_t` width, pointer width, string limits, endianness,
-  locale, nesting limits) from the target instead of skipping them.
+- An owner in `TITAN_STDLIB_BROWSER_TEST_ROOTS` may import only:
+  - the browser standard-library modules (`coroutine`, `gc`, `iteration`,
+    `math`, `test`, `reflect`, `json`, `protobuf`, `transfer`, `peg`,
+    `string`, `url`, `path`, `async`, `timer`);
+  - owner-local support and `support.common.titan`;
+  - `support.runtime` and `support.async`, whose `drive.native.titan` helpers
+    are native-only.
+
+  Put a case that needs `lua`, `fs`, `thread`, `uv`, `support.command`, or
+  another native-only facility in the module's native-only owner
+  (`test.host_tests`, `reflect.lua_tests`, `json.lua_tests`,
+  `protobuf.resource_tests`) or a `.native.titan` contributor; never copy it
+  into a browser variant. Derive target facts (`size_t` width, pointer width,
+  string limits, endianness, locale, nesting limits) from the target instead
+  of skipping them.
 - Browser-only `titan.browser` behavior lives in its target-specific owner
   `browser.tests` (`spec/stdlib/titan/browser/tests.browser.titan`, which
   imports the helper module `browser.independent`), outside
@@ -702,6 +707,13 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
   SDK/header/provider inventories, native-target absence, generated mechanics,
   and link artifacts, not mock public behavior. A compiled image is not bridge
   qualification, and engine or platform receipts are separate evidence.
+- The browser `async` driver's behavior that needs JavaScript bindings
+  (turns, disposal, Task-form calls, synchronous C callbacks) lives in the
+  scheduler gate owner `async.browser_tests`
+  (`spec/stdlib/titan/async/browser_tests/`), also outside the roots.
+  `spec/coder/browser_scheduler_spec.lua` builds it and drives it with
+  `spec/fixtures/browser_scheduler/scheduler.mjs`, which asserts the number
+  of passing cases.
 - Keep module-specific support beside its owner, for example
   `fs/test_support.titan`. Put something under `support/` only when it expresses
   a genuinely cross-module testing contract.
@@ -1509,7 +1521,7 @@ ABI 2 (language-server API 1; other existing versions unchanged).
   `spec/fixtures/test_runner/test_runner_fixture.titan` and
   `test_runner_edge.titan`.
 - Repository async supervisor and Task cleanup:
-  `spec/stdlib/titan/support/runtime.titan` and `support/async.titan`.
+  `spec/stdlib/titan/support/runtime.titan` and `support/async/`.
 - Error-helper precedent: `spec/stdlib/titan/support/common.titan`.
 - Fresh-process helpers/precedent:
   `spec/stdlib/titan/support/command.titan`, `uv/runtime_tests.titan`, and
