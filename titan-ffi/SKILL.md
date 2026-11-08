@@ -498,6 +498,7 @@ The important direct edges are:
 | another by-value C object expression | compatible `foreign const *T` for one call |
 | Titan `string` | borrowed `char *` / `void *` for a call |
 | C `char *` / `void *` | `string` by explicit NUL-terminated copy |
+| C character / `void *` plus integer count | `string` by explicit `pointer as string(length)` binary copy; `is string(length)` checks count/nullness without reading bytes |
 | counted owned character array | `string` by explicit exact-length binary copy |
 | boxable C scalar / object or function pointer | `value`; pointers become lightuserdata, using the portability cast for function pointers |
 | owned C storage | `value`; remains full userdata with exact owner identity |
@@ -640,6 +641,52 @@ end
 The copy does not make the source allocation owned by Titan; follow the C API's
 release rule if it returned allocated memory. A `void * as string` is only valid
 when it really points to a NUL-terminated byte sequence.
+
+### Copy a counted native byte range
+
+Use `pointer as string(length)` for binary data, not a `lua_pushlstring`
+transaction or a NUL-terminated cast:
+
+```titan
+function copy_binary(): string
+  local bytes = foreign unsigned char.new_array(4)
+  bytes[0] = 65
+  bytes[1] = 0
+  bytes[2] = 66
+  bytes[3] = 0
+  local pointer: foreign *unsigned char = bytes
+  return pointer as string(4)       -- "A\0B\0", all four bytes
+end
+```
+
+The source is a pointer to `char`, `signed char`, `unsigned char`, or `void`,
+including typedefs and qualifiers. Other object/function pointers do not gain
+a byte-copy cast. A raw array or owner first uses its existing explicit
+pointer conversion; a whole counted character owner still has its simpler
+`owner as string` conversion. A transparent string alias can be the target,
+but not `string?` or another type.
+
+The count is a Titan `integer` or C integer. It is checked against the active
+target's `size_t` range and Lua's string-size bound, not wrapped or truncated.
+Floating, Titan boolean, optional, and dynamic counts need an explicit
+conversion or unwrap first. A negative or oversized count raises before any
+copy. Zero yields `""` without reading the pointer, including NULL; positive
+length with NULL raises. The caller still owns the live, readable native
+interval and its release rule; copying neither validates native memory nor
+takes ownership. The result remains independent after native mutation/free.
+
+The pointer is evaluated and frozen once before the count is evaluated once,
+then checks and copying run. These effects are preserved on empty or rejected
+inputs. Ordinary Titan functions and otherwise valid module initializers
+support the form; restricted `foreign function` bodies do not.
+
+`pointer is string(length)` evaluates the operands in the same order and
+tests only count bounds and zero-or-non-NULL. The predicate itself neither
+allocates, reads bytes nor copies, and cannot establish readable extent or
+predict allocation exhaustion. NULL satisfies `is string(0)` but not the
+uncounted `is string`. Without a count, `pointer as string` still scans to
+the first NUL. Parentheses continue a counted cast across a newline: place
+`;` before a separate parenthesized-call statement.
 
 Pointers are nullable and truthy by nullness:
 
@@ -2026,7 +2073,7 @@ rewrite): `titan-runtime/browser/titan-browser.c`,
 | Called by C through a function pointer (libuv callbacks, `__gc` and other `lua_CFunction`s) | `local foreign function` in the Titan module, address taken |
 | Called by name from C or generated code where any C symbol works | Public `foreign function` in the Titan module; C callers use the generated `.titan.h` (or mangled declaration), using header-free C primitive parameters when public consumers should not need a `foreign import` |
 | Needs an exact unmangled C symbol (an Emscripten export, a symbol a C library looks up) | Compiler-generated one-line forward to a public `foreign function` (with `__attribute__((weak))` when the owning module may be absent), never a hand-written runtime C wrapper |
-| Program entry and image lifecycle (native `main`, browser `initialize`/`entry`/`close`) | Compiler-generated launcher sharing one error-conversion (`errmsg_tostring`) and trace implementation; protected `lua_pcall`s live there, not in runtime libraries |
+| Program entry and image lifecycle (native `main`, browser `initialize`/`entry`/`close`) | Compiler-generated launcher sharing one error-conversion (`titan_entry_error_message`) and trace implementation; protected `lua_pcall`s live there, not in runtime libraries |
 | Data and roots | Per-state roots in module variables or owner fields; cross-state maps with the host that already owns the lifetime (the browser's JS registry), not C statics in runtime code; the Lua registry only to anchor an object before any module variable exists, explicitly justified |
 | C struct access and marshalling | In Titan through `foreign import`; headers hold only struct layouts, declarations, and one-expression inline bridges (`lmacro_*` in `titan/ffi.h`) for macros, internal fields of incomplete structs, and `const` casts that the FFI cannot spell |
 | Test-only C | In test fixtures (`spec/fixtures/`), never in the runtime or standard library |
@@ -2354,7 +2401,7 @@ callback/borrow audit.
 | `lua_pcallk` | effect follows nargs/nresults and the error path; current-state use is the exact nonyieldable test helper factory; separate-state initialization/execution follows the [independent-state protected ledger](../../../doc/implementation/lua-library.md#protected-execution-and-stack-cleanup) |
 | `lua_setupvalue` | success installs/pops top value; missing upvalue returns null and leaves it |
 | `luaL_tolstring` | pushes one string but transiently uses two more slots above the value (metatable + event, or callable + argument); a caller that also pushes the value reserves three with `lua_checkstack`; may call `__tostring`, allocate, or raise; trace before cleanup |
-| `lua_pushlstring` | pushes one copied byte string and may allocate/raise; the async Receiver keeps its detached native packet alive through the copy, traces the resulting string, then restores the saved top |
+| `lua_pushlstring` | pushes one copied byte string and may allocate/raise; retained only for actual Lua stack arguments, keys or results (including an independent state), not current-state byte-buffer copies, which use `pointer as string(length)` |
 | `lua_type` | net zero |
 | `lua_topointer` | net zero; returned address is identity-only, borrowed, never dereference it |
 | `ffi.lua_totvalue` | net zero; copies selected slot into traced Titan `value` |
@@ -3072,6 +3119,29 @@ the pointer-local or heap-box workaround, treats a C pointer as a GC root, or
 claims Clang LTO verification for these forms.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
+
+## Eval 15 — Counted native byte copies
+
+**Prompt:** A native API lends `const unsigned char *bytes` and an
+`unsigned long long length` for bytes containing `"A\0B\0"`. Copy the exact
+range into a Titan string, preserving ownership. Explain NULL with zero and
+positive length, negative/oversized counts, evaluation order, and the paired
+predicate. A draft uses `bytes as string` or a `lua_pushlstring` transaction,
+then assumes a successful predicate proves readable memory. Supply a complete
+header-free Titan module that can compile with `--tree` and `--output`.
+
+**Pass criteria:** uses `pointer as string(length)` with a byte/void pointer
+and checked integer count; keeps both NULs; evaluates pointer then count once;
+NULL plus zero yields empty, positive NULL raises, and negative/nonrepresentable/
+Lua-oversized counts do not wrap. `is string(length)` neither reads nor copies
+and does not validate extent or predict allocation exhaustion. The native
+owner/lifetime and release rule remain the caller's. The operation is ordinary
+Titan, not valid in a restricted foreign body; a following parenthesized-call
+statement needs `;` when it would otherwise continue the cast.
+
+**Fail signals:** Lua stack operations for a current-state copy, NUL scanning,
+silent unsigned truncation, freeing borrowed bytes, accepting unrelated object
+or function pointers directly, or claiming raw memory safety from `is`.
 
 # Final boundary checklist
 
