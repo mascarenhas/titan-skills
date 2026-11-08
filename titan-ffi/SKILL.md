@@ -1,6 +1,6 @@
 ---
 name: titan-ffi
-description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, the trusted Lua C API boundary, or the browser-only titan.browser JavaScript bridge. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, lifetimes, JavaScript bindings and callables, and Emscripten APIs through C helpers with synchronous C callbacks into Titan (browser.pin, titan_browser_call_sync). Do not invoke merely because an implementation is C-backed when no foreign, Lua/C, or JavaScript boundary is touched.
+description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, the trusted Lua C API boundary, or the browser-only titan.browser JavaScript bridge. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, lifetimes, JavaScript bindings and callables, and direct Emscripten C APIs with synchronous C callbacks into Titan (browser.pin, titan_browser_call_sync). Do not invoke merely because an implementation is C-backed when no foreign, Lua/C, or JavaScript boundary is touched.
 ---
 
 # Titan FFI and Lua escape hatches
@@ -57,7 +57,7 @@ Before writing code, classify the job:
 | Perform a stack-oriented `lua_*` operation | avoid in application code; it is a narrow audited standard-library exception, described below with the guard-rails that limit it |
 | Wrap libuv or another async callback API | use this skill for the C surface and the async skill for Task/Runtime ownership; cancellation does not end native ownership |
 | Call JavaScript from Titan, or let JavaScript call a Titan closure (browser target) | `local browser = import "browser"`; see [Browser JavaScript bindings](#browser-javascript-bindings-titanbrowser) |
-| Run Titan code from a C callback that an Emscripten API calls synchronously (html5 events), or call Emscripten C APIs | a `--c-source` helper plus `browser.pin` and `titan_browser_call_sync`; see [Synchronous C callbacks and Emscripten APIs](#synchronous-c-callbacks-and-emscripten-apis) |
+| Run Titan code from a C callback that an Emscripten API calls synchronously (html5 events), or call Emscripten C APIs | `foreign import` the API's header; use `browser.pin` and `titan_browser_call_sync` for synchronous callbacks; see [Synchronous C callbacks and Emscripten APIs](#synchronous-c-callbacks-and-emscripten-apis) |
 
 Do not add a C forwarding function merely because C looks more familiar. If
 Titan can spell the operation through the imported header, keep the call,
@@ -1611,11 +1611,19 @@ poisons the instance, and later methods reject that saved failure.
 
 ## Synchronous C callbacks and Emscripten APIs
 
-Emscripten's C APIs (`emscripten.h`, `emscripten/html5.h`, and the rest) and
-`EM_JS` or `EM_ASM` blocks go in a `--c-source` helper, behind a small header
-with ordinary C types that Titan imports. Titan's C importer does not handle
-`emscripten/html5.h` yet
-([#380](https://github.com/mascarenhas/titan/issues/380)).
+Import supported Emscripten C declarations directly, including
+`foreign import "emscripten/html5.h"`. Function-like macros are not imported:
+use a declared function when one is available. For click registration, call
+`emscripten_set_click_callback_on_thread` with
+`EM_CALLBACK_THREAD_CONTEXT_CALLING_THREAD`, the underlying operation of the
+`emscripten_set_click_callback` macro.
+
+Keep `EM_JS` and `EM_ASM` blocks, and C operations the FFI cannot express, in
+a `--c-source` helper behind a small header. A helper is not required merely
+to call an Emscripten API. The worked counter retains only its small C
+callback because its zero-initialized automatic result aggregate cannot be
+declared in a restricted `foreign function` body; Titan registers and
+unregisters the callback through the imported html5 declarations.
 
 An API that calls back into C runs that callback synchronously, with
 JavaScript frames above it, so the callback is not a loader entry. To run
@@ -1686,8 +1694,8 @@ function BrowserPin:close()
   trampolines, which run on the callback thread (`frame->L`). They are not an
   application API.
 
-The html5 click counter is the worked example: the C helper, the rooted pins
-and the page. It is in
+The html5 click counter is the worked example: direct registration in Titan,
+the small C callback, the rooted pins and the page. It is in
 [synchronous C callbacks](../../../doc/language/standard-library-browser.md#synchronous-c-callbacks),
 and its fixture is `spec/fixtures/browser_bridge/counter.{h,c,titan,mjs}`.
 
@@ -3251,8 +3259,10 @@ or function pointers directly, or claiming raw memory safety from `is`.
 - Its handler calls `coroutine.yield` to hand control to a parked Task.
 
 **Pass criteria:**
-- It moves the html5 calls into a `--c-source` helper behind a small header
-  (#380).
+- It keeps the direct `html5.h` import and uses declared functions, such as
+  `emscripten_set_click_callback_on_thread`, rather than the function-like
+  `emscripten_set_click_callback` macro. A C helper is only needed for
+  operations outside the FFI's supported surface, not for html5 declarations.
 - It pins the handler and roots the pin and an `owned` identity before C
   sees the identity, then unregisters before closing the pin.
 - It zero-initializes the result and frees `message`, `trace` and any STRING
@@ -3264,8 +3274,9 @@ or function pointers directly, or claiming raw memory safety from `is`.
   on V8.
 
 **Fail signals:**
-- A closure-to-address cast, or a claim that the direct `html5.h` import
-  works.
+- A closure-to-address cast, claiming the direct `html5.h` import is
+  unsupported, or treating the function-like click-registration macro as an
+  imported function.
 - Freeing or closing C's handle slots from Titan.
 - Treating a CALLABLE result as holding its function.
 - Expecting the callback to resume a Task inline, or expecting a named switch
