@@ -1992,9 +1992,11 @@ files. The instance is persistent: `run(args)` initializes when needed and runs
 its finalizers and its JavaScript-callable handles live until
 `await instance.dispose()`, which belongs in `finally`. JavaScript interop uses
 the browser-only `titan.browser` module (`import "browser"`; native builds have
-no placeholder): explicit `create({bindings})`, typed `Argument` carriers,
-signed-i64 `BigInt` integers, Number floats, copied byte strings, state-owned
-`JSHandle`/`Callable`/`Request` owners, and promise-returning calls from
+no placeholder): explicit `create({bindings})`, `BrowserValue` runtime-type
+marshalling (`is_nil`, `is_boolean`, `is_integer`, `is_float`, `is_string`,
+`is_bytes`, `is_handle`, `is_callable`), signed-i64 `BigInt` integers, Number
+floats, UTF-8 strings, copied byte strings, state-owned
+`BrowserHandle`/`BrowserRequest` owners, and promise-returning calls from
 JavaScript into Titan. There is no synchronous JavaScript-to-Titan call. Load
 `titan-ffi` for the bridge rules; see [JavaScript
 bindings](../../../doc/language/standard-library-browser.md) and the [loader
@@ -2159,7 +2161,7 @@ to the language rules:
   `peg`, `string`, `url`, `path`) keep native source and interface parity and
   must not gain an import path to `uv`, `async`, or any other native-only
   module. The browser provider's fourteenth module, `titan.browser`, is the
-  reviewed browser-only exception: it imports only `gc` and `reflect`, has no
+  reviewed browser-only exception: it imports only `gc`, has no
   native placeholder or interface, and no native module may import it; see
   [standard-library maintenance](../../../doc/implementation/standard-library-maintenance.md#keep-the-browser-subset-dependency-closed).
 - **Honor the supported trust/concurrency model.** Do not harden one imagined
