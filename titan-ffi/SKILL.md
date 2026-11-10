@@ -1612,6 +1612,24 @@ method) or a lambda.
 
 ## Instance lifetime
 
+A page, a bundler entry or a Node script imports the generated image's
+default export, `create(options = {})`, and nothing else. The loader is
+embedded in the image, and the raw Emscripten factory and Module are private.
+
+```javascript
+import create from "./app.mjs"; // the generated image
+
+const instance = create({
+  bindings: {measure: text => BigInt(text.length)},
+}); // returns the instance at once
+try {
+  const result = await instance.run(["first"]); // initializes, then runs main
+  console.log(result.kind, result.status);
+} finally {
+  await instance.dispose();
+}
+```
+
 The generated image is persistent. `initialize()` runs module initializers but
 not `main`; `run(args)` runs `main` once; `main`'s scope `defer`s run at return;
 state finalizers and the final output drain run at `await instance.dispose()`,
@@ -1649,7 +1667,7 @@ use a declared function when one is available. For click registration, call
 
 Keep `EM_JS` and `EM_ASM` blocks, and C operations the FFI cannot express, in
 a `--c-source` helper behind a small header. A helper is not required merely
-to call an Emscripten API. The worked counter retains only its small C
+to call an Emscripten API. The click counter below keeps only its small C
 callback because its zero-initialized automatic result aggregate cannot be
 declared in a restricted `foreign function` body; Titan registers and
 unregisters the callback through the imported html5 declarations.
@@ -1665,6 +1683,150 @@ function BrowserPin:identity(): (integer, integer, integer)
 function BrowserPin:close()
 ```
 
+The html5 click counter shows the whole shape. Its C helper, compiled with
+`--c-source counter.c`, supplies only the callback, whose type is html5's
+`em_mouse_callback_func`,
+`bool (*)(int, const EmscriptenMouseEvent *, void *)`:
+
+```c
+/* counter.h */
+#ifndef TITAN_COUNTER_H
+#define TITAN_COUNTER_H
+#include <emscripten/html5.h>
+
+/* The C callback needs a zero-initialized automatic result aggregate, which
+ * restricted foreign bodies cannot declare. Titan registers it directly. */
+bool counter_click(int type, const EmscriptenMouseEvent *event, void *identity);
+#endif
+
+/* counter.c */
+#include <titan/browser.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "counter.h"
+
+/* Keep this test-only callback in C: its zero-initialized automatic result
+ * aggregate cannot be declared in a restricted foreign-function body.
+ * The pinned handler returns nil, so only a failure's message and trace
+ * need freeing. Registration and unregistration live in Titan. */
+bool counter_click(int type, const EmscriptenMouseEvent *event, void *identity) {
+  (void)type;
+  (void)event;
+  titan_browser_sync_result result = {0};
+  if (titan_browser_call_sync(identity, 0, NULL, &result) != TITAN_BROWSER_OK && result.message)
+    fprintf(stderr, "click handler failed: %.*s\n", (int)result.message_length, (const char *)result.message);
+  free((void *)result.message);
+  free((void *)result.trace);
+  return false;
+}
+```
+
+Titan registers and unregisters the callback. C keeps the address of each
+identity for as long as its callback is registered, which is long after
+`listen` returns. The pin and the identity therefore live in the module-level
+`listeners` array from before the registration until `stop` removes them:
+
+```titan
+-- A click counter: html5.h click callbacks call pinned Titan handlers
+-- synchronously, and each handler shows the count through a binding.
+local browser = import "browser"
+foreign import "emscripten/html5.h"
+foreign import "titan/browser.h"
+foreign import "counter.h"
+
+local type Value = browser.BrowserValue
+
+local count = 0
+
+local function show()
+  local label = browser.binding("show")
+  defer label:close()
+  label:call(Value.is_integer(count))
+end
+
+local function increment(...: Value): Value
+  count = count + 1
+  show()
+  return Value.is_nil()
+end
+
+local function reset(...: Value): Value
+  count = 0
+  show()
+  return Value.is_nil()
+end
+
+-- A registered click callback. The pin keeps its handler callable, and C
+-- keeps the address of the identity as the callback's user data, so both
+-- stay reachable until the callback is unregistered.
+local record Listener
+  selector: string
+  pin: browser.BrowserPin
+  identity: owned *titan_browser_identity
+end
+
+local listeners: {Listener} = {}
+
+-- The listener is rooted in `listeners` before C receives the identity, so no
+-- allocation can fail after the registration and leave C a dangling pointer.
+local function listen(selector: string, handler: function (...: Value): Value)
+  local pin = browser.pin(handler)
+  local identity: owned *titan_browser_identity = foreign titan_browser_identity.new()
+  local state, slot, generation = pin:identity()
+  identity.state = state
+  identity.slot = slot
+  identity.generation = generation
+  local index = #listeners + 1
+  listeners[index] = Listener { selector = selector, pin = pin, identity = identity }
+  -- The short click-registration spelling is a function-like macro.
+  if ffi.emscripten_set_click_callback_on_thread(
+      selector, identity, 0, ffi.counter_click,
+      ffi.EM_CALLBACK_THREAD_CONTEXT_CALLING_THREAD) ~= ffi.EMSCRIPTEN_RESULT_SUCCESS then
+    listeners[index] = nil
+    pin:close()
+    raise "cannot listen for clicks on " .. selector
+  end
+end
+
+-- Unregisters each callback before closing its pin.
+local function stop(...: Value): Value
+  for index = #listeners, 1, -1 do
+    local listener = listeners[index]
+    ffi.emscripten_set_click_callback_on_thread(
+      listener.selector, nil, 0, nil, ffi.EM_CALLBACK_THREAD_CONTEXT_CALLING_THREAD)
+    listener.pin:close()
+    listeners[index] = nil
+  end
+  return Value.is_nil()
+end
+
+-- args[1] names the reset button, so a test can make the second registration
+-- fail. A failure after a registration unregisters what was registered.
+function main(args: {string}): integer
+  listen("#increment", increment)
+  listen(args[1] or "#reset", reset)
+  show()
+  local ready = browser.binding("ready")
+  defer ready:close()
+  ready:call(Value.is_callable(stop))
+  return 0
+catch
+  stop()
+  raise
+end
+```
+
+In the registration call:
+
+- Pass the imported C function itself (`ffi.counter_click`) as the
+  `em_mouse_callback_func` argument, and `nil` to unregister.
+- `useCapture` is a C `bool`, so pass the Titan integer `0` or `1`. The
+  legacy `EM_FALSE` macro imports as a C `int`, which that parameter rejects.
+- The identity owner converts to the `void *userData` parameter. C borrows
+  the address, and the owner in `listeners` keeps the bytes alive.
+
+The rules behind the example:
+
 - **HANDLE arguments are borrowed.** C keeps every handle slot it passes to
   `titan_browser_call_sync`; the callee receives its own `BrowserHandle`, whose
   `close()` or collection never retires C's slot.
@@ -1673,10 +1835,16 @@ function BrowserPin:close()
   `"a synchronous C callback ended by an exception"`, not a named switch
   diagnostic.
 - **The pin.** `browser.pin(fn)` adds one hold on `fn`'s callable slot.
-  `identity()` returns `(state, slot, generation)`, which C copies into a
-  `titan_browser_identity` used as the callback's user data.
-  - Root the pin and an `owned *titan_browser_identity` (for example in a
-    module-level list) before C receives the identity.
+  `identity()` returns `(state, slot, generation)`, which fill the
+  `titan_browser_identity` that the callback receives as user data (an
+  `owned *titan_browser_identity` in the example).
+  - Keep the pin and the identity reachable for as long as C can call back,
+    not only while the registering function runs. Store both in a
+    module-level list or another long-lived record before C receives the
+    identity, and remove them only after the callback is unregistered
+    (`listeners` above). Locals do not do this: after the registering
+    function returns, a collection closes the unreachable pin and frees the
+    identity's bytes while C still holds their address.
   - Unregister the C callback before you close the pin.
   - `close()` is idempotent, and an unreachable pin closes itself.
   - `pin` raises `"browser state is closing"` while its state closes.
@@ -1693,8 +1861,10 @@ function BrowserPin:close()
   - `TITAN_BROWSER_MEMORY`: no message, trace or value.
 
   After any status, the caller `free`s `message`, `trace`, and the bytes of a
-  STRING or BYTES result. In a Titan test, `defer` those frees right after
-  creating the record.
+  STRING or BYTES result (`result.value.bytes`). All three are
+  `const unsigned char *`, so C casts each to `void *` for `free`. The
+  counter's handlers return `is_nil()`, so its callback frees only the first
+  two. In a Titan test, `defer` those frees right after creating the record.
 - **Results.** A HANDLE result is valid while its `BrowserHandle` is open. A
   CALLABLE result keeps no hold of its own: it is valid only while a
   `BrowserPin` or a live JavaScript wrapper holds the function.
@@ -1723,10 +1893,11 @@ function BrowserPin:close()
   trampolines, which run on the callback thread (`frame->L`). They are not an
   application API.
 
-The html5 click counter is the worked example: direct registration in Titan,
-the small C callback, the rooted pins and the page. It is in
-[synchronous C callbacks](../../../doc/language/standard-library-browser.md#synchronous-c-callbacks),
-and its fixture is `spec/fixtures/browser_bridge/counter.{h,c,titan,mjs}`.
+The manual's
+[synchronous C callbacks](../../../doc/language/standard-library-browser.md#synchronous-c-callbacks)
+adds the counter's page script. The example above is the fixture
+`spec/fixtures/browser_bridge/counter.{h,c,titan}`, and `counter.mjs` beside
+it is the page test.
 
 ## The C SDK and bridge maintenance
 
@@ -3412,8 +3583,10 @@ or function pointers directly, or claiming raw memory safety from `is`.
   `emscripten_set_click_callback_on_thread`, rather than the function-like
   `emscripten_set_click_callback` macro. A C helper is only needed for
   operations outside the FFI's supported surface, not for html5 declarations.
-- It pins the handler and roots the pin and an `owned` identity before C
-  sees the identity, then unregisters before closing the pin.
+- It pins the handler and keeps the pin and an `owned` identity in storage
+  that outlives the function registering the callback (a module-level list
+  or another long-lived record), from before C sees the identity until the
+  callback is unregistered. It unregisters before closing the pin.
 - It zero-initializes the result and frees `message`, `trace` and any STRING
   or BYTES bytes after every status.
 - It treats the HANDLE argument as borrowed. The call transfers nothing: C
@@ -3431,6 +3604,8 @@ or function pointers directly, or claiming raw memory safety from `is`.
 - A closure-to-address cast, claiming the direct `html5.h` import is
   unsupported, or treating the function-like click-registration macro as an
   imported function.
+- Leaving the pin or the identity reachable only from locals of the function
+  that registers the callback.
 - Freeing or closing C's handle slots from Titan, having C drop its slot
   after the call, or keeping the handler's own `BrowserHandle` open to
   protect C's slot.
@@ -3455,8 +3630,10 @@ operation with exponential backoff before it tells Titan.
 mirror with a Titan-owned count that Titan passes with the call that needs
 it; deletes the loader's re-check because the Titan side owns those facts;
 keeps one bounded host call in JavaScript and moves the retry policy to
-Titan; keeps the import a one-line forward; counts the JavaScript lines that
-the diff adds and justifies each remaining function by a named capability.
+Titan; keeps the import a one-line forward; names the host capability that
+justifies each function left in JavaScript, treats the 40-line retry
+function as a finding because it has none, and says that a review of the
+diff counts the JavaScript lines it adds.
 
 **Fail signals:** accepting the mirror because "the host owns the lifetime";
 keeping both checks "for safety"; moving the host call itself into C;
@@ -3500,9 +3677,10 @@ Before approving code, answer all of these explicitly:
 * At a browser JavaScript boundary, are integers `BigInt`, bytes copied,
   handles and callables closed or released, never-settling host work
   detachable, and every general call into Titan awaited as a promise?
-* For a synchronous C callback, are the pin and its identity rooted before C
-  sees them and the callback unregistered before the pin closes? Is every
-  result buffer freed, and is no switch or suspending import attempted inside
-  the callback?
+* For a synchronous C callback, do the pin and its identity live in storage
+  that outlives the registering function, from before C sees the identity
+  until the callback is unregistered, and is the callback unregistered
+  before the pin closes? Is every result buffer freed, and is no switch or
+  suspending import attempted inside the callback?
 
 If any answer is implicit, the boundary is not ready for review.
