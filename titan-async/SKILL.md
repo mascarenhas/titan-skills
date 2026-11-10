@@ -1595,12 +1595,18 @@ Ticker/subscription.
 `ResumeToken` remains the explicit `suspend`/`Task:resume(token)` capability;
 native one-shot adapters settle their own await capabilities.
 
-On the browser, `timer` keeps this API on the SDK's JavaScript timers:
-`sleep` arms one `setTimeout` (cancellation clears it), `sleep(0)` and
-`yield()` arm none and resume in a later driver turn, a Ticker runs on
-`setInterval` and closes with its Runtime, and delays follow the browser's
-clamping and background-tab throttling
-(`doc/language/standard-library-timer.md#on-the-browser`).
+On the browser, `timer` keeps this API on the SDK's JavaScript timers
+(`doc/language/standard-library-timer.md#on-the-browser`):
+
+- `sleep` arms a `setTimeout`, and cancellation clears it. `sleep(0)` and
+  `yield()` arm none and resume in a later driver turn.
+- A Ticker runs on `setInterval` and closes with its Runtime.
+- A host timer takes at most 2,147,483,647 ms. `timer.browser.titan` chains
+  bounded timers for a longer sleep or ticker period, so both keep their
+  full range. The SDK sources themselves (`titan:timeout`, `titan:interval`)
+  arm one host timer each and raise a `browser.BrowserError` holding a
+  `TypeError` for a delay or period above that limit.
+- Delays follow the browser's clamping and background-tab throttling.
 
 Evidence: `titan/timer.native.titan`, `titan/timer.browser.titan`,
 `doc/language/standard-library-timer.md`, and
@@ -1889,6 +1895,13 @@ turn-based driver runs them instead of libuv. For the full contract, read
     runs between turns, outside any Task, and `async.loop()` there raises
     `"async.loop is already being driven"`. A call made from inside a binding
     rejects with `TITAN_BROWSER_REENTRY`.
+  - A queued plain call's promise settles when the call returns, and a queued
+    Task-form call's when its Task's outcome arrives. The JavaScript awaiting
+    it can therefore run before that turn ends, between the driver's internal
+    coroutine hops. A call made there waits for a later turn, and `drain()`
+    and `run()` still reject `TITAN_BROWSER_REENTRY`.
+  - A queued call that has settled keeps its result when the drive later
+    exits or disposal begins. Only calls still unsettled are rejected then.
 - **Turns:** a turn first delivers the host work queued when it began. It
   then runs at most 64 Tasks that were ready before it, and gives the event
   loop back for one macrotask. `async.yield()` therefore never resumes in the
@@ -1911,7 +1924,8 @@ turn-based driver runs them instead of libuv. For the full contract, read
     after `main` failed.
 - **Exit:** `request_exit(code)` latches the instance as exited when the
   drive ends. Later entries reject with `TITAN_BROWSER_EXITED`, and nothing
-  closes the page or the Node process.
+  closes the page or the Node process. A wrapper's `release()` after an exit
+  only invalidates the wrapper; its function is let go when the state closes.
 - **Disposal:** `dispose()` cancels every unfinished Task with `"instance
   disposed"` and drives their cleanup, even when no drive is running.
   - Cleanup may await host work started before `dispose()`.

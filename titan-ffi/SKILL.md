@@ -1503,11 +1503,24 @@ JavaScript receives a branded wrapper. `await wrapper.call(5n)` and
 `is_nil()`, `5n` here for `is_integer(5)`). Returning a `BrowserHandle` that
 holds a `Promise` or thenable causes the user-facing `call` promise to adopt
 it, while internal operation admission and `dispose()` depend only on the Wasm
-entry's completion. A callable stays pinned while any holder needs it (a live
-JavaScript wrapper, or an active request or listener); wrapper `release()`,
-request retirement, and state close drop their holds. Neither collector traces
-the other heap, so a JavaScript object → callable wrapper → `BrowserHandle`
-cycle needs an explicit `release()` or `close()`.
+entry's completion.
+
+A callable stays pinned while any holder needs it: a live JavaScript wrapper,
+a request or listener that can still deliver to it, or an open `BrowserPin`.
+Each holder lets go at a definite point:
+
+| Holder | Lets go when |
+| --- | --- |
+| JavaScript wrapper | `release()` is called |
+| One-shot request (`start`) | its `completion` or `failure` returns or raises, or the request is cancelled or closed |
+| Listener (`listen`) | the request is cancelled or closed |
+| `BrowserPin` | the pin is closed or collected |
+
+State close lets go of the rest. A one-shot whose outcome can never be
+delivered may keep its callables until `close()` or state close, so close the
+requests you keep. Neither collector traces the other heap, so a JavaScript
+object → callable wrapper → `BrowserHandle` cycle needs an explicit
+`release()` or `close()`.
 
 Every general call into Titan returns a promise, even for a body with no
 `yield`: an allocation can run abandoned-coroutine cleanup, which switches
@@ -1518,6 +1531,15 @@ see it. Await and handle that rejection in the host, or enqueue with
 `await instance.drain()`. `requestDrain` only announces queued work; the bridge
 has no scheduler.
 
+`wrapper.release()` is the one synchronous entry that the loader makes, and it
+is not an application call. It invalidates the wrapper at once and drops the
+wrapper's hold in Titan in the same call, running none of the program's code
+and no finalizer. It never throws and is allowed anywhere, including inside a
+binding and during a drive. Once `dispose()` has begun, after an exit, or
+after an engine failure it only invalidates the wrapper, and the function is
+let go at state close. Exporting the function again gives JavaScript a fresh
+wrapper, never the released one.
+
 `target:start(completion, failure, ...: BrowserValue): BrowserRequest` and
 `target:listen(completion, failure, ...: BrowserValue): BrowserRequest` admit
 host work and take `BrowserValue` callables for both `completion` and
@@ -1526,15 +1548,21 @@ host work and take `BrowserValue` callables for both `completion` and
 `is_nil()`); `listen` passes each emitted argument marshalled by runtime type;
 `failure` receives `(BrowserValue.is_string(message),
 BrowserValue.is_handle(thrown))`, where `thrown` is always a `BrowserHandle`
-even for a thrown primitive. Type errors in `completion` or `failure` occur at
-delivery time in `drain()` and are reported through `onNotificationError`. The
-host binding returns `{kind: "detachable", promise, cancel?}` for work that
-might never settle, `{kind: "retained", promise, cancel?}` only when settlement
-is guaranteed, or `{kind: "listener", subscribe(emit)}` whose `subscribe`
-returns an unregister function. `BrowserRequest:cancel()` signals the host but
-is not physical retirement. `onNotificationError` receives
-`{kind: "callback" | "cleanup", operation, error}` only for errors no caller
-can receive; it never stands in for a request's `failure` callable.
+even for a thrown primitive. A settlement or emission that cannot be
+marshalled goes to `failure` too, whether marshalling fails when the event is
+queued or when it is delivered; a delivery-time failure joins the queue
+behind the events already waiting. Type errors in `completion` or `failure`
+occur at delivery time and are reported through `onNotificationError`, as is
+a failure event that itself cannot be marshalled. `onNotificationError`
+receives `{kind: "callback" | "cleanup", operation, error}` only for errors
+no caller can receive; it never stands in for a request's `failure` callable.
+The host binding returns `{kind: "detachable", promise, cancel?}` for work
+that might never settle, `{kind: "retained", promise, cancel?}` only when
+settlement is guaranteed, or `{kind: "listener", subscribe(emit)}` whose
+`subscribe` returns an unregister function. `BrowserRequest:cancel()` signals
+the host but is not physical retirement. It does drop the request's holds and
+every event still queued for it, including the settlement of a one-shot that
+settled before the cancel.
 
 A complete page module that starts one host request:
 
@@ -1600,13 +1628,14 @@ runs `main` as a Task: `run()` drives until every Task finishes.
 unfinished Tasks with `"instance disposed"` and drives their cleanup. The
 `titan-async` section "The browser target" lists the results and rules.
 
-During state close, synchronous binding calls, copied output, and release stay
-valid until the module-owned browser record is finalized in Lua's natural
-order. Finalizers of later-created values, including modules importing
+During state close, synchronous binding calls, copied output, and handle
+close stay valid until the module-owned browser record is finalized in Lua's
+natural order. Finalizers of later-created values, including modules importing
 `titan.browser`, run before that invalidation. Earlier-registered finalizers
-see an invalidated state: close and callable release are no-ops, while binding
-calls raise (a Lua finalizer warning on stderr). New requests, listeners and
-reverse calls are already refused. A trap, abort or completion-protocol failure
+see an invalidated state: `close()` is a no-op, while binding calls raise (a
+Lua finalizer warning on stderr). New requests, listeners and reverse calls
+are already refused, and a wrapper's `release()` only invalidates the wrapper
+once its state is closing. A trap, abort or completion-protocol failure
 poisons the instance, and later methods reject that saved failure.
 
 ## Synchronous C callbacks and Emscripten APIs
@@ -1708,7 +1737,7 @@ record in owned module storage, registers an ordinary Titan finalizer through
 C-created states load the module normally, with no attachment operation or
 special bootstrap order. `titan.lua` is native-only; the standard library
 creates no independent browser state.
-Each contained entry carries an unsigned 64-bit operation identity and exactly
+Each promised entry carries an unsigned 64-bit operation identity and exactly
 one completion record. Potentially throwing host imports fill a response and
 return normally; trusted adoption, release, and state imports never throw. A C
 pointer is not a root: keep the original Titan string, Array, or owned buffer
@@ -1716,6 +1745,24 @@ reachable through every borrow. In Titan, a parameter or a local of an
 enclosing block already does that (rule 5 of the
 [guard-rails](#guard-rails-for-standard-library-and-runtime-c)); C code keeps
 it in a Lua stack slot below the top.
+
+One export is synchronous instead of promised:
+`titan_browser_release_callable(state, slot, generation)`, which
+`wrapper.release()` calls. It has no operation identity and no completion,
+and the loader ignores its status. Its trampoline in `titan.browser` is a
+callback trampoline (callback admission, a callback thread, `errorhandler`,
+and a function-scope `catch` around the body), and it stops the collector for
+the extent of the entry: it saves `G(L)->gcstp` (`lmacro_get_gcstp`), sets
+the saved bits plus `GCSTPGC` (`lmacro_set_gcstp`), and restores the saved
+value, as Lua's `GCTM` does around a finalizer. A body that allocates
+nothing does not keep the collector out by itself: a compiled Titan function
+that reserves root slots polls the collector when it is entered, and a
+finalizer run inside `release()` could export the function that is being
+released. `titan_in_finalizer` is true inside the entry. A refused release
+(a closing state, a disposing, exited or poisoned instance, callbacks nested
+too deeply) leaves the pin until state close. Give any further synchronous
+entry the same three properties (protected, no-switch, collector stopped)
+and the same admission rule.
 
 Changes to the bridge itself follow those guard-rails, JavaScript included:
 name the host capability for each added loader or library function
@@ -2201,7 +2248,7 @@ int titan_browser_invoke(uint64_t operation_id, uint32_t state, uint32_t slot,
         uint32_t generation, uint32_t argc, const titan_browser_value *args) {
     return titan_browser_\u2133_invoke_titan
         ? titan_browser_\u2133_invoke_titan(operation_id, state, slot, generation, argc, args)
-        : (!operation_id || !titan_browser_entry_allowed(operation_id, TITAN_BROWSER_INVOKE) ? -1
+        : (!titan_browser_entry_allowed(operation_id, TITAN_BROWSER_INVOKE) ? -1
             : titan_browser_invalid_entry(operation_id, TITAN_BROWSER_INVOKE,
                   "browser state is closed, closing or uninitialized"));
 }
@@ -2442,13 +2489,31 @@ rules this way for JavaScript (rules 2 and 5 have no JavaScript reading):
   ```
 
   The Titan side decides and passes its decision as an argument. The async
-  driver chooses between a turn and a wait, and `relinquish` passes that on
-  as the import's mode:
+  driver chooses between a turn and a wait, `titan.browser` adds what it
+  alone knows (whether the state has an open `BrowserPin`), and the import
+  receives one mode:
 
   ```text
   -- titan/async/runtime.browser.titan
   local status = browser.relinquish(runtime.ready_head == nil)
+
+  -- titan/browser.browser.titan, in relinquish(wait)
+  local mode = ffi.TITAN_BROWSER_TURN as foreign uint32_t
+  if wait then
+    if open_pins > 0 then
+      mode = ffi.TITAN_BROWSER_WAIT_HELD as foreign uint32_t
+    else
+      mode = ffi.TITAN_BROWSER_WAIT as foreign uint32_t
+    end
+  end
+  return ffi.titan_browser_relinquish(state_record.token, mode)
   ```
+
+  Policy stays out of the loader even when the host API suggests otherwise.
+  *Wrong* (`titan-browser.mjs` at `48b26b75`): `armChunk` and `periodElapsed`
+  re-arm delays beyond the host's 32-bit timer range inside the loader.
+  *Right:* each SDK source arms one bounded host timer, and
+  `timer.browser.titan` chains them for a long sleep or ticker period.
 - **Rule 3.** An import that can throw catches at its own boundary, fills a
   status record, and returns; Titan raises afterwards (`importResponse` fills
   `titan_browser_response`, and `check_response` raises `BrowserError`). A
@@ -2457,9 +2522,12 @@ rules this way for JavaScript (rules 2 and 5 have no JavaScript reading):
   lifetime and keeps no running copy of a count or table that Titan owns.
   *Wrong* (`titan-browser.mjs` at `48b26b75`): the `holds` map mirrors
   Titan's count of open `BrowserPin`s through an import of its own,
-  `titan_browser_host_hold`. *Right:* the pin table and hold counts are
-  module variables of `titan.browser`, and JavaScript holds one wrapper
-  object per pin.
+  `titan_browser_host_hold`, and each request record counts its queued
+  notifications to decide when Titan's holds on `completion` and `failure`
+  may drop. *Right:* the pin table, the hold counts, each request's
+  `RequestHolds`, and the count of open pins are module variables and records
+  of `titan.browser`; JavaScript holds one wrapper object per pin, and Titan
+  passes `WAIT_HELD` with the wait that needs the fact.
 - **Rule 6.** The side that owns a fact checks it, once. Titan refuses what
   Titan knows before it calls an import (a closed handle, a drive that is
   not active), and the import does not test it again. JavaScript refuses
@@ -2467,7 +2535,9 @@ rules this way for JavaScript (rules 2 and 5 have no JavaScript reading):
   ill-formed string), and Titan does not test it again. *Wrong*
   (`titan-browser.mjs` at `48b26b75`): `driveBegin` poisons on a second
   drive that `drive_begin` has already refused with `"browser drive is
-  already active"`.
+  already active"`, and the loader tests for an exhausted operation identity
+  at seven sites though it allocates one at two. *Right:* `nextOperationId`
+  is the one place that refuses an exhausted identity.
 
 A review counts the authored JavaScript lines that a diff adds and names the
 host capability for each added function or block. A function with none is a
