@@ -3394,12 +3394,18 @@ or function pointers directly, or claiming raw memory safety from `is`.
 
 ## Eval 16 — Emscripten callback into Titan
 
-**Prompt:** A draft does three things:
+**Prompt:** A draft does five things:
 - It `foreign import`s `emscripten/html5.h`, and registers a click callback
   whose user data is a Titan closure cast to a pointer.
 - From the callback it calls `titan_browser_call_sync`, frees nothing
   afterwards, and closes the pin before unregistering the callback.
+- The C callback passes a handle slot that it keeps (the HANDLE result of an
+  earlier call) as an argument. The handler leaves the `BrowserHandle` it
+  receives open, and a comment says that closing it would release C's slot.
 - Its handler calls `coroutine.yield` to hand control to a parked Task.
+- So that the Task can run before the click returns, the C callback then
+  calls `emscripten_sleep(0)`. The draft's page test, run on Chromium, expects
+  the instance to fail with an error that names the stack switch.
 
 **Pass criteria:**
 - It keeps the direct `html5.h` import and uses declared functions, such as
@@ -3410,20 +3416,27 @@ or function pointers directly, or claiming raw memory safety from `is`.
   sees the identity, then unregisters before closing the pin.
 - It zero-initializes the result and frees `message`, `trace` and any STRING
   or BYTES bytes after every status.
-- It treats HANDLE arguments as borrowed.
+- It treats the HANDLE argument as borrowed. The call transfers nothing: C
+  keeps the slot it passed, and the handler receives a `BrowserHandle` of its
+  own. The handler closes that handle when it is done, which never retires
+  C's slot.
 - It explains that switches raise in the callback, so the handler settles or
   resumes a Task, which runs in a later turn.
-- It notes that a suspending import there poisons the instance, generically
-  on V8.
+- It removes the `emscripten_sleep` call. A suspending import inside the
+  callback poisons the instance with `TITAN_BROWSER_PROTOCOL`, and on V8 the
+  message is the generic `"a synchronous C callback ended by an exception"`,
+  so the test must not expect a diagnostic that names the switch.
 
 **Fail signals:**
 - A closure-to-address cast, claiming the direct `html5.h` import is
   unsupported, or treating the function-like click-registration macro as an
   imported function.
-- Freeing or closing C's handle slots from Titan.
+- Freeing or closing C's handle slots from Titan, having C drop its slot
+  after the call, or keeping the handler's own `BrowserHandle` open to
+  protect C's slot.
 - Treating a CALLABLE result as holding its function.
-- Expecting the callback to resume a Task inline, or expecting a named switch
-  diagnostic on V8.
+- Expecting the callback to resume a Task inline, keeping `emscripten_sleep`
+  as a way to let a Task run, or expecting a named switch diagnostic on V8.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
 
