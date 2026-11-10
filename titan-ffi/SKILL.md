@@ -1717,7 +1717,11 @@ enclosing block already does that (rule 5 of the
 [guard-rails](#guard-rails-for-standard-library-and-runtime-c)); C code keeps
 it in a Lua stack slot below the top.
 
-Changes to the bridge itself follow those guard-rails. Keep its ownership
+Changes to the bridge itself follow those guard-rails, JavaScript included:
+name the host capability for each added loader or library function
+([browser JavaScript under the same
+rules](#browser-javascript-under-the-same-rules)), put state and policy in
+`titan.browser`, and keep each import a one-line forward. Keep its ownership
 invariants: copy byte arguments by content (a `Uint8Array`
 subclass's `slice` may return a view); reacquire `HEAPU8` views after any
 allocation and copy an aliased source before growth; keep at most one sink
@@ -2158,13 +2162,17 @@ declaration must supply a state. Never store, return, replace, or use an old
 The trusted exception says what audited code may do, not when to use it.
 Every standard-library or runtime change that touches C (authored C, a
 `foreign function` callback, or a `lua_*`/`luaL_*` call, the browser bridge
-included) follows these six rules, whose normative text is the style guide's
+included) or browser JavaScript (the loader, a `--js-library` file, an
+`EM_JS` or `EM_ASM` block, generated JavaScript glue) follows these six
+rules, whose normative text is the style guide's
 [Write native bindings Titan-first](../../../doc/style-guide.md#write-native-bindings-titan-first).
-A review counts the new Lua C API calls and authored C lines in the
-diff and justifies each one against them. The wrong examples come from the
-initial browser bridge at commit `843b446e` (titan PR #364, before titan#371's
-rewrite): `titan-runtime/browser/titan-browser.c`,
+A review counts the new Lua C API calls, authored C lines, and authored
+JavaScript lines in the diff and justifies each one against them. The wrong
+examples come from the initial browser bridge at commit `843b446e` (titan
+PR #364, before titan#371's rewrite): `titan-runtime/browser/titan-browser.c`,
 `titan/browser.browser.titan`, and `titan-runtime/browser/titan-browser.mjs`.
+[Browser JavaScript under the same
+rules](#browser-javascript-under-the-same-rules) applies them to JavaScript.
 
 ### Where each piece of a native boundary goes
 
@@ -2174,7 +2182,8 @@ rewrite): `titan-runtime/browser/titan-browser.c`,
 | Called by name from C or generated code where any C symbol works | Public `foreign function` in the Titan module; C callers use the generated `.titan.h` (or mangled declaration), using header-free C primitive parameters when public consumers should not need a `foreign import` |
 | Needs an exact unmangled C symbol (an Emscripten export, a symbol a C library looks up) | Compiler-generated one-line forward to a public `foreign function` (with `__attribute__((weak))` when the owning module may be absent), never a hand-written runtime C wrapper |
 | Program entry and image lifecycle (native `main`, browser `initialize`/`entry`/`close`) | Compiler-generated launcher sharing one error-conversion (`titan_entry_error_message`) and trace implementation; protected `lua_pcall`s live there, not in runtime libraries |
-| Data and roots | Per-state roots in module variables or owner fields; cross-state maps with the host that already owns the lifetime (the browser's JS registry), not C statics in runtime code; the Lua registry only to anchor an object before any module variable exists, explicitly justified |
+| Needs the JavaScript host on the browser target (JSPI suspension and resumption, holding JavaScript values and host objects, host scheduling and event APIs, the embedder-facing promise API, engine stack capture) | JavaScript in the loader or a `--js-library` file, reached through a one-line import; state, policy, validation, and bookkeeping in Titan |
+| Data and roots | Per-state roots in module variables or owner fields; a cross-state map with the host that owns the instance (the browser loader's state-token map), not C statics in runtime code; in JavaScript only what needs host lifetime (JavaScript values and host objects, promises and their continuations, items waiting for a point where Wasm can be entered), never a running copy of a count or table that Titan owns; the Lua registry only to anchor an object before any module variable exists, explicitly justified |
 | C struct access and marshalling | In Titan through `foreign import`; headers hold only struct layouts, declarations, and one-expression inline bridges (`lmacro_*` in `titan/ffi.h`) for macros, internal fields of incomplete structs, and `const` casts that the FFI cannot spell |
 | Test-only C | In test fixtures (`spec/fixtures/`), never in the runtime or standard library |
 
@@ -2401,6 +2410,70 @@ function twice(...: Value): Value
   raise "twice expects an integer or bytes"
 end
 ```
+
+### Browser JavaScript under the same rules
+
+The rules cover authored JavaScript too: the embedded loader
+(`titan-runtime/browser/titan-browser.mjs`), the `--js-library` files
+(`titan-browser-library.js`, `titan-browser-bridge.js`,
+`titan-browser-trace.js`), an `EM_JS` or `EM_ASM` block, and JavaScript text
+that the compiler emits. JavaScript is for an operation that the host alone
+can perform:
+
+| Host capability | In the shipped JavaScript |
+| --- | --- |
+| Suspend or resume Wasm (JSPI); handle an engine failure | `TitanBrowser.enter` and `transfer`, the gate promise of `relinquish`, `poison` |
+| Hold or convert JavaScript values and host objects | the slot table (`newSlot`, `getSlot`), `CallableView` wrappers, `writeValue`, `valuesAt` |
+| Host scheduling and event APIs | `setTimeout` in `timeoutSource`, the `setImmediate`/`MessageChannel` turn source, the `AbortSignal` listener `taskAborted`, request promise continuations |
+| The embedder-facing promise API | `admission`, `operate`, `call`, `dispose`, `TitanBrowserError` objects, `onNotificationError` |
+| Engine stack capture | `TitanBrowserTrace.capture` |
+
+Everything else is Titan. State, policy, validation, and bookkeeping go to
+`titan.browser` or to the module that owns the behavior (`async`'s browser
+backend, `timer`), and the generated launcher owns image lifecycle. Read the
+rules this way for JavaScript (rules 2 and 5 have no JavaScript reading):
+
+- **Rule 1.** A new import is one line that forwards to the JavaScript
+  object owning the capability, as every import in `titan-browser-bridge.js`
+  does:
+
+  ```javascript
+  titan_browser_host_wake: state => TitanBridge.trusted('wakeDriver', state >>> 0),
+  ```
+
+  The Titan side decides and passes its decision as an argument. The async
+  driver chooses between a turn and a wait, and `relinquish` passes that on
+  as the import's mode:
+
+  ```text
+  -- titan/async/runtime.browser.titan
+  local status = browser.relinquish(runtime.ready_head == nil)
+  ```
+- **Rule 3.** An import that can throw catches at its own boundary, fills a
+  status record, and returns; Titan raises afterwards (`importResponse` fills
+  `titan_browser_response`, and `check_response` raises `BrowserError`). A
+  JavaScript exception must never unwind Wasm frames.
+- **Rule 4 and data placement.** JavaScript holds only what needs host
+  lifetime and keeps no running copy of a count or table that Titan owns.
+  *Wrong* (`titan-browser.mjs` at `48b26b75`): the `holds` map mirrors
+  Titan's count of open `BrowserPin`s through an import of its own,
+  `titan_browser_host_hold`. *Right:* the pin table and hold counts are
+  module variables of `titan.browser`, and JavaScript holds one wrapper
+  object per pin.
+- **Rule 6.** The side that owns a fact checks it, once. Titan refuses what
+  Titan knows before it calls an import (a closed handle, a drive that is
+  not active), and the import does not test it again. JavaScript refuses
+  what only JavaScript knows (a released wrapper, a disposing instance, an
+  ill-formed string), and Titan does not test it again. *Wrong*
+  (`titan-browser.mjs` at `48b26b75`): `driveBegin` poisons on a second
+  drive that `drive_begin` has already refused with `"browser drive is
+  already active"`.
+
+A review counts the authored JavaScript lines that a diff adds and names the
+host capability for each added function or block. A function with none is a
+finding of the same class as an avoidable C line. The runner
+(`titan-browser-run.mjs` and its page and worker scripts) is host tooling,
+not runtime JavaScript.
 
 ## The stack transaction pattern
 
@@ -3284,6 +3357,31 @@ or function pointers directly, or claiming raw memory safety from `is`.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
 
+## Eval 17 — Loader JavaScript or Titan
+
+**Prompt:** A draft adds a browser feature in three parts. (1) A new import
+`titan_browser_host_count(state, delta)` keeps a loader `Map` of how many
+subscriptions each Lua state has open, which the loader reads to decide
+whether a waiting drive may park. (2) The loader's handler for the import
+that starts a subscription first checks that the state is open and that the
+callable slots are nonzero, although the Titan function that calls it has
+just checked both. (3) A 40-line loader function retries a failed host
+operation with exponential backoff before it tells Titan.
+
+**Pass criteria:** classifies each part by host capability; replaces the
+mirror with a Titan-owned count that Titan passes with the call that needs
+it; deletes the loader's re-check because the Titan side owns those facts;
+keeps one bounded host call in JavaScript and moves the retry policy to
+Titan; keeps the import a one-line forward; counts the JavaScript lines that
+the diff adds and justifies each remaining function by a named capability.
+
+**Fail signals:** accepting the mirror because "the host owns the lifetime";
+keeping both checks "for safety"; moving the host call itself into C;
+inventing a synchronous JavaScript-to-Titan application call; or treating the
+runner tooling as runtime JavaScript.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
+
 # Final boundary checklist
 
 Before approving code, answer all of these explicitly:
@@ -3308,9 +3406,13 @@ Before approving code, answer all of these explicitly:
   `value`/`value` equality distinguished?
 * If the raw Lua API is used, where are the saved top, maximum reservation,
   per-path ledger, traced survivor, nonyielding rule, and borrowed-pointer audit?
-* In standard-library or runtime code, is each new `lua_*`/`luaL_*` call and
-  authored C line justified against the six
+* In standard-library or runtime code, is each new `lua_*`/`luaL_*` call,
+  authored C line, and authored JavaScript line justified against the six
   [guard-rails](#guard-rails-for-standard-library-and-runtime-c)?
+* For browser runtime JavaScript, does each added function or block need the
+  host (which capability), is every import a one-line forward, and does
+  JavaScript hold only what needs host lifetime, with no check that the
+  Titan side already makes?
 * Are cleanup and tests located at the owning layer?
 * At a browser JavaScript boundary, are integers `BigInt`, bytes copied,
   handles and callables closed or released, never-settling host work
