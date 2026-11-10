@@ -1583,8 +1583,8 @@ review-only.
 | Eval 16: Emscripten callback into Titan | Partial. The prose meets five of the six criteria: direct `html5.h` registration through the declared function, cleanup after every status, the borrowed HANDLE argument, switches that raise so that `Task:resume` takes effect in a later turn, and `emscripten_sleep` removed, with the generic V8 poison and a test that expects no named diagnostic. The identity is not rooted: `install_click` keeps the `owned *titan_browser_identity` in a local and returns only the pin, so a collection frees the bytes that C points at. The delivered module does not compile: it invents `em_click_callback_func` (html5 declares `em_mouse_callback_func`) and passes `ffi.EM_FALSE`, a C `int`, for a C `bool` parameter. The C helper compiles, with two warnings because it passes `const` pointers to `free`. |
 | Eval 17: loader JavaScript or Titan | Pass. Each part is classified by host capability. The loader mirror becomes a count that Titan owns and passes as `WAIT` or `WAIT_HELD`. Both loader prechecks are deleted under rule 6. One bounded host call stays in JavaScript, and the retry loop, the backoff and the attempt state move to Titan. The import stays a one-line forward, and the review rule is applied to the 40-line function. |
 
-The evaluation led to the one allowed revision, in the commit that adds this
-record. It changes `titan-ffi` only:
+The evaluation led to the one allowed revision, `e4f4d45`, which also added
+this record. It changes `titan-ffi` only:
 
 - **Rooting (Eval 16).** The answer quoted the rule ("root the pin and the
   identity before C receives the identity") and met it with locals of the
@@ -1597,10 +1597,10 @@ record. It changes `titan-ffi` only:
   checklist say the same.
 - **The callback and the registration call (Eval 16).** No cartridge named
   `em_mouse_callback_func` or showed a registration call. The section now
-  carries the click counter itself, ahead of the rules: the C callback and
-  the Titan program of the fixture
-  `spec/fixtures/browser_bridge/counter.{h,c,titan}`, byte for byte, with
-  its `Listener` records in a module-level `listeners` array. Three notes
+  carries the click counter itself, ahead of the rules: `counter.h`,
+  `counter.c` and `counter.titan` of `spec/fixtures/browser_bridge`,
+  unchanged apart from two file-name comments in the C fence, with the
+  `Listener` records in a module-level `listeners` array. Three notes
   cover the call's arguments: the imported C function is passed directly,
   `useCapture` is a C `bool` that takes `0` or `1` and rejects the
   `EM_FALSE` macro, and the identity owner converts to `void *`. The cleanup
@@ -1618,12 +1618,42 @@ record. It changes `titan-ffi` only:
   function left in JavaScript, to treat the 40-line retry function as a
   finding, and to state the line-count rule.
 
-The revised text has not been evaluated. This record was written before the
-one planned rerun of Eval 16 against it.
+Eval 16 was rerun once against the revised text at `e4f4d45`, with the same
+prompt, command shape, overlay and preamble, after a smoke run that again
+reported no memories. It passes, and both misses are gone:
+
+- The pin and the identity stay in a module-level `listeners` array from
+  before the registration until `stop` unregisters the callback and closes
+  the pin, and the answer says why locals do not do this.
+- The registration passes `ffi.click_callback` directly, with `0` for
+  `useCapture`. Neither the invented typedef nor `EM_FALSE` appears.
+- The page script imports the image's default `create` and does not await
+  it.
+- The other criteria are met as in the first round, and the cleanup rule is
+  stated with `result.value.bytes` and the `void *` casts.
+
+The delivered 100-line module built a browser image with its C helper. The
+helper compiled alone with `emcc -c` and no warnings, and the page script
+passed `node --check`. A scratch copy of the fixture with `useCapture`
+changed to `1` also built, so both literals compile.
+
+Two things limit what this pass shows. The answer reproduces the new example
+closely (the `Listener` record, `listeners`, the registration call and
+`stop`), so it shows that the example is found and applied, not that the
+rule is derived independently, as #370 recorded for F2. And the answer marks
+two C-side details UNKNOWN that no cartridge states: how C reads a HANDLE
+`titan_browser_value`, and how C would release a HANDLE result that it
+keeps. This issue leaves both as they are.
+
+One rerun attempt before the scored one is void. The provider dropped the
+connection (`ECONNRESET`), and the process ended at the 20-minute limit with
+exit 1 and no answer. `runs.json` keeps its entry, and the scored run
+overwrote its log.
 
 Limitations:
 
-- Each case has one answer from one model, and answers vary between runs.
+- Each case has one answer from one model, and Eval 16 has one for each
+  cartridge revision. Answers vary between runs.
 - Print-mode logs keep only the final message, so the read-only-cartridges
   instruction rests on each answer's disclosure.
 - Eval 17 is review-only, so it has no build evidence. Its placements were
