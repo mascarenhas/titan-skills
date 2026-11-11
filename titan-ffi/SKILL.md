@@ -2398,11 +2398,13 @@ rules](#browser-javascript-under-the-same-rules) applies them to JavaScript.
 | --- | --- |
 | Called by C through a function pointer (libuv callbacks, `__gc` and other `lua_CFunction`s) | `local foreign function` in the Titan module, address taken |
 | Called by name from C or generated code where any C symbol works | Public `foreign function` in the Titan module; C callers use the generated `.titan.h` (or mangled declaration), using header-free C primitive parameters when public consumers should not need a `foreign import` |
+| Private helper of such a C-ABI entry, or a C-only critical interval (a body that holds a native mutex, performs an atomic handoff, or moves a native resource between two owners, where nothing may raise, collect, or grow the Lua stack) | `local foreign function` called by name, which takes formals and returns a status; code that only computes, or that a raise on entry cannot harm, is an ordinary Titan function |
 | Needs an exact unmangled C symbol (an Emscripten export, a symbol a C library looks up) | Compiler-generated one-line forward to a public `foreign function` (with `__attribute__((weak))` when the owning module may be absent), never a hand-written runtime C wrapper |
 | Program entry and image lifecycle (native `main`, browser `initialize`/`entry`/`close`) | Compiler-generated launcher sharing one error-conversion (`titan_entry_error_message`) and trace implementation; protected `lua_pcall`s live there, not in runtime libraries |
 | Needs the JavaScript host on the browser target (JSPI suspension and resumption, holding JavaScript values and host objects, host scheduling and event APIs, the embedder-facing promise API, engine stack capture) | JavaScript in the loader or a `--js-library` file, reached through a one-line import; state, policy, validation, and bookkeeping in Titan |
 | Data and roots | Per-state roots in module variables or owner fields; a cross-state map with the host that owns the instance (the browser loader's state-token map), not C statics in runtime code; in JavaScript only what needs host lifetime (JavaScript values and host objects, promises and their continuations, items waiting for a point where Wasm can be entered), never a running copy of a count or table that Titan owns; the Lua registry only to anchor an object before any module variable exists, explicitly justified |
 | C struct access and marshalling | In Titan through `foreign import`; headers hold only struct layouts, declarations, and one-expression inline bridges (`lmacro_*` in `titan/ffi.h`) for macros, internal fields of incomplete structs, and `const` casts that the FFI cannot spell |
+| Platform-conditional operation (its headers, types, or calls differ by platform; Titan has no conditional `foreign import`) | `static inline` function in the owning module's `*_platform.h` or `*-native.h` header that takes formals and returns a status or fills a plain struct, with a comment naming the platform difference; classification, mapping to public errors, retries, and ownership stay in Titan. A platform fact that takes no argument is a macro defined on every platform (`TITAN_PATH_WINDOWS` in `titan/path_platform.h`), read through `ffi` as a constant |
 | Test-only C | In test fixtures (`spec/fixtures/`), never in the runtime or standard library |
 
 For example, `browserentry.lua` generates a one-line weak forward for the exact
@@ -2431,7 +2433,10 @@ int titan_browser_invoke(uint64_t operation_id, uint32_t state, uint32_t slot,
    internal fields of incomplete structs, and `const` casts that the FFI cannot
    spell. The libuv callbacks' one C helper, `titan_uv_push_owner` in
    `titan/uv/callback.h`, wraps the `setuvalue` macro the FFI cannot spell; it
-   predates this rule and is not a model for new multi-statement helpers.
+   predates this rule and is not a model for new multi-statement helpers. A
+   multi-statement C helper is otherwise only for platform-conditional work,
+   in the shape the table gives (`titan_probe_parent_stdio` in
+   `titan/os_platform.h` fills a probe struct that `titan.os` classifies).
    *Wrong:* a 600-line runtime C file (`titan-browser.c` at
    `843b446e`) hand-writing the Emscripten exports, the launcher
    `protected_entry`, a C `states` linked list, and
@@ -2442,7 +2447,10 @@ int titan_browser_invoke(uint64_t operation_id, uint32_t state, uint32_t slot,
 2. **Plain C stays plain C.** Data that only C uses lives in C locals,
    formals and return codes, never on the Lua stack. Never `lua_pcall` a C
    function that Lua never sees just to get a protected region: return a
-   status from it. *Wrong:* `titan_browser_root_callable` pushes the C
+   status from it. Scratch storage is not transit: a `lua_CFunction` in the
+   runtime may allocate a buffer as userdata and keep it on its own stack
+   while it calls Lua API functions that can raise, anchored by that slot and
+   never by `luaL_ref`. *Wrong:* `titan_browser_root_callable` pushes the C
    function `root_callable_worker` and its `&context` as light userdata, then
    runs `lua_pcall(L, 4, 0, 0)` only so that `luaL_ref` may raise, be caught,
    `luaL_unref`'d and raised again. *Right:* `next_generation` below.
@@ -2812,7 +2820,7 @@ callback/borrow audit.
 | `lua_rawset` | pops key and value, retains table; public API performs the write barrier |
 | `lua_next` | pops current key; on success pushes next key and item, on exhaustion nothing; invalid key may longjmp |
 | `luaL_loadbufferx` / `luaL_loadstring` | pushes exactly one function on success or one error object on failure; may allocate/longjmp |
-| `lua_pcallk` | effect follows nargs/nresults and the error path; current-state use is the exact nonyieldable test helper factory; separate-state initialization/execution follows the [independent-state protected ledger](../../../doc/implementation/lua-library.md#protected-execution-and-stack-cleanup) |
+| `lua_pcallk` | effect follows nargs/nresults and the error path; never used on the current state, where a loaded chunk is called as a typed Titan function value; separate-state initialization/execution follows the [independent-state protected ledger](../../../doc/implementation/lua-library.md#protected-execution-and-stack-cleanup) |
 | `lua_setupvalue` | success installs/pops top value; missing upvalue returns null and leaves it |
 | `luaL_tolstring` | pushes one string but transiently uses two more slots above the value (metatable + event, or callable + argument); a caller that also pushes the value reserves three with `lua_checkstack`; may call `__tostring`, allocate, or raise; trace before cleanup |
 | `lua_pushlstring` | pushes one copied byte string and may allocate/raise; retained only for actual Lua stack arguments, keys or results (including an independent state), not current-state byte-buffer copies, which use `pointer as string(length)` |
