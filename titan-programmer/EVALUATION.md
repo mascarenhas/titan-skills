@@ -1708,7 +1708,7 @@ typed function value, so no site uses `lua_pcallk` on the current state.
 No fresh-agent evaluation was run for this update. It adds no example and no
 case, and F2 above scores the same binding shape as before. Every added
 statement was checked against titan `issue-372-native-binding-audit` at
-`5973327e` (Linux x64):
+`db7b8203` (Linux x64):
 
 - The survey in the #372 audit classifies 85 `local foreign function`s under
   the first new row and 28 header functions as platform-conditional.
