@@ -1529,6 +1529,160 @@ Final-tree checks:
 Receipts are in `/tmp/titan-373/review-scratch` (`skills-check/` with the
 extractor, controls and logs, and `mechanical/`).
 
+### Issue #388 evaluation (2026-11-10)
+
+titan#388 moves browser-bridge state, policy and bookkeeping from the
+loader's JavaScript into Titan, and extends the six Titan-first rules to
+authored JavaScript. Three commits changed the cartridges before the
+evaluation:
+
+- `7963199`: `titan-ffi` adds "Browser JavaScript under the same rules" (the
+  host-capability table and the JavaScript reading of rules 1, 3, 4 and 6),
+  and `titan-programmer` points to the guard-rails for runtime JavaScript.
+  The new case is `titan-ffi` Eval 17.
+- `754069a`: `titan-ffi` and `titan-async` describe the bridge that #388
+  ships: one-shot hold release, a cancel that drops a settlement already
+  queued, the synchronous `release_callable` entry with its stopped
+  collector, bounded host timers, and `WAIT_HELD`.
+- `0033af3`: the prompt of `titan-ffi` Eval 16 draws out two criteria that
+  the case already scored, borrowed HANDLE arguments and the generic V8
+  poison.
+
+The evaluated tree was `issue-388-guidance` at `0033af3`, based on `main` at
+`0ce1d1a`. By the maintainer's decision this round used only DeepSeek
+(`opencode-go/deepseek-v4.1-flash`), the acceptance floor since #370. The
+cases were `titan-ffi` Eval 13 (prompt and criteria unchanged by this issue,
+run as a regression over the changed body), Eval 16 (prompt revised) and
+Eval 17 (new). Every statement that the three rubrics depend on was checked
+against the integrated #388 tree at `476ab65d`: `titan/browser.browser.titan`,
+`titan-runtime/titan/browser.h`, the loader and its two libraries, the
+`spec/fixtures/browser_bridge/counter.*` fixture, and `html5.h` of Emscripten
+6.0.13. No rubric contradicted the source.
+
+Each answer came from a fresh `omp -p` process with the #366 and #370 command
+shape: high thinking, only `read,write`, `--no-skills --no-context-files
+--no-rules --no-session --no-extensions --no-prewalk --no-lsp --no-title`,
+`--approval-mode yolo`, `--max-time 20m`, an empty scratch working directory
+and the memory-off overlay, in one serial queue. Each prompt was a fixed
+preamble followed by the case's prompt text, without its criteria. The
+preamble allowed four cartridges (`titan-programmer`, `titan-ffi`,
+`titan-async`, `titan-tester`) and no other file. A smoke prompt reported no
+injected memories, and a control without the overlay reported a memory
+block. The workstation block remained, so the runs were memory-free but not
+completely hermetic. All three scored processes exited 0 and wrote an
+answer; none was retried.
+
+The modules that Eval 13 and Eval 16 delivered were passed unchanged to
+`titanc --target browser` from the session SDK (the #388 tree, Linux x64,
+Emscripten 6.0.13), and Eval 16's C helper to `emcc -c`. Eval 17 is
+review-only.
+
+| Case | Result |
+| --- | --- |
+| Eval 13: browser bindings and a persistent instance | Pass. Two closures over one capture are exported with `Value.is_callable`. Calls use `target:call` and case on `BrowserValue`. Integers are `5n` in both directions, and a call resolves to one bare value. The reentrant call is explained as a promise rejection that the binding's `try/catch` does not see, and `notify` with `drain` replaces it. The fetch uses the detachable form, and its failure callable takes `(is_string, is_handle)` and closes `thrown`. The page imports only the image's `create`, releases both wrappers, and awaits `dispose()` in `finally`. The 66-line module built a browser image, and both JavaScript blocks passed `node --check`. |
+| Eval 16: Emscripten callback into Titan | Partial at `0033af3`; Pass on the rerun at `e4f4d45` (below). The prose meets five of the six criteria: direct `html5.h` registration through the declared function, cleanup after every status, the borrowed HANDLE argument, switches that raise so that `Task:resume` takes effect in a later turn, and `emscripten_sleep` removed, with the generic V8 poison and a test that expects no named diagnostic. The identity is not rooted: `install_click` keeps the `owned *titan_browser_identity` in a local and returns only the pin, so a collection frees the bytes that C points at. The delivered module does not compile: it invents `em_click_callback_func` (html5 declares `em_mouse_callback_func`) and passes `ffi.EM_FALSE`, a C `int`, for a C `bool` parameter. The C helper compiles, with two warnings because it passes `const` pointers to `free`. |
+| Eval 17: loader JavaScript or Titan | Pass. Each part is classified by host capability. The loader mirror becomes a count that Titan owns and passes as `WAIT` or `WAIT_HELD`. Both loader prechecks are deleted under rule 6. One bounded host call stays in JavaScript, and the retry loop, the backoff and the attempt state move to Titan. The import stays a one-line forward, and the review rule is applied to the 40-line function. |
+
+The evaluation led to the one allowed revision, `e4f4d45`, which also added
+this record. It changes `titan-ffi` only:
+
+- **Rooting (Eval 16).** The answer quoted the rule ("root the pin and the
+  identity before C receives the identity") and met it with locals of the
+  registering function. The rule said when rooting begins, not how long it
+  lasts, and the rooted example was only linked, in the language manual. In
+  "Synchronous C callbacks and Emscripten APIs" the pin bullet now says that
+  both values stay reachable for as long as C can call back, that a
+  module-level list or another long-lived record does this, and that locals
+  do not. Eval 16's rooting criterion, a new fail signal and the final
+  checklist say the same.
+- **The callback and the registration call (Eval 16).** No cartridge named
+  `em_mouse_callback_func` or showed a registration call. The section now
+  carries the click counter itself, ahead of the rules: `counter.h`,
+  `counter.c` and `counter.titan` of `spec/fixtures/browser_bridge`,
+  unchanged apart from two file-name comments in the C fence, with the
+  `Listener` records in a module-level `listeners` array. Three notes
+  cover the call's arguments: the imported C function is passed directly,
+  `useCapture` is a C `bool` that takes `0` or `1` and rejects the
+  `EM_FALSE` macro, and the identity owner converts to `void *`. The cleanup
+  rule names `result.value.bytes`, whose spelling the answer marked UNKNOWN,
+  and the `void *` cast that `free` needs.
+- **The page import (Eval 13 and Eval 16).** "Imports only the generated
+  image's default `create`" is an Eval 13 criterion, but no cartridge showed
+  the import. The Eval 13 answer inferred it. The Eval 16 answer marked the
+  import path UNKNOWN and awaited `create`. "Instance lifetime" now begins
+  with the page script: `import create from "./app.mjs"`, a `create(options)`
+  that returns the instance at once, `run`, and `dispose()` in `finally`.
+- **Eval 17's last criterion.** "Counts the JavaScript lines that the diff
+  adds" cannot be done on a draft that the prompt only describes. The
+  criterion now asks the answer to name the host capability for each
+  function left in JavaScript, to treat the 40-line retry function as a
+  finding, and to state the line-count rule.
+
+Eval 16 was rerun once against the revised text at `e4f4d45`, with the same
+prompt, command shape, overlay and preamble, after a smoke run that again
+reported no memories. It passes, and both misses are gone:
+
+- The pin and the identity stay in a module-level `listeners` array from
+  before the registration until `stop` unregisters the callback and closes
+  the pin, and the answer says why locals do not do this.
+- The registration passes `ffi.click_callback` directly, with `0` for
+  `useCapture`. Neither the invented typedef nor `EM_FALSE` appears.
+- The page script imports the image's default `create` and does not await
+  it.
+- The other criteria are met as in the first round, and the cleanup rule is
+  stated with `result.value.bytes` and the `void *` casts.
+
+The delivered 100-line module built a browser image with its C helper. The
+helper compiled alone with `emcc -c` and no warnings, and the page script
+passed `node --check`. A scratch copy of the fixture with `useCapture`
+changed to `1` also built, so both literals compile.
+
+Two things limit what this pass shows. The answer reproduces the new example
+closely (the `Listener` record, `listeners`, the registration call and
+`stop`), so it shows that the example is found and applied, not that the
+rule is derived independently, as #370 recorded for F2. And the answer marks
+two C-side details UNKNOWN that no cartridge states: how C reads a HANDLE
+`titan_browser_value`, and how C would release a HANDLE result that it
+keeps. This issue leaves both as they are.
+
+One rerun attempt before the scored one is void. The provider dropped the
+connection (`ECONNRESET`), and the process ended at the 20-minute limit with
+exit 1 and no answer. `runs.json` keeps its entry, and the scored run
+overwrote its log.
+
+Limitations:
+
+- Each case has one answer from one model, and Eval 16 has one for each
+  cartridge revision. Answers vary between runs.
+- Print-mode logs keep only the final message, so the read-only-cartridges
+  instruction rests on each answer's disclosure.
+- Eval 17 is review-only, so it has no build evidence. Its placements were
+  checked against the #388 tree by hand.
+- No delivered page was driven in a browser.
+- Everything ran on Linux x64 with Emscripten 6.0.13, so there is no macOS,
+  Windows, Clang or LTO claim.
+
+Final-tree checks, on the revised tree:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 208 relative link targets and 79 anchors resolve.
+- The tree has 104 `titan` fences. The click counter is the only one that
+  this branch adds or changes. It is byte-identical to `counter.titan`, which
+  `spec/coder/browser_bridge_spec.lua` builds with `counter.c` and runs as a
+  page test in Chromium (passing on the #388 tree at `a0931567`). The
+  evaluation harness also built the fixture as a browser image from a
+  scratch copy before the cases ran. The fence was not parsed or compiled
+  again for this revision.
+- The new page script passes `node --check`.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-388/eval`: the report (`EVAL-388.md`), the
+overlay (`memory-off.yml`), the preamble and prompts (`prompts/`), the
+answers and their extracted files (`answers/`, `answers/compile/`), the
+per-case logs, the compile log and the memory-on control (`logs/`),
+`run_eval.py`, and `runs.json` with the argv, times and exit status of every
+run.
+
 ## Mechanical gates
 
 For every update:
