@@ -1683,6 +1683,60 @@ per-case logs, the compile log and the memory-on control (`logs/`),
 `run_eval.py`, and `runs.json` with the argv, times and exit status of every
 run.
 
+### Issue #372 update (2026-11-10)
+
+titan#372 audits the existing standard-library and runtime C against the six
+Titan-first rules. The survey found legitimate code that the rules did not
+name, so three points of rule text change in `doc/style-guide.md` and in
+`titan-ffi` "Guard-rails for standard-library and runtime C":
+
+- "Where each piece of a native boundary goes" gains a row for a private
+  helper of a C-ABI entry or a C-only critical interval (a
+  `local foreign function` called by name; code that only computes is an
+  ordinary function).
+- The same table gains a row for a platform-conditional operation (a
+  `static inline` helper that returns a status or fills a plain struct; a
+  platform fact with no argument is a macro), and rule 1 names
+  platform-conditional work as the other legitimate multi-statement helper.
+- Rule 2 says that scratch userdata which a runtime `lua_CFunction` keeps on
+  its own stack is not transit.
+
+In the trusted Lua C API ledger, the `lua_pcallk` row no longer names the
+test helper factory: `titan.test` now calls its loaded helper chunk as a
+typed function value, so no site uses `lua_pcallk` on the current state.
+
+No fresh-agent evaluation was run for this update. It adds no example and no
+case, and F2 above scores the same binding shape as before. Every added
+statement was checked against titan `issue-372-native-binding-audit` at
+`db7b8203` (Linux x64):
+
+- The survey in the #372 audit classifies 85 `local foreign function`s under
+  the first new row and 28 header functions as platform-conditional.
+  `reserve_resource` in `titan/transfer.titan` is the ordinary function that
+  the row contrasts with them.
+- `titan_probe_parent_stdio` in `titan/os_platform.h` fills a probe struct
+  whose `status` `titan/os.native.titan` reads, and `titan/path.titan` reads
+  `ffi.TITAN_PATH_WINDOWS`.
+- `titan_path.c`, `ltitanlib.c` and `titan_winloader.h` hold 17 scratch
+  userdata sites, and none of the three files nor `titan.c` calls `luaL_ref`
+  or `luaL_unref`.
+- `ffi.lua_pcallk` has three call sites under `titan/`, all on a state other
+  than the caller's: two in `titan/lua/worker.titan` and one in
+  `titan/thread/spawn.titan`.
+- All 26 native standard-library owners pass on that tree (2,396 cases
+  selected, none failed), and `spec/libuv_build_spec.lua` passes.
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 208 relative link targets and 79 anchors resolve.
+- The tree has 104 `titan` fences. This update changes none of them, so none
+  was parsed again.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-372`: the audit (`notes/AUDIT.md`) and the test
+logs (`fable/tmp/`).
+
 ## Mechanical gates
 
 For every update:
