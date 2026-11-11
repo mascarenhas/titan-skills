@@ -1814,6 +1814,38 @@ Final-tree checks:
 Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
 and the test logs (`fable/tmp/`).
 
+### Issue #393 update (2026-11-11)
+
+titan#393 makes the `Coroutine` record the owner of its coroutine: the
+record's fields hold the Lua thread, the entry, the body and the root of the
+pending transfer, and the owner userdata with its six uservalues is gone.
+`titan-ffi` "Private nominal callback fields" listed the coroutine user-value
+protocol among those that `ffi.titan_record_field` does not cover; the
+sentence now names only the module, closure and Interface protocols.
+
+No fresh-agent evaluation was run for this update. It removes two words and
+adds no example and no case. The statement was checked against titan
+`issue-394-raise-with-trace` at `1883292a` (Linux x64):
+
+- `titan/coroutine.titan` has no `lua_newuserdatauv`, `lua_setiuservalue`,
+  `lua_getiuservalue` or registry metatable, and `coro_entry_trampoline`
+  reads the record's `thread` and `entry` fields with
+  `ffi.titan_record_field`.
+- All native standard-library owners pass on that tree (2,399 cases
+  selected, 2,389 passed, 10 skipped, none failed), and
+  `spec/minicoro_spec.lua` and `spec/libuv_build_spec.lua` pass.
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 209 relative link targets and 80 anchors resolve.
+- The tree has 104 `titan` fences. This update changes none of them, so none
+  was parsed again.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
+and the test logs (`fable/tmp/`).
+
 ## Mechanical gates
 
 For every update:
