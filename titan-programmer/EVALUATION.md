@@ -1779,6 +1779,41 @@ Final-tree checks:
 Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
 and the test logs (`fable/tmp/`).
 
+### Issue #394 update (2026-11-11)
+
+titan#394 adds `raise <exp>, <trace>`: raise a value with a saved trace string
+in place of the raise site's stack. `titan-programmer` "Errors, `catch`, and
+`defer`" names the form, says when to use it (an error that a catch stored
+with its `traceback` to raise later or elsewhere, as `async.Error:raise()`
+does), and says never to write the trace into the Lua registry.
+
+No fresh-agent evaluation was run for this update. It adds one sentence
+group, no example and no case. Every statement was checked against titan
+`issue-394-raise-with-trace` at `760bdd7d` (Linux x64):
+
+- `spec/parser_spec.lua`, `spec/checker/error_handling_spec.lua` and
+  `spec/coder/error_handling_spec.lua` pass with the new cases: the given
+  trace is what a catch and `titan.backtrace()` observe, the next error gets
+  its own trace, a comma needs a trace, a trace needs a value and must be a
+  string.
+- `async.Error:raise()` is `raise self.error, self.traceback`
+  (`titan/async/async.titan`), and no `.titan` source under `titan/` names
+  `TITAN_BACKTRACE_KEY` or `TITAN_TRACE_PINNED`.
+- The example in the language manual's "Raising with a saved trace" compiles.
+- All native standard-library owners pass on that tree (2,401 cases
+  selected, 2,391 passed, 10 skipped, none failed).
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 209 relative link targets and 80 anchors resolve.
+- The tree has 104 `titan` fences. This update changes none of them, so none
+  was parsed again.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
+and the test logs (`fable/tmp/`).
+
 ## Mechanical gates
 
 For every update:

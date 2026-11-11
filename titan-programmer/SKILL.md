@@ -1408,7 +1408,10 @@ language-server API remains `1`; all other existing version numbers stay unchang
 Use options for ordinary absence and errors for exceptional failure or violated
 assumptions. `raise expression` raises any value after boxing it to `value`.
 A bare `raise` inside a catch rethrows the original value **and original
-traceback**.
+traceback**. `raise expression, trace` raises a value with a saved `string`
+trace in place of the raise site's stack: use it for an error that a catch
+stored (its `error` and `traceback`) to raise later or elsewhere, as
+`async.Error:raise()` does. Never write the trace into the Lua registry.
 
 Titan has no `try`. `catch` is a trailer on an already existing block:
 
