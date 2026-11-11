@@ -218,11 +218,13 @@ and never pass an `encode_message` packet to raw `ffi.free`.
 current state and returns the value. Once its body runs it consumes the packet
 and clears the caller's slot before returning or before any error propagates;
 only its own entry preamble (Lua frame reservation) can fail first, leaving the
-packet for the caller's guard. Allocation-free scalars reserve one result slot
-without `longjmp` and decode in C with no protected region; `STRING` and
-malformed `NULL`-`FUNCTION` packets run inside `decode_message_worker` without
-acquiring a `ResourceScope` (strings clear and dispose after copying); only
-nominal packets acquire a decode `ResourceScope` and move `slot[0]` into it.
+packet for the caller's guard. A nil, boolean, number or address packet is
+boxed in Titan with no Lua stack slot, allocation or protected region, so it
+cannot fail; `STRING` and C `FUNCTION` packets run inside
+`decode_message_worker` without acquiring a `ResourceScope` (each makes its
+value while the slot still owns the packet, then clears and disposes; a `NULL`
+function pointer raises there); only nominal packets acquire a decode
+`ResourceScope` and move `slot[0]` into it.
 One native `catch` clears `slot[0]`, disposes any residual packet via
 `discard_message`, and bare-re-raises with the original traceback; never
 emulate this with Lua `pcall` or a status-code protocol.

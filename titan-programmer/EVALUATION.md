@@ -1846,6 +1846,55 @@ Final-tree checks:
 Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
 and the test logs (`fable/tmp/`).
 
+### Issues #395 and #396 update (2026-11-11)
+
+titan#396 decodes a nil, boolean, number or address packet in
+`transfer.decode_message` by boxing it in Titan, with no Lua stack slot and
+so no reservation that can fail; a C function packet now decodes in the
+protected worker. titan#395 moves closure-snapshot validation in
+`titan/transfer.titan` from private `foreign function`s that walk the Lua
+stack to ordinary functions that read the closure and module layout; it
+changes no skill text. Three cartridges described the removed scalar
+reservation:
+
+- `titan-async` "Cross-state receivers and native packet ownership": the
+  `decode_message` paragraph now says which packets are boxed in Titan and
+  cannot fail, and that `STRING` and C `FUNCTION` packets run in
+  `decode_message_worker` while the slot still owns the packet.
+- `titan-ffi`: the consuming-decode paragraph drops "a failed scalar result
+  reservation clears/disposes, then raises".
+- `titan-tester`: the raw-decode regression list drops "scalar-reservation"
+  errors.
+
+No fresh-agent evaluation was run for this update. It rewrites three
+sentences and adds no example and no case. Every statement was checked
+against titan `issue-395-transfer-in-titan` at `452add8d` (Linux x64):
+
+- `decode_message` in `titan/transfer.titan` assigns the `BOOLEAN`,
+  `INTEGER`, `FLOAT`, `STATE` and `POINTER` payloads to a `value` local,
+  clears the slot and calls `discard_message`, with no `lua_checkstack` and
+  no `catch` on that path; `decode_message_worker` handles `STRING` and
+  `FUNCTION` before it acquires a `ResourceScope`.
+- `spec/stdlib/titan/transfer/tests/scalar_envelope_test.titan` passes: a nil
+  slot raises `"transfer: invalid packet owner slot"`; under allocator denial
+  an entry failure leaves the packet with the caller's guard, and once the
+  entry frame fits a scalar packet decodes with no further stack slot.
+- All native standard-library owners pass on that tree (2,399 cases
+  selected, 2,389 passed, 10 skipped, none failed), and
+  `spec/libuv_build_spec.lua`, `spec/coder/closure_transfer_spec.lua` and
+  `spec/coder/nominal_codec_spec.lua` pass.
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 209 relative link targets and 80 anchors resolve.
+- The tree has 104 `titan` fences. This update changes none of them, so none
+  was parsed again.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
+and the test logs (`fable/tmp/`).
+
 ## Mechanical gates
 
 For every update:

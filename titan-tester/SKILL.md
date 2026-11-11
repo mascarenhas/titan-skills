@@ -1372,8 +1372,8 @@ Raw decode regressions take a real uniquely owned packet into a `foreign *void`
 local guarded by `defer transfer.discard_message(raw)` and call
 `transfer.decode_message(raw)` directly, catching expected failures with
 `do ... catch`. Check the local is nil after success and after decoder, claim,
-partial-claim, nested-scope, module-load, OOM, and scalar-reservation errors,
-with unclaimed attachments released before GC. Pre-reserve the Lua stack before
+partial-claim, nested-scope, module-load, and OOM errors, with unclaimed
+attachments released before GC. Pre-reserve the Lua stack before
 arming an allocator fault so it lands inside decode's body rather than its
 entry preamble, which leaves the packet to the guard. Cover a local assigned
 in an earlier protected region as well as a packet acquired in its own

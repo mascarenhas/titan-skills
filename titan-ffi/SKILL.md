@@ -2300,7 +2300,8 @@ Once its body runs it consumes the packet and clears the slot before returning
 or before any error propagates with its original traceback; only its own entry
 preamble (Lua frame reservation) can fail first, leaving the packet for the
 caller's guard. A nil slot raises `"transfer: invalid packet owner slot"`; a
-failed scalar result reservation clears/disposes, then raises.
+nil, boolean, number or address packet decodes without a Lua stack slot and
+cannot fail.
 
 Pass the actual guarded `foreign *void` local: an exact pointer local supplied
 to the `foreign *(*void)` parameter passes `&local`. Captured locals cannot
