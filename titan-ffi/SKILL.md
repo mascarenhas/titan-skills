@@ -2472,13 +2472,17 @@ int titan_browser_invoke(uint64_t operation_id, uint32_t state, uint32_t slot,
    `root_callable_worker` stores `luaL_ref(L, 2)` slots in a table hanging off
    a registry userdata's uservalue, with generations in a second one.
    *Right:* the `progress` and `handler` fields of `Run` below.
-5. **Rooting.** A Titan parameter is rooted by its caller's provenance, and a
-   local by its frame slot, which is refreshed at its declaration and at every
-   assignment and is reused by sibling scopes once its block ends
-   ([the function frame](../../../doc/implementation/values-and-gc.md#1-the-function-frame-reserved-nil-initialized-stack-slots)
-   and [home roots](../../../doc/implementation/values-and-gc.md#2-home-roots-shadow-slots-and-borrowed-c-copies)).
-   Declare a value that must outlive an inner block in the outer block, and
-   copy an argument into a local before removing its last other home. Never
+5. **Rooting.** A Titan parameter is rooted by its caller until the call
+   returns, wherever the caller read the argument from, and a local by its
+   frame slot, which is refreshed at its declaration and at every assignment
+   and is reused by sibling scopes once its block ends
+   ([the function frame](../../../doc/implementation/values-and-gc.md#1-the-function-frame-reserved-nil-initialized-stack-slots),
+   [home roots](../../../doc/implementation/values-and-gc.md#2-home-roots-shadow-slots-and-borrowed-c-copies)
+   and [calls](../../../doc/implementation/values-and-gc.md#calls-c-only-inputs-immediate-result-roots-and-vm-transport)).
+   Declare a value that must outlive an inner block in the outer block. A
+   Titan function may remove an argument's last other home and keep using the
+   parameter. A `foreign function` that calls a native entry is the caller
+   in that contract and keeps what it passes reachable itself (rule 3). Never
    `lua_pushtvalue` a parameter or local just to keep it alive. *Wrong:*
    `invoke` in `browser.browser.titan` pushes its parameters
    (`ffi.lua_pushtvalue(L, target)`) and an `owned` buffer `extra` declared

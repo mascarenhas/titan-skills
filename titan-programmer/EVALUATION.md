@@ -1737,6 +1737,48 @@ Final-tree checks:
 Receipts are in `/tmp/titan-372`: the audit (`notes/AUDIT.md`) and the test
 logs (`fable/tmp/`).
 
+### Issue #391 update (2026-11-11)
+
+titan#391 makes the caller of a native Titan function keep every GC-bearing
+argument reachable until the call returns, wherever the caller read it from.
+Rule 5 of `titan-ffi` "Guard-rails for standard-library and runtime C"
+follows `doc/style-guide.md`:
+
+- It no longer says to copy an argument into a local before removing its
+  last other home. A Titan function may remove that home and keep using the
+  parameter.
+- It says that a `foreign function` which calls a native entry is the caller
+  in that contract and keeps what it passes reachable itself, as rule 3's
+  trampolines do, and it links the manual's calls section.
+
+No fresh-agent evaluation was run for this update. It adds no example and no
+case, and the `sum` example that rule 5 points to is unchanged. Every
+statement was checked against titan `issue-391-caller-roots-call-inputs` at
+`1f1501e8` (Linux x64):
+
+- `spec/coder/call_input_roots_spec.lua` passes (6 cases, 22 call shapes and
+  a concatenation). With the compiler change reverted, 5 of the 6 cases
+  fail, and each shape that reads its argument from a field, a module
+  variable or a captured local is named in a failure.
+- The hand-written native callers were read against the contract: the uv,
+  DNS, process, stream and UDP trampolines push their owner and pass a
+  module function as the handler; the llhttp callbacks rely on
+  `execute_input`'s `parser` parameter; the coroutine entry reads user values
+  written once in `create`. None needed a change.
+- All native standard-library owners pass on that tree (2,401 cases
+  selected, 2,391 passed, 10 skipped, none failed).
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 209 relative link targets and 80 anchors resolve.
+- The tree has 104 `titan` fences. This update changes none of them, so none
+  was parsed again.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
+and the test logs (`fable/tmp/`).
+
 ## Mechanical gates
 
 For every update:
