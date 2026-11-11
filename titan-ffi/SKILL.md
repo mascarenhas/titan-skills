@@ -1342,7 +1342,7 @@ values, and aggregates/arrays yield borrowed pointers. Native optional fields
 are not supported by this private intrinsic. The owner is evaluated once, but the
 intrinsic neither checks its runtime type nor roots it. Preserve the native
 registration/root protocol. Foreign functions using it stay out of inline
-headers. Module, closure, Interface and coroutine UV protocols are separate.
+headers. Module, closure and Interface UV protocols are separate.
 
 ## Callback design limits
 
