@@ -1921,10 +1921,10 @@ cartridges change:
 
 No fresh-agent evaluation was run for this update. Eval 16 was already
 unscored and stays so. Every statement was checked against titan
-`issue-387-foreign-body-grammar` at `6db31892` (Linux x64):
+`issue-387-foreign-body-grammar` at `ed8f9f81` (Linux x64):
 
 - `spec/parser_spec.lua`, "foreign function bodies": the subset's AST equals
-  the ordinary grammar's, and 34 rejected sources each give their label at
+  the ordinary grammar's, and 36 rejected sources each give their label at
   the token that shows the construct, `ForeignBodyForeign` among them.
 - `spec/checker/foreign_functions_spec.lua`: the seven automatic sinks and
   the owner rejections, including `#`.
