@@ -242,10 +242,11 @@ the all-`value` application, not a wildcard.
 Titan types and raw foreign types have separate syntax and name resolution.
 Use `foreign int`, `foreign float`, `foreign *Item`, and
 `foreign function(*void): void` in ordinary annotations/casts. Within a foreign
-signature/type, names are unqualified: no `ffi.` or module prefix. Only the
-signature uses unqualified C names: locals and casts in a `foreign function`
-body are ordinary annotations, as in
-`local count: foreign *int = context as foreign *int`. Primitive C words remain
+signature/type, names are unqualified: no `ffi.` or module prefix. A
+`foreign function` writes C types without `foreign` in its signature and in
+its body, as in `local count: *int = context as *int`; `foreign` there is a
+syntax error. Only the allocation and layout forms keep the prefix in a body
+(`foreign T.new()`, `foreign T.sizeof`). Primitive C words remain
 identifiers elsewhere, so Titan names do not reserve them.
 Nested pointer/array/callback constructors are grouped, as `foreign *(*int)`.
 

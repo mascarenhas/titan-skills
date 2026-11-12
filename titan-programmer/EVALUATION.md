@@ -1895,6 +1895,57 @@ Final-tree checks:
 Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
 and the test logs (`fable/tmp/`).
 
+### Issue #387 update (2026-11-12)
+
+titan#387 gives the body of a `foreign function` a grammar of its own and
+zeroed automatic locals. A body annotation or cast names a C type without
+`foreign` (which is a syntax error there), the constructs a body cannot
+contain are syntax errors with their own messages, and an allocation
+pseudo-call can initialize a local with zeroed automatic storage. Two
+cartridges change:
+
+- `titan-ffi`:
+  - "Signature and body limits": body types without `foreign`, zeroed locals,
+    and which constructs the parser rejects and which the checker rejects.
+  - "Synchronous C callbacks and Emscripten APIs": the click counter has no
+    authored C. Its callback is a `foreign function` in the listing, which is
+    again byte-identical to `spec/fixtures/browser_bridge/counter.titan`; the
+    `counter.h` and `counter.c` fence is gone, and the notes name
+    `ffi.lmacro_unconst` for freeing the result's `const` pointers.
+  - The `StepEntry` example loses `foreign` before four body types.
+  - Eval 3 says that a zeroed automatic local is available; eval 16 expects
+    the callback as a foreign function with a zeroed result local.
+- `titan-programmer` "Foreign types and owned storage are a specialist
+  boundary": a foreign function writes C types without `foreign` in its
+  signature and in its body.
+
+No fresh-agent evaluation was run for this update. Eval 16 was already
+unscored and stays so. Every statement was checked against titan
+`issue-387-foreign-body-grammar` at `6db31892` (Linux x64):
+
+- `spec/parser_spec.lua`, "foreign function bodies": the subset's AST equals
+  the ordinary grammar's, and 34 rejected sources each give their label at
+  the token that shows the construct, `ForeignBodyForeign` among them.
+- `spec/checker/foreign_functions_spec.lua`: the seven automatic sinks and
+  the owner rejections, including `#`.
+- `spec/coder/foreign_functions_spec.lua`: a zeroed object, arrays and a
+  flexible-array local, with fresh zeroes on every loop iteration.
+- All 104 `titan` fences of the tree parse as programs with the new parser,
+  the two changed ones included. The counter listing is the fixture that the
+  browser bridge gate builds and runs on every page engine.
+- All native standard-library owners pass on that tree (2,399 cases
+  selected, 2,389 passed, 10 skipped, none failed).
+
+Final-tree checks:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- 209 relative link targets and 80 anchors resolve.
+- The tree has 104 `titan` fences; all of them were parsed again.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
+and the test logs (`fable/tmp/`).
+
 ## Mechanical gates
 
 For every update:

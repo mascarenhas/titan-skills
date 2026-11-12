@@ -1284,13 +1284,24 @@ multiple/flexible results, and variadic parameters are not foreign-signature
 types. Omit the result annotation, or write `: void`, for
 C `void`.
 
-The body is a deliberately closed raw-C subset. It may use:
+The body is a deliberately closed raw-C subset with a grammar of its own. It
+may use:
 
-* parameters and direct-C locals. A local needs an initializer unless its
+* parameters and C-typed locals. A local needs an initializer unless its
   explicit C type admits nil (an object or function pointer, which starts as
-  `NULL`); C scalars and aggregates and every const local need one. Only the
-  signature uses unqualified C names: body locals and casts are ordinary
-  annotations, as in `local count: foreign *int = context as foreign *int`;
+  `NULL`); C scalars and aggregates and every const local need one. The body
+  writes C types as the signature does, without `foreign`:
+  `local count: *int = context as *int`. `foreign` before a body type is a
+  syntax error whose message says to delete it;
+* zeroed automatic storage as a local's initializer:
+  `local r = foreign T.new()` for a struct or union,
+  `local a = foreign T.new_array(N)` and
+  `local p: *T = foreign T.new_array(N)` for a positive constant `N`, and
+  `local f = foreign F.new(N)` for a struct ending in a flexible array member.
+  The storage is declared at the statement, so a loop body starts each
+  iteration with zeroes, and passing the local where a pointer is expected
+  passes its address. These allocation forms and `foreign T.sizeof` /
+  `foreign T.alignof` keep their `foreign`;
 * imported C namespaces and their functions, values, fields, types, size and
   alignment;
 * other foreign functions in the module, public foreign functions through a
@@ -1305,9 +1316,18 @@ methods, or ordinary members of an imported Titan module. It also has no:
 
 * implicit `L` (Lua state) or ordinary module state;
 * `raise`, `catch`, or `defer`;
-* generic `for`, `case`, lambdas, bound methods, Titan constructors;
-* concatenation, `is`, Titan `and`/`or`/`not`, variadics/flexible results;
-* `.new()` / `.new_array()` Lua-owned allocation.
+* generic `for`, `case`, lambdas, `:` method selection, generic type
+  arguments, Titan constructors;
+* concatenation, `is`, the counted `as T(n)` cast, Titan `and`/`or`/`not`,
+  `...`, ranges, `?` on a declaration or type, `owned` types, a second return
+  value;
+* the length operator `#`;
+* allocation that needs a Lua owner: a scalar `.new()`, a dynamic or zero
+  `.new_array` count, `.new()` into a pointer local, or an allocation used as
+  an argument, a return value or an assigned value.
+
+The parser rejects all of these except the last two, each with a message
+naming the construct; the checker rejects `#` and the owner allocations.
 
 Foreign-body literals are C values: booleans are `_Bool`, a string literal is
 static `const char *`, nil is contextual `NULL`, and a numeral has its C99 type
@@ -1318,7 +1338,7 @@ field, or element, an argument for a C-typed parameter, or a return. Integer
 numerals adapt only to non-enum C integer types (an enum still needs an
 enumerator or a cast) and float numerals only to C floating types. So
 `ffi.malloc(16)` passes a `size_t` and
-`local b: foreign unsigned char = 255` is accepted, while `300` there keeps its
+`local b: unsigned char = 255` is accepted, while `300` there keeps its
 `int` type and is rejected. A numeric `for` bound takes the control variable's
 type, and a C operator operand keeps its C99 type. Conditions use C
 scalar truth. Numeric `for` uses C comparison/addition; a literal zero step is
@@ -1362,7 +1382,7 @@ until the C library guarantees that no callback can occur, and do not assume a
 Titan record can be reconstructed portably from an arbitrary `void *`.
 
 When a callback needs Lua, give its foreign signature an explicit
-`foreign *lua_State` from the C protocol. A foreign function has no generated
+`*lua_State` parameter from the C protocol. A foreign function has no generated
 Titan error frame or GC-root frame. A Lua API call that longjmps follows that
 API's C contract; Titan cannot run `defer` or translate it to `raise` inside the
 foreign body.
@@ -1667,14 +1687,14 @@ use a declared function when one is available. For click registration, call
 
 Keep `EM_JS` and `EM_ASM` blocks, and C operations the FFI cannot express, in
 a `--c-source` helper behind a small header. A helper is not required merely
-to call an Emscripten API. The click counter below keeps only its small C
-callback because its zero-initialized automatic result aggregate cannot be
-declared in a restricted `foreign function` body; Titan registers and
-unregisters the callback through the imported html5 declarations.
+to call an Emscripten API, or to give one a callback: the click counter below
+has no authored C. Its callback is a `foreign function`, and Titan registers
+and unregisters it through the imported html5 declarations.
 
 An API that calls back into C runs that callback synchronously, with
 JavaScript frames above it, so the callback is not a loader entry. To run
-Titan code there, pin a handler and have C call `titan_browser_call_sync`:
+Titan code there, pin a handler and have the callback call
+`titan_browser_call_sync`:
 
 ```text
 record BrowserPin
@@ -1683,43 +1703,15 @@ function BrowserPin:identity(): (integer, integer, integer)
 function BrowserPin:close()
 ```
 
-The html5 click counter shows the whole shape. Its C helper, compiled with
-`--c-source counter.c`, supplies only the callback, whose type is html5's
+The html5 click counter shows the whole shape. Its callback has html5's type
 `em_mouse_callback_func`,
-`bool (*)(int, const EmscriptenMouseEvent *, void *)`:
-
-```c
-/* counter.h */
-#ifndef TITAN_COUNTER_H
-#define TITAN_COUNTER_H
-#include <emscripten/html5.h>
-
-/* The C callback needs a zero-initialized automatic result aggregate, which
- * restricted foreign bodies cannot declare. Titan registers it directly. */
-bool counter_click(int type, const EmscriptenMouseEvent *event, void *identity);
-#endif
-
-/* counter.c */
-#include <titan/browser.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include "counter.h"
-
-/* Keep this test-only callback in C: its zero-initialized automatic result
- * aggregate cannot be declared in a restricted foreign-function body.
- * The pinned handler returns nil, so only a failure's message and trace
- * need freeing. Registration and unregistration live in Titan. */
-bool counter_click(int type, const EmscriptenMouseEvent *event, void *identity) {
-  (void)type;
-  (void)event;
-  titan_browser_sync_result result = {0};
-  if (titan_browser_call_sync(identity, 0, NULL, &result) != TITAN_BROWSER_OK && result.message)
-    fprintf(stderr, "click handler failed: %.*s\n", (int)result.message_length, (const char *)result.message);
-  free((void *)result.message);
-  free((void *)result.trace);
-  return false;
-}
-```
+`bool (*)(int, const EmscriptenMouseEvent *, void *)`, and is written as a
+`local foreign function`. `titan_browser_call_sync` requires a
+zero-initialized result, which the body declares as a zeroed automatic local
+(`foreign titan_browser_sync_result.new()`) and passes by address. The pinned
+handlers return nil, so the callback frees only a failure's message and
+trace; `ffi.lmacro_unconst` of `titan/ffi.h` passes those pointers to const
+where `free` takes a plain one, because a Titan cast cannot discard `const`.
 
 Titan registers and unregisters the callback. C keeps the address of each
 identity for as long as its callback is registered, which is long after
@@ -1731,8 +1723,10 @@ identity for as long as its callback is registered, which is long after
 -- synchronously, and each handler shows the count through a binding.
 local browser = import "browser"
 foreign import "emscripten/html5.h"
+foreign import "stdio.h"
+foreign import "stdlib.h"
 foreign import "titan/browser.h"
-foreign import "counter.h"
+foreign import "titan/ffi.h"
 
 local type Value = browser.BrowserValue
 
@@ -1767,6 +1761,24 @@ end
 
 local listeners: {Listener} = {}
 
+-- The click callback, html5's `em_mouse_callback_func`. The pinned handler
+-- returns nil, so only a failure's message and trace need freeing.
+local foreign function counter_click(kind: int, event: const *EmscriptenMouseEvent,
+                                     identity: *void): bool
+  local result = foreign titan_browser_sync_result.new()
+  local status = ffi.titan_browser_call_sync(
+    identity as const *titan_browser_identity, 0, nil, result)
+  if status ~= ffi.TITAN_BROWSER_OK then
+    if result.message ~= nil then
+      ffi.fprintf(ffi.stderr, "click handler failed: %.*s\n",
+        result.message_length as int, result.message as const *char)
+    end
+  end
+  ffi.free(ffi.lmacro_unconst(result.message))
+  ffi.free(ffi.lmacro_unconst(result.trace))
+  return false
+end
+
 -- The listener is rooted in `listeners` before C receives the identity, so no
 -- allocation can fail after the registration and leave C a dangling pointer.
 local function listen(selector: string, handler: function (...: Value): Value)
@@ -1780,7 +1792,7 @@ local function listen(selector: string, handler: function (...: Value): Value)
   listeners[index] = Listener { selector = selector, pin = pin, identity = identity }
   -- The short click-registration spelling is a function-like macro.
   if ffi.emscripten_set_click_callback_on_thread(
-      selector, identity, 0, ffi.counter_click,
+      selector, identity, 0, counter_click,
       ffi.EM_CALLBACK_THREAD_CONTEXT_CALLING_THREAD) ~= ffi.EMSCRIPTEN_RESULT_SUCCESS then
     listeners[index] = nil
     pin:close()
@@ -1818,7 +1830,7 @@ end
 
 In the registration call:
 
-- Pass the imported C function itself (`ffi.counter_click`) as the
+- Pass the foreign function itself (`counter_click`) as the
   `em_mouse_callback_func` argument, and `nil` to unregister.
 - `useCapture` is a C `bool`, so pass the Titan integer `0` or `1`. The
   legacy `EM_FALSE` macro imports as a C `int`, which that parameter rejects.
@@ -1862,9 +1874,10 @@ The rules behind the example:
 
   After any status, the caller `free`s `message`, `trace`, and the bytes of a
   STRING or BYTES result (`result.value.bytes`). All three are
-  `const unsigned char *`, so C casts each to `void *` for `free`. The
-  counter's handlers return `is_nil()`, so its callback frees only the first
-  two. In a Titan test, `defer` those frees right after creating the record.
+  `const unsigned char *`: C casts each to `void *` for `free`, and Titan
+  passes each through `ffi.lmacro_unconst`. The counter's handlers return
+  `is_nil()`, so its callback frees only the first two. In a Titan test,
+  `defer` those frees right after creating the record.
 - **Results.** A HANDLE result is valid while its `BrowserHandle` is open. A
   CALLABLE result keeps no hold of its own: it is valid only while a
   `BrowserPin` or a live JavaScript wrapper holds the function.
@@ -1896,8 +1909,8 @@ The rules behind the example:
 The manual's
 [synchronous C callbacks](../../../doc/language/standard-library-browser.md#synchronous-c-callbacks)
 adds the counter's page script. The example above is the fixture
-`spec/fixtures/browser_bridge/counter.{h,c,titan}`, and `counter.mjs` beside
-it is the page test.
+`spec/fixtures/browser_bridge/counter.titan`, and `counter.mjs` beside it is
+the page test.
 
 ## The C SDK and bridge maintenance
 
@@ -2550,13 +2563,13 @@ end
 -- Rule 1: the C-ABI callback is a Titan foreign function that recovers the
 -- state, owner, handler and entry, calls the entry and restores the top.
 local foreign function step_trampoline(done: int, total: int, data: *void)
-  local owner = data as foreign *Udata
+  local owner = data as *Udata
   local L = ffi.titan_record_field(owner, "Run", "state")
   local handler = ffi.lmacro_clCvalue(ffi.titan_record_field(owner, "Run", "handler"))
   local module = ffi.lmacro_uvalue(handler.upvalue[0])
-  local entry = ffi.lmacro_pvalue(handler.upvalue[2]) as foreign StepEntry
+  local entry = ffi.lmacro_pvalue(handler.upvalue[2]) as StepEntry
   local top = ffi.lua_gettop(L)
-  entry(L, module, handler, owner, done as foreign lua_Integer, total as foreign lua_Integer)
+  entry(L, module, handler, owner, done as lua_Integer, total as lua_Integer)
   ffi.lua_settop(L, top)
 end
 
@@ -3276,7 +3289,7 @@ searching by analogy.
   `spec/coder/browser_deployment_spec.lua`.
 * Synchronous C callbacks: `spec/stdlib/titan/browser/tests.browser.titan`
   (`call_sync` statuses, borrowed handles, callback threads) and the html5
-  click counter `spec/fixtures/browser_bridge/counter.{h,c,titan,mjs}`, which
+  click counter `spec/fixtures/browser_bridge/counter.{titan,mjs}`, which
   `browser_bridge_spec.lua` runs in Chromium.
 * Retained recovery writes: `spec/fixtures/error_handling/aggregate_recovery.titan`
   and `scalar_recovery.titan` through the coder error-handling and
@@ -3329,7 +3342,8 @@ lightuserdata; uses a source `foreign function` only if a C-only body and stable
 C-visible data suffice, with exact `foreign function(...): ...` type; otherwise calls
 for one narrow reviewed C bridge/redesign. Keeps the actual owner reachable
 until deregistration. Notes foreign body cannot see Titan functions/state,
-allocate owners, catch/defer, or receive implicit `L`.
+allocate Lua-owned storage (a zeroed automatic local is available),
+catch/defer, or receive implicit `L`.
 
 ## Eval 4 — Automatic versus owned arrays
 
@@ -3595,13 +3609,19 @@ or function pointers directly, or claiming raw memory safety from `is`.
 - It keeps the direct `html5.h` import and uses declared functions, such as
   `emscripten_set_click_callback_on_thread`, rather than the function-like
   `emscripten_set_click_callback` macro. A C helper is only needed for
-  operations outside the FFI's supported surface, not for html5 declarations.
+  operations outside the FFI's supported surface, not for html5 declarations
+  and not for the callback.
+- It writes the callback as a `foreign function` with html5's callback
+  signature, whose C types appear without `foreign` in the signature and in
+  the body.
 - It pins the handler and keeps the pin and an `owned` identity in storage
   that outlives the function registering the callback (a module-level list
   or another long-lived record), from before C sees the identity until the
   callback is unregistered. It unregisters before closing the pin.
-- It zero-initializes the result and frees `message`, `trace` and any STRING
-  or BYTES bytes after every status.
+- It zero-initializes the result, in the foreign body with
+  `local result = foreign titan_browser_sync_result.new()`, and frees
+  `message`, `trace` and any STRING or BYTES bytes after every status, through
+  `ffi.lmacro_unconst`.
 - It treats the HANDLE argument as borrowed. The call transfers nothing: C
   keeps the slot it passed, and the handler receives a `BrowserHandle` of its
   own. The handler closes that handle when it is done, which never retires
@@ -3617,6 +3637,8 @@ or function pointers directly, or claiming raw memory safety from `is`.
 - A closure-to-address cast, claiming the direct `html5.h` import is
   unsupported, or treating the function-like click-registration macro as an
   imported function.
+- Keeping the callback in a C helper because its result must be
+  zero-initialized, or writing `foreign` before a type in the foreign body.
 - Leaving the pin or the identity reachable only from locals of the function
   that registers the callback.
 - Freeing or closing C's handle slots from Titan, having C drop its slot
