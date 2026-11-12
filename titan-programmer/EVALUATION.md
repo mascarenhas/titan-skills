@@ -1946,6 +1946,29 @@ Final-tree checks:
 Receipts are in `/tmp/titan-sweep`: the evidence notes (`notes/EVIDENCE.md`)
 and the test logs (`fable/tmp/`).
 
+### Issue #387 operator results (2026-11-12)
+
+Review of mascarenhas/titan#387 found that a pointer difference and a
+comparison still had Titan types in a foreign body. The maintainer chose C99
+typing there. One passage follows:
+
+- `titan-ffi` "Signature and body limits": in a foreign body a C operator has
+  its C99 result type, so the difference of two pointers is a `ptrdiff_t` and
+  a relational or equality operator an `int`; another integer type needs a
+  cast; `//` and `^` are errors.
+
+No fresh-agent evaluation was run for this update. The statement was checked
+against titan `issue-387-foreign-body-grammar` at `d516d34f` (Linux x64):
+
+- `spec/checker/foreign_functions_spec.lua`, "gives operators their C99
+  result types in foreign bodies": locals annotated `ptrdiff_t` and `int`
+  accept the results and nothing narrower, and `//`, `^` are rejected with
+  their messages.
+- `spec/coder/foreign_functions_spec.lua`, "gives operators their C99 results
+  in a foreign body": the forms compile and run as C.
+
+The mechanical gates below pass on this tree.
+
 ## Mechanical gates
 
 For every update:

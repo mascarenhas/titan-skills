@@ -1340,7 +1340,14 @@ enumerator or a cast) and float numerals only to C floating types. So
 `ffi.malloc(16)` passes a `size_t` and
 `local b: unsigned char = 255` is accepted, while `300` there keeps its
 `int` type and is rejected. A numeric `for` bound takes the control variable's
-type, and a C operator operand keeps its C99 type. Conditions use C
+type, and a C operator operand keeps its C99 type. A C operator has its C99
+result type too: the difference of two pointers is a `ptrdiff_t`, and a
+relational or equality operator gives an `int`, 0 or 1. Both are plain C
+values (`local count = last - first`, `local less = a < b`,
+`(a < b) == (c < d)`), and another integer type needs a cast
+(`(last - first) as int`, `(a < b) as bool`). Titan's `//` and `^` are errors
+in a foreign body: C division is `/`, and the C exclusive-or is `~`.
+Conditions use C
 scalar truth. Numeric `for` uses C comparison/addition; a literal zero step is
 rejected, and a computed step has a trusted nonzero precondition.
 
