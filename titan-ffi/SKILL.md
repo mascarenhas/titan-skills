@@ -1493,6 +1493,46 @@ holding it does not handle its rejection.
 `BrowserHandle` also has an allocation-free finalizer, and state close retires
 every remaining unit, including units created by close-phase finalizers.
 
+## Typed copies
+
+For copied structured data, use `protobuf.portable` and send `codec:describe()`
+as `BrowserValue.is_string` beside `codec:encode(...)` as
+`BrowserValue.is_bytes`. Several root values form one anonymous field message;
+preserve nil positions. The page imports `{ portable }` from its own copy of
+the SDK's standalone `lib/titan-browser/0.6/titan-protobuf.mjs`. Do not change
+the loader or bridge marshaller to add record copying.
+
+The peer's `portable(description)` exposes `encode`, `decode`, and `types`.
+Records use `new codec.types["app.Point"](...)` with public fields in
+declaration order. Union variants use
+`new codec.types["app.Choice"].variants.some(...)` with parts in declaration
+order; a single-type shorthand has a part named `value`. These generated
+classes identify nominals: a matching plain object is not a record. Share
+classes with `portable(otherDescription, first.types)` only when the shared
+nominal descriptions, including text marks, are identical.
+
+Integers are signed-i64 `BigInt`, never `Number`; floats are `Number` even
+when integral. Unmarked strings are `Uint8Array`, including NUL and invalid
+UTF-8. Mark string positions in `portable`'s third argument to get JavaScript
+text with strict UTF-8/UTF-16 validation. Root indices, qualified record fields,
+and qualified union parts can name text through Options and Arrays; a dynamic
+`value` string cannot be marked. Const Arrays decode frozen, mutable Arrays
+unfrozen; maybe-const and dynamic Arrays preserve the wire flag and encode
+according to `Object.isFrozen`.
+
+Repeated acyclic references are independent copies; cycles, transfer hooks,
+packet resources, and unsupported declared types are rejected. Nominals in
+`value` positions must be in the codec's closed set. Local record storage is
+not copied; Titan decoding needs a compatible public `new`, otherwise that
+view is encode-only. Keep live handles and callables as separate `is_handle`
+and `is_callable` arguments beside the bytes, never inside them.
+
+Peer `TypeError`s carry `code` and JSON-style `path`; if a binding throws one,
+Titan receives `BrowserError` retaining that exact error. Bad bytes decoded
+by a Titan callable reject with `TITAN_BROWSER_TITAN`. Ordinary codec failures
+do not dispose the instance. See the complete
+[typed-copy example](../../../doc/language/standard-library-browser.md#copying-typed-values).
+
 ## Calling Titan from JavaScript
 
 A Titan function `fn: function (...: BrowserValue): BrowserValue` crosses into
@@ -3681,6 +3721,34 @@ diff counts the JavaScript lines it adds.
 keeping both checks "for safety"; moving the host call itself into C;
 inventing a synchronous JavaScript-to-Titan application call; or treating the
 runner tooling as runtime JavaScript.
+
+This case is intentionally unscored until run in a fresh cartridge-only context.
+
+## Eval 18 — Typed browser copies without bridge changes
+
+**Prompt:** A browser application has a public `app.Point` record, an i64
+identifier, a raw byte string containing NUL and `0xFF`, and a UTF-8 label.
+Show the Titan binding call and page-side code to copy these values in both
+directions. The page constructs a changed Point and must share its class with
+a second codec. A Titan callback travels with the data. Explain how to mark
+the label, what happens for a plain object or invalid text, and how the next
+valid call behaves after a codec error.
+
+**Pass criteria:** uses `protobuf.portable`, `describe`, and `is_bytes` with
+one argument per anonymous root field; imports the standalone SDK peer
+without modifying production JavaScript; constructs the generated Point
+class, shares `types` only for identical nominal entries, and keeps the
+callback in a separate `is_callable` argument beside the bytes. Uses `BigInt`
+for the identifier and `Uint8Array` for the unmarked bytes, marks the label's
+string position explicitly, and does not mark a dynamic `value` string.
+Awaits calls into Titan; names peer `TypeError.code`/`path`, the binding's
+`BrowserError`, and a Titan decode's `TITAN_BROWSER_TITAN`; closes or releases
+owned references and demonstrates a following valid call.
+
+**Fail signals:** a plain object as nominal identity, a `Number` integer, byte
+data sent through `is_string`, a handle/callable embedded in protobuf bytes,
+automatic transfer hooks or module loading, silent replacement of invalid
+text, synchronous general entry into Titan, or a loader patch for copying.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.
 

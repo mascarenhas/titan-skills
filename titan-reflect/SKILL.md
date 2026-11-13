@@ -131,6 +131,14 @@ callable constructs that variant. These calls retain ordinary dynamic callable
 checks and argument/result adjustment. Public record/union methods and statics
 are sorted by name; Interface methods retain declaration order.
 
+`RecordType:public_constructor(): StaticFunctionType?` finds a public static
+`new` with fixed parameters, exactly one fixed result of that record, and no
+flexible result tail. It returns nil otherwise and never invokes `new`.
+The helper does not match parameter names or types to fields: the portable
+protobuf codec adds its own public-field-name policy when constructing a
+record with local storage. All-public protobuf records still decode directly
+without invoking their constructor.
+
 Titan, Lua, and Lua C function variants carry a callable `value` part of type
 `function (...: value): (...: value)`. Select parts with named case binders,
 for example `when is_titan_function{callable = value, signature = type}`.

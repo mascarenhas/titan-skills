@@ -641,6 +641,7 @@ reflect.tests
 sqlite3.tests
 json.tests
 protobuf.tests
+protobuf.portable_tests
 thread.tests
 test.host_tests
 reflect.lua_tests
@@ -707,6 +708,12 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
   SDK/header/provider inventories, native-target absence, generated mechanics,
   and link artifacts, not mock public behavior. A compiled image is not bridge
   qualification, and engine or platform receipts are separate evidence.
+  Portable-codec interoperability has the separate target-only native owner
+  `browser.portable_tests` (`browser/portable_tests.browser.titan`), also outside
+  the stdlib manifest. The same bridge spec drives it with `portable.mjs`,
+  staging the installed standalone protobuf peer beside the driver. Keep
+  copied-value behavior there and peer-only wire/class checks in
+  `portable-peer.mjs`; do not add mock bridge tests.
 - The browser `async` driver's behavior that needs JavaScript bindings
   (turns, disposal, Task-form calls, synchronous C callbacks) lives in the
   scheduler gate owner `async.browser_tests`
