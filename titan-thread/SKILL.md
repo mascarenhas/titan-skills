@@ -37,7 +37,9 @@ Cross-thread communication uses **value transfer** (`titan.transfer` /
 - Eligible public records/unions (all-public, hook-free, at most 64 decoder
   frame entries: record fields, or one selector plus the largest union
   payload's parts, independent of variant count) use compiler-generated codecs with
-  the reflective codec's exact bytes, errors, hook calls, and attachment order;
+  the reflective codec's exact bytes, error messages (a deep generated
+  position can shorten the ` at <path>` suffix with `...`), hook calls, and
+  attachment order;
   Array, foreign, hooked, endpoint, and nominal/Array `value` fields still run
   the reflective field codec. Do not design payloads around which path runs;
   `protobuf.use_generated_codecs(false)` is only a differential-test diagnostic.
