@@ -1868,9 +1868,11 @@ end
 On native targets, environment, locale, and working-directory state are
 process-global; coordinate changes and restore temporary state.
 
-Native async/process APIs include `wait_signal`, graceful `exit`, `spawn`,
-`Process:wait/kill/is_running`, and `InputStream`/`OutputStream` operations.
-Parent `os.stdin`/`os.stdout`/`os.stderr` work whether descriptor 0/1/2 is a
+Native-only async/process APIs are `wait_signal`, `spawn`, and
+`Process:wait/kill/is_running`. Graceful `exit` and the
+`InputStream`/`OutputStream` operations need a Task on both targets; the
+browser stream rules are at the start of this section. On native targets, parent
+`os.stdin`/`os.stdout`/`os.stderr` work whether descriptor 0/1/2 is a
 terminal, a pipe or Unix stream socket, a file (regular file, `/dev/null`,
 Windows `NUL`), or, on Linux and macOS, a connected IPv4/IPv6 TCP socket from
 inetd, systemd `Accept=yes`, or launchd `inetdCompatibility`.
