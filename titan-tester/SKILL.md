@@ -641,12 +641,12 @@ reflect.tests
 sqlite3.tests
 json.tests
 protobuf.tests
-protobuf.portable_tests
 thread.tests
 test.host_tests
 reflect.lua_tests
 json.lua_tests
 protobuf.resource_tests
+protobuf.portable_tests
 transfer.tests
 ```
 
