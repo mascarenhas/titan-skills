@@ -2518,7 +2518,7 @@ int titan_browser_invoke(uint64_t operation_id, uint32_t state, uint32_t slot,
    predates this rule and is not a model for new multi-statement helpers. A
    multi-statement C helper is otherwise only for platform-conditional work,
    in the shape the table gives (`titan_probe_parent_stdio` in
-   `titan/os_platform.h` fills a probe struct that `titan.os` classifies).
+   `titan/os/os_platform.h` fills a probe struct that `titan.os` classifies).
    *Wrong:* a 600-line runtime C file (`titan-browser.c` at
    `843b446e`) hand-writing the Emscripten exports, the launcher
    `protected_entry`, a C `states` linked list, and

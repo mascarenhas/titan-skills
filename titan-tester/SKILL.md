@@ -709,6 +709,10 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
   SDK/header/provider inventories, native-target absence, generated mechanics,
   and link artifacts, not mock public behavior. A compiled image is not bridge
   qualification, and engine or platform receipts are separate evidence.
+  Public `lua.new()` lifetime cases use `browser.public_state_tests` in a
+  separate image driven by the same spec and integration driver. Importing
+  `lua` installs an async owner driver; keep the legacy `browser.tests`
+  image's no-driver composition.
   Portable-codec interoperability has the separate target-only native owner
   `browser.portable_tests` (`browser/portable_tests.browser.titan`), also outside
   the stdlib manifest. The same bridge spec drives it with `portable.mjs`,

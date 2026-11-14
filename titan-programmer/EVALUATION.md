@@ -1714,8 +1714,8 @@ statement was checked against titan `issue-372-native-binding-audit` at
   the first new row and 28 header functions as platform-conditional.
   `reserve_resource` in `titan/transfer.titan` is the ordinary function that
   the row contrasts with them.
-- `titan_probe_parent_stdio` in `titan/os_platform.h` fills a probe struct
-  whose `status` `titan/os.native.titan` reads, and `titan/path.titan` reads
+- `titan_probe_parent_stdio` in `titan/os/os_platform.h` fills a probe struct
+  whose `status` `titan/os/stdio.native.titan` reads, and `titan/path.titan` reads
   `ffi.TITAN_PATH_WINDOWS`.
 - `titan_path.c`, `ltitanlib.c` and `titan_winloader.h` hold 17 scratch
   userdata sites, and none of the three files nor `titan.c` calls `luaL_ref`
