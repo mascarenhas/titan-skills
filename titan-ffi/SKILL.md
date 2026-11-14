@@ -1631,6 +1631,10 @@ the host but is not physical retirement. It does drop the request's holds and
 every event still queued for it, including the settlement of a one-shot that
 settled before the cancel.
 
+`browser.failure_text(message, thrown)` consumes an `is_handle` thrown value
+and returns an `is_string` message or nil. Use it when the diagnostic is enough;
+the caller chooses its fallback text, error type, and operation.
+
 A complete page module that starts one host request:
 
 ```titan
@@ -1705,6 +1709,16 @@ invalid trace map into an ordinary initialization failure before Lua runs;
 `titan-browser-run` sets it unless `--allow-degraded-trace` is given. A failed
 operation keeps its captured Titan error even if its output flush fails or
 disposal interrupts it; each secondary failure is reported once as cleanup.
+
+`create` accepts copied-byte `stdout`/`stderr` sinks, an optional per-read
+`stdin` function, declared `stdinKind`/`stdoutKind`/`stderrKind`, output end
+hooks `stdoutEnd`/`stderrEnd`, and a snapshotted per-instance `env` object.
+Sinks and end hooks may return promises; input returns bytes or EOF, directly
+or by promise. The reserved `titan:stdin`, `titan:stdout`, `titan:stderr`,
+and `titan:stdio` sources are SDK-internal, not application bindings.
+Use public `os` streams; read the
+[loader options](../../../doc/language/browser-target.md#the-loader-api)
+for validation, ordering, and disposal.
 
 A program that links `async` (and is not built with `--no-uv-bootstrap`)
 runs `main` as a Task: `run()` drives until every Task finishes.
@@ -1965,9 +1979,9 @@ C reaches the same boundary through the installed `titan/browser.h`: a checked
 wasm32 slot, response, and completion ABI. `titan.browser` allocates its state
 record in owned module storage, registers an ordinary Titan finalizer through
 `gc.finalizable`, and publishes its address in the JavaScript token→record map.
-C-created states load the module normally, with no attachment operation or
-special bootstrap order. `titan.lua` is native-only; the standard library
-creates no independent browser state.
+C-created states and states from `lua.new()` load the module normally, with no
+attachment operation or special bootstrap order. They share the WebAssembly
+instance, but only its original state can drive browser Tasks.
 Each promised entry carries an unsigned 64-bit operation identity and exactly
 one completion record. Potentially throwing host imports fill a response and
 return normally; trusted adoption, release, and state imports never throw. A C
@@ -2145,7 +2159,7 @@ per-state data in mutable C globals.
 
 ## `titan.lua`: the public dynamic loading escape hatch
 
-Import the module by its qualified name:
+Import the module by its short name:
 
 ```titan
 local lua = import "lua"
@@ -2169,6 +2183,13 @@ function require(modname: string): value
 module shorthand, while in raw Lua code it is `require "titan.lua"`; there is
 no Lua-module `import` and no special replacement of Lua's global `load`,
 `dofile`, or `require`.
+
+On the browser, `dofile`, `Lua:run_async`, and `Lua:run_async_from_loader` are
+absent. `lua.new()` still owns a synchronous independent state in the same
+instance; it cannot start or drive Tasks. Stock Lua uses the
+[browser profile](../../../doc/language/standard-library-lua.md#stock-lua-libraries-on-the-browser):
+no filesystem or shell, C-stdio input errors rather than EOF, instance
+environment, no CPU clock, and Task-only exit through linked `titan.os`.
 
 ### `load`
 
@@ -2217,12 +2238,12 @@ inside an async Task/Runtime.
 ### `require`
 
 `titan.lua.require` uses Lua's registry-backed `package.loaded` table. It
-preserves preload searcher 1, replaces blocking source searcher slot 2 with an
-asynchronous `package.path` pass, and then calls searchers 3 onward, which
-normally end with Titan's package searcher. The source pass loads Lua source;
-C modules use Lua's C searchers and compiled Titan modules the Titan searcher.
-Searchers and loaders themselves run through Titan's non-yieldable
-Lua-callable path and must not attempt to yield.
+preserves preload searcher 1, selects a target-specific source pass in slot 2,
+and then calls searchers 3 onward, normally ending with Titan's package
+searcher. The native source pass searches `package.path` asynchronously;
+the browser pass returns a fixed no-filesystem miss. Browser Titan lookup uses
+initialized modules and preload entries, never provider paths or files.
+Custom searchers and loaders use Titan's non-yieldable Lua-callable path.
 
 A truthy cached value returns immediately. A loader's nonnil result is stored;
 if it and `package.loaded[name]` remain nil, true is installed. False deliberately
@@ -2301,7 +2322,7 @@ scope, so `thread.Sender` and `thread.Receiver` endpoints cannot be passed
 directly as `Lua:run*` arguments or results (pass a `Receiver:handle()`
 or use `thread.spawn*` instead).
 
-`run` blocks its caller; `run_async` uses `async.run_foreign` inside a Task
+`run` blocks its caller; native `run_async` uses `async.run_foreign` inside a Task
 while exclusively owning the independent state. That state may require and
 execute Titan modules, but must never access the hosting state's objects or
 invoke its closures. A concurrent run or close on the same busy wrapper raises. Accepted

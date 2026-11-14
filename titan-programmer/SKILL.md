@@ -1717,6 +1717,11 @@ with their owners (`os`, `fs`, `net`, ...); `io` holds only the Interfaces,
 `print`, and `lines`. These stream operations may suspend; load
 **`titan-async`** for scheduling.
 
+The complete `io` facade is shared with the browser. Printing through browser
+parent output requires a Task and awaits the sink; Reader behavior still belongs
+to the supplied stream, so missing embedding input raises rather than returning
+EOF. See the [I/O contract](../../../doc/language/standard-library-io.md).
+
 ### `fs`: files, paths, metadata, and watching
 
 Import `fs` by its short name. High-value APIs:
@@ -1799,7 +1804,14 @@ Import the short Titan module:
 local os = import "os"
 ```
 
-Synchronous core:
+On the browser, `os` keeps calendars, wall time, locale, instance-local
+environment, parent streams, and Task-only `exit`; CPU time, host identity and
+paths, signals, and processes have no declarations. Parent streams need a Task,
+except their no-op `close()`. Backing kinds are declared by the embedding,
+not inferred; TCP output shutdown awaits its end hook. See the
+[availability and stream contracts](../../../doc/language/standard-library-os.md#on-the-browser).
+
+Native synchronous core:
 
 ```text
 function clock(): float
@@ -1853,10 +1865,10 @@ function example_noon(): integer
 end
 ```
 
-Environment, locale, and working-directory state are process-global; coordinate
-changes and restore temporary state.
+On native targets, environment, locale, and working-directory state are
+process-global; coordinate changes and restore temporary state.
 
-Async/process APIs include `wait_signal`, graceful `exit`, `spawn`,
+Native async/process APIs include `wait_signal`, graceful `exit`, `spawn`,
 `Process:wait/kill/is_running`, and `InputStream`/`OutputStream` operations.
 Parent `os.stdin`/`os.stdout`/`os.stderr` work whether descriptor 0/1/2 is a
 terminal, a pipe or Unix stream socket, a file (regular file, `/dev/null`,
@@ -2165,12 +2177,15 @@ to the language rules:
   `peg`, `string`, `url`, `path`) keep native source and interface parity and
   must not gain an import path to `uv`, `async`, `timer`, `titan.browser`, or
   a native-only module.
-  - `async` and `timer` reach the browser through their own variants: the
-    `titan/async/*.browser.titan` contributors and `titan/timer.browser.titan`.
-    Only those files may import `titan.browser`.
-  - A new public `async` member that the browser cannot provide is recorded
-    in the member inventory, and a member added to `timer.native.titan` needs
-    its browser twin.
+  - `io` is also fully shared, but imports the selected `os` composition and
+    therefore reaches `async`. `os` and synchronous `lua` use shared mains
+    with target-selected contributors; the thirteen core modules above keep
+    their stricter closure.
+  - `async`, `timer`, and `os` reach the bridge only through
+    `titan/async/*.browser.titan`, `titan/timer.browser.titan`, and
+    `titan/os/stdio.browser.titan`.
+  - Record browser-absent public members of `async`, `os`, and `lua` in the
+    member inventory; `timer` keeps its complete interface on both targets.
   - `titan.browser` is the reviewed browser-only exception: it imports only
     `gc`, has no native placeholder or interface, and no native module may
     import it.

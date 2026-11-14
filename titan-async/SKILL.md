@@ -1917,6 +1917,11 @@ turn-based driver runs them instead of libuv. For the full contract, read
   `suspend` a cancel action that cancels the request. An Emscripten operation
   that suspends the whole WebAssembly stack inside a Task (`emscripten_sleep`,
   authored `EM_ASYNC_JS`) stalls every other Task until it returns.
+- **Parent streams:** `os.stdout`/`os.stderr` writes and `os.stdin` reads
+  use SDK requests, not C stdio. Writes await the sink; cancelling an admitted
+  write waits for that sink, while cancelling a reader leaves its request and
+  result for a successor. Missing input raises, never invents EOF. See
+  [`browser parent streams`](../../../doc/language/standard-library-os.md#browser-parent-streams).
 - **Bootstrap result:**
   - `run()` resolves `returned` with `main`'s integer.
   - A failed `main` Task prints its uncaught report on stderr, and `run()`
@@ -1924,9 +1929,10 @@ turn-based driver runs them instead of libuv. For the full contract, read
   - A cancelled `main` resolves `returned` with status 1.
   - An exit that any Task requests resolves `exited` with its code, even
     after `main` failed.
-- **Exit:** `request_exit(code)` latches the instance as exited when the
-  drive ends. Later entries reject with `TITAN_BROWSER_EXITED`, and nothing
-  closes the page or the Node process. A wrapper's `release()` after an exit
+- **Exit:** `os.exit(code)` calls `request_exit(code)` from a Task and
+  latches the instance as exited when the drive ends. Outside a Task it raises
+  without exiting. Later entries reject with `TITAN_BROWSER_EXITED`, and
+  nothing closes the page or the Node process. A wrapper's `release()` after an exit
   only invalidates the wrapper; its function is let go when the state closes.
 - **Disposal:** `dispose()` cancels every unfinished Task with `"instance
   disposed"` and drives their cleanup, even when no drive is running.
@@ -1934,6 +1940,8 @@ turn-based driver runs them instead of libuv. For the full contract, read
   - `start` and `listen` raise `browser.BrowserError` (`"browser state is
     closing"`).
   - A `timer.sleep` in cleanup raises the Task's cancellation.
+  - Waiting stream writers and cleanup writes receive that same sticky
+    cancellation; the SDK retires their requests with `TITAN_BROWSER_DISPOSED`.
 - **Synchronous C callbacks (no-switch mode):** code that runs through
   `titan_browser_call_sync` (see `titan-ffi`) runs outside every Task, even
   when it is nested in a binding that a Task called.
