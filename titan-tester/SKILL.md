@@ -655,7 +655,8 @@ selects them through `--test-dir`; the manifest audits the expected inventory,
 not a module build graph. `test.tests` remains the explicit first root, and
 `--exe` preserves `out/tests/test/tests` as the POSIX aggregate executable.
 
-The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names the owners that
+The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names twenty-one owners,
+including `lua.tests`, `os.tests`, and `io.tests`, that
 `make titan-stdlib-browser-test` runs under Node and headless Chromium (emsdk,
 Node 26, Chromium, the browser SDK, and the installed native provider
 required). All of them build into one `--target browser --test` image,
@@ -685,12 +686,12 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
 - An owner in `TITAN_STDLIB_BROWSER_TEST_ROOTS` may import only:
   - the browser standard-library modules (`coroutine`, `gc`, `iteration`,
     `math`, `test`, `reflect`, `json`, `protobuf`, `transfer`, `peg`,
-    `string`, `url`, `path`, `async`, `timer`);
+    `string`, `url`, `path`, `io`, `os`, `lua`, `async`, `timer`);
   - owner-local support and `support.common.titan`;
   - `support.runtime` and `support.async`, whose `drive.native.titan` helpers
     are native-only.
 
-  Put a case that needs `lua`, `fs`, `thread`, `uv`, `support.command`, or
+  Put a case that needs `fs`, `thread`, `uv`, `support.command`, or
   another native-only facility in the module's native-only owner
   (`test.host_tests`, `reflect.lua_tests`, `json.lua_tests`,
   `protobuf.resource_tests`) or a `.native.titan` contributor; never copy it
@@ -708,6 +709,10 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
   SDK/header/provider inventories, native-target absence, generated mechanics,
   and link artifacts, not mock public behavior. A compiled image is not bridge
   qualification, and engine or platform receipts are separate evidence.
+  Public `lua.new()` lifetime cases use `browser.public_state_tests` in a
+  separate image driven by the same spec and integration driver. Importing
+  `lua` installs an async owner driver; keep the legacy `browser.tests`
+  image's no-driver composition.
   Portable-codec interoperability has the separate target-only native owner
   `browser.portable_tests` (`browser/portable_tests.browser.titan`), also outside
   the stdlib manifest. The same bridge spec drives it with `portable.mjs`,
@@ -721,6 +726,12 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
   `spec/coder/browser_scheduler_spec.lua` builds it and drives it with
   `spec/fixtures/browser_scheduler/scheduler.mjs`, which asserts the number
   of passing cases.
+- Stream, environment, and printing cases needing embedding options live in
+  `os.browser_tests` (`spec/stdlib/titan/os/browser_tests/`), outside the
+  manifest. The same scheduler spec drives them with
+  `spec/fixtures/browser_scheduler/os-streams.mjs`. Where runner reports
+  would pollute exact output, private published callbacks use `test.assert`
+  and the JavaScript driver asserts each case's result.
 - Keep module-specific support beside its owner, for example
   `fs/test_support.titan`. Put something under `support/` only when it expresses
   a genuinely cross-module testing contract.
