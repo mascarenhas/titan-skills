@@ -1811,7 +1811,7 @@ except their no-op `close()`. Backing kinds are declared by the embedding,
 not inferred; TCP output shutdown awaits its end hook. See the
 [availability and stream contracts](../../../doc/language/standard-library-os.md#on-the-browser).
 
-Native synchronous core:
+Synchronous core:
 
 ```text
 function clock(): float
