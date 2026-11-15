@@ -119,8 +119,10 @@ cookies, `Origin`, fragmentation, Pong replies, and `permessage-deflate`.
   `Connection` closes with its Runtime.
 - Every pre-open failure, HTTP rejection, DNS, refusal, and TLS alike, is a
   `HandshakeError` with nil status and headers (`"WebSocket opening handshake
-  failed"` for a rejected opening). Titan fails an offered but unselected
-  subprotocol on every engine instead of returning `subprotocol() == nil`.
+  failed"` for a rejected opening). A selected subprotocol that was not
+  offered fails on both targets. When subprotocols were offered and none is
+  selected, Titan fails the browser opening on every engine, where a native
+  client returns `subprotocol() == nil`.
 - `read_limit` applies to the decompressed length; earlier messages arrive
   first, then `Error("limit", "websocket.read", ..., 1009)` without copying
   the big message. Unread small messages are not backpressured.

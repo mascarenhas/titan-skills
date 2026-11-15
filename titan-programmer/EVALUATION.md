@@ -2020,7 +2020,8 @@ evaluation:
   request needs `follow()`, a `Host` match normalizes default ports, and the
   measured Node, Firefox and WebKit limitations are listed. Natively, an idle
   HTTPS peer that leaves without `close_notify` ends its connection quietly.
-  Titan fails an unselected subprotocol on every engine.
+  Titan fails a browser opening that selects none of the offered subprotocols
+  on every engine.
 
 The evaluated tree was `issue-412-browser-net` at `76f178b`, based on `main`
 at `63fdddb`. The cases were N1, N2, and `titan-networking` Eval 3 and
@@ -2099,6 +2100,14 @@ The delivered 99-line module built a browser image (`.mjs`, `.wasm` and
 `.wasm.map`). The answer marks one fact UNKNOWN that the cartridges do give:
 it avoids `case` over `websocket.MessageType`, although its own review uses
 `case` over `http.CacheMode`. This issue leaves that as it is.
+
+Review then corrected one `titan-websocket` bullet after the evaluation,
+without a rerun. The evaluated text said that Titan fails an unselected
+subprotocol "instead of returning `subprotocol() == nil`", which also read as
+native behavior for an unoffered selection. A selected subprotocol that was
+not offered fails on both targets, and only a browser opening that selects
+none of the offered ones fails where a native client returns nil. Neither N2
+answer depended on the difference.
 
 Limitations:
 
