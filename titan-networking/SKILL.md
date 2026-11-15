@@ -1102,7 +1102,8 @@ CORS, cookies, its HTTP cache, certificate trust, and connection pooling.
   one `url.Error`, as natively.
 - `read` returns decoded bytes while `Content-Encoding`/`Content-Length`
   describe the wire: never decompress again or bound reads by
-  `Content-Length`.
+  `Content-Length`. Request bodies are sent byte for byte (NUL and invalid
+  UTF-8 included).
 - `headers` arrive lowercase, sorted, comma-joined, without `Set-Cookie` or
   trailers; CORS hides headers the server does not expose.
 - `close()` aborts the fetch synchronously, with no drain; cancellation aborts

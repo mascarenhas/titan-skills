@@ -257,19 +257,22 @@ Reject LuaSocket, Go, Node, or invented convenience APIs.
 
 Ask for one browser-target module that POSTs binary bytes with a JSON
 `Content-Type` through `http.request`, follows redirects, treats a 0 status as
-opaque, and then echoes one text message over `websocket.connect` before a
-`shutdown(1000)`. Also review a port of native code that sends `Cookie` and
-`Accept-Encoding` headers, passes a `ca_file`, gunzips the body, catches
-`ssl.Error`, and compares `http.CacheMode` values with `==`. Require one
-`RequestOptions` named call, `case` for mode values, the browser `follow()`
-default, rejection of `ca_file`, `Cookie`, and `Accept-Encoding` before any
-request, decoded bodies with wire `Content-Encoding`, host failures as
-`async.OperationError` `"EIO"`/`"http.request"`, `HandshakeError` without
-status or headers for every pre-open WebSocket failure, no `ping`, `accept`, or
-dial headers on the browser, and the owner-Runtime requirement. Reject an
-invented `fetch` binding, positional options, a second decompression, or
-`ssl.Error`. The module must compile with `titanc --target browser` against
-the matching installed browser SDK.
+opaque, and then sends one text message over `websocket.connect`, reads the
+echoed reply, and ends with `shutdown(1000)`, reporting a failed opening. Also
+review a port of native code that sends `Cookie` and `Accept-Encoding`
+headers, passes a `ca_file`, gunzips the body, catches `ssl.Error`, compares
+`http.CacheMode` values with `==`, dials its WebSocket with an `Authorization`
+header, keeps the session alive with `ping`, and accepts upgrades with
+`websocket.accept`. Require one `RequestOptions` named call, `case` for mode
+values, the browser `follow()` default, rejection of `ca_file`, `Cookie`, and
+`Accept-Encoding` before any request, decoded bodies with wire
+`Content-Encoding`, host failures as `async.OperationError`
+`"EIO"`/`"http.request"`, `HandshakeError` without status or headers for every
+pre-open WebSocket failure, no `ping`, `accept`, or dial headers on the
+browser, and the owner-Runtime requirement. Reject an invented `fetch`
+binding, positional options, a second decompression, or `ssl.Error`. The
+module must compile with `titanc --target browser` against the matching
+installed browser SDK.
 
 ### F1 — FFI and Lua escape hatch (`titan-programmer` + `titan-ffi`)
 
@@ -1996,6 +1999,136 @@ against titan `issue-387-foreign-body-grammar` at `d516d34f` (Linux x64):
   in a foreign body": the forms compile and run as C.
 
 The mechanical gates below pass on this tree.
+
+### Issue #412 evaluation (2026-11-15)
+
+titan#412 adds `http.RequestOptions`, the four request-option unions and
+native redirects, and browser `http` and `websocket` clients over the host
+`fetch` and `WebSocket`. Five commits changed the cartridges before the
+evaluation:
+
+- `58e0230`: `titan-networking` describes `RequestOptions`, the redirect,
+  cache, credentials and request modes, and the browser `fetch` client.
+  `titan-websocket` adds "Browser client".
+- `710bc61`: `titan-programmer`, `titan-tester` and `titan-ffi` list the
+  browser `http` and `websocket` modules.
+- `5aa3cdd`: N1 asks for one `RequestOptions` named call and the native
+  `manual()` default, N2 is new, and the routing set gains queries 28 and 29.
+- `067fdb3`: a malformed browser `Host` raises `url.Error`.
+- `76f178b`: both specialist cartridges follow the integrated code. A `Client`
+  and a `Connection` close with their Runtime, a cross-origin `no_cors()`
+  request needs `follow()`, a `Host` match normalizes default ports, and the
+  measured Node, Firefox and WebKit limitations are listed. Natively, an idle
+  HTTPS peer that leaves without `close_notify` ends its connection quietly.
+  Titan fails an unselected subprotocol on every engine.
+
+The evaluated tree was `issue-412-browser-net` at `76f178b`, based on `main`
+at `63fdddb`. The cases were N1, N2, and `titan-networking` Eval 3 and
+Eval 11, all with DeepSeek (`opencode-go/deepseek-v4.1-flash`). Every
+statement that this issue added to the four rubrics was checked against the
+integrated #412 tree at `b342d049`: `titan/http/options.titan`,
+`client.native.titan` and `client.browser.titan`,
+`titan/websocket/client.browser.titan` and `websocket.browser.titan`, and
+`spec/stdlib/titan/http/browser_tests/requests.browser.titan`. No rubric
+contradicted the source.
+
+Each answer came from a fresh `omp -p` process with the #388 command shape:
+high thinking, only `read,write`, `--no-skills --no-context-files --no-rules
+--no-session --no-extensions --no-prewalk --no-lsp --no-title`,
+`--approval-mode yolo`, `--max-time 20m`, an empty scratch working directory
+and the memory-off overlay, in one serial queue. The preamble allowed only
+the case's cartridges, from a write-protected copy of the evaluated tree:
+`titan-programmer`, `titan-networking` and `titan-async` for N1, whose server
+lifecycle designs a Task; `titan-programmer`, `titan-networking` and
+`titan-websocket` for N2; and `titan-programmer` and `titan-networking` for
+Eval 3 and Eval 11. Each prompt was the preamble followed by the case's
+prompt text, without its criteria. A smoke prompt with the overlay reported
+no memories, and the same prompt without it reported a `<memories>` block.
+The smoke checked nothing else, so the runs were memory-free but not shown to
+be hermetic. All five scored processes exited 0 and wrote an answer; none
+was retried.
+
+The delivered modules were passed unchanged to `titanc` from the integrated
+prefix (Linux x64): N1's two modules and Eval 3's two natively, and N2's and
+Eval 11's with `--target browser` (Emscripten 6.0.13). All of them built.
+
+| Case | Result |
+| --- | --- |
+| N1: networking | Pass. The header, a repeated `X-Trace` and the CA travel in one `http.RequestOptions { headers = supplied, ca_file = ca_file }`. The client checks the status under `defer response:close()` and bounds a streaming read. The answer states that a nil native `redirect` means `manual()` and that `follow()` is opt-in with 20 hops. The server runs `serve()` in an `async.run` Task, and `stop` closes the server and joins that Task. The prose covers one TCP reader with libuv-ordered writes against one TLS reader and one writer whose cancellation ends the engine, `close_notify` against `TLS_TRUNCATED_EOF` (with the new idle-disconnect rule), the reader Task that is cancelled and joined before its state is released, ordered duplicates, and the framing limits. Both modules compiled. |
+| N2: browser network clients | Partial at `76f178b`; Pass on the rerun (below). The module makes one `RequestOptions` named call with `follow()` named, treats status 0 as opaque, and compiled for the browser. The review handles all six native parts correctly: `credentials` instead of `Cookie`, no `Accept-Encoding` or `ca_file` (strings before any request), no second decompression, `async.OperationError` `"EIO"`/`"http.request"` instead of `ssl.Error`, and `case` instead of `==`. The module writes its text message but never reads the echo, and the answer says nothing of an opening's `HandshakeError` or of `ping` and `accept`. The prompt asked for none of the three. |
+| Eval 3: verified HTTPS client | Pass. `http.get(source_url, http.RequestOptions { ca_file = ca_file })` under `defer response:close()`, a 2xx check before a bounded streaming read, a CA file that replaces the default roots, a 3xx that the native `manual()` default returns and the check rejects, and no decompression. The `main` module catches `ssl.Error`, `async.OperationError` and `url.Error`. Both modules compiled into an executable, which was not run. |
+| Eval 11: browser fetch client | Pass. The port keeps `http.request` with one `RequestOptions` and drops `Cookie` for `credentials`, `Accept-Encoding` and `ca_file`, each rejected with a string before any request. It deletes the decompression because browser bodies arrive decoded, branches on `OperationError` `"EIO"` and its operation, and names CORS. It notes the browser `follow()` default and pins `manual()` on purpose, explaining that the browser then returns an opaque redirect rather than the 3xx. The module compiled for the browser. |
+
+The evaluation led to one revision, the commit that adds this record:
+
+- **N2's prompt.** Three criteria that the case already scored had nothing
+  in the prompt to draw them out: reading the echo, the `HandshakeError` of a
+  failed opening, and the absence of `ping`, `accept` and dial headers. The
+  case now asks the module to read the echoed reply and report a failed
+  opening, and the reviewed port also dials with an `Authorization` header,
+  keeps the session alive with `ping`, and accepts upgrades with
+  `websocket.accept`. The criteria are unchanged.
+- **Browser `shutdown` codes.** Checking N2's answer against
+  `client.browser.titan` showed that `titan-websocket` named 1001..1014 as
+  the codes that raise `state`. Every code other than 1000 and 3000..4999
+  does, and the bullet now says so.
+- **Browser request bodies.** Both N2 answers marked UNKNOWN whether a
+  browser request body keeps non-UTF-8 bytes. It does: the body crosses the
+  bridge as bytes, and `requests.browser.titan` sends `"binary\0\255body"`
+  with every method that takes a body and compares the echo on every engine.
+  `titan-networking` and the language manual now say that request bodies are
+  sent byte for byte. This sentence came after the rerun.
+
+N2 was rerun once against the revised prompt and `shutdown` bullet, with the
+same command shape, overlay and preamble. It passes, and the three misses are
+gone:
+
+- A `try_open` function catches `websocket.HandshakeError`, reports it and
+  returns nil, and the module explains that every pre-open failure has nil
+  status and headers.
+- The module writes one text message, reads one message back, treats
+  `(nil, nil)` as the peer's Close, and calls `shutdown(1000)` before the
+  deferred `close()`.
+- The review rejects the `Authorization` dial header (`DialOptions` with
+  headers raises a string), deletes the `ping` heartbeat as native-only, and
+  moves the `accept` path to a native build.
+- The other criteria are met as in the first round, including the
+  owner-Runtime requirement.
+
+The delivered 99-line module built a browser image (`.mjs`, `.wasm` and
+`.wasm.map`). The answer marks one fact UNKNOWN that the cartridges do give:
+it avoids `case` over `websocket.MessageType`, although its own review uses
+`case` over `http.CacheMode`. This issue leaves that as it is.
+
+Limitations:
+
+- Each case has one answer from one model, and N2 has one for each prompt
+  revision. Answers vary between runs.
+- Print-mode logs keep only the final message, so the read-only-cartridges
+  instruction rests on each answer's disclosure and the write-protected copy.
+- No delivered module was run, in a browser, under Node, or natively.
+- Routing queries 28 and 29 were not run.
+- Everything ran on Linux x64 with Emscripten 6.0.13, so there is no macOS,
+  Windows, Clang or LTO claim.
+
+Final-tree checks, on the revised tree:
+
+- All 13 frontmatters have exactly `name` and `description`.
+- In the 14 Markdown files, 219 relative link targets and 89 anchors resolve
+  against the integrated #412 tree.
+- All 104 `titan` fences parse with the parser of the integrated tree. The
+  one fence that this branch changes, `fetch_small` in `titan-networking`,
+  compiled natively and with `--target browser` against the integrated
+  prefix.
+- `git diff --check` is clean.
+
+Receipts are in `/tmp/titan-bnet/docs/tmp/eval`: the overlay
+(`memory-off.yml`), the preamble and prompts (`prompts/`, with N2's revised
+prompt), the answers and their extracted modules (`answers/`,
+`answers/compile/`), the first N2 answer, log and module (`round1/`), the
+per-case logs, the compile log and the run sequences (`logs/`), the smoke and
+its memory-on control (`smoke/`, `smoke-control/`), `run_eval.py`, and
+`runs.json` with the argv, times and exit status of every run.
 
 ## Mechanical gates
 

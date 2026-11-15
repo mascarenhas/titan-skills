@@ -128,7 +128,8 @@ cookies, `Origin`, fragmentation, Pong replies, and `permessage-deflate`.
   queued until 64 KiB remain. Success means the browser accepted the message,
   not delivery. A closing, closed, or failed connection raises instead of
   silently dropping the message.
-- `shutdown` accepts only 1000 and 3000..4999 (1001..1014 raise `state`).
+- `shutdown` accepts only 1000 and 3000..4999; any other code, 1001..1014
+  included, raises `state`.
   `close()` is local, synchronous, and idempotent; the browser then sends an
   empty Close after queued data.
 - A valid peer Close, even followed by a reset, makes `read` return
