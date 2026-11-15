@@ -1085,18 +1085,21 @@ exist there. A shared interface is not shared behavior: the browser owns
 CORS, cookies, its HTTP cache, certificate trust, and connection pooling.
 
 - Requests need the instance's owner Runtime; in a `lua.new()` state they raise
-  `"async Runtime is not active"` (headers and options still work).
+  `"async Runtime is not active"` (headers and options still work). A `Client`
+  closes with its Runtime; later requests raise `"HTTP Client is closed"`.
 - `redirect` defaults to `follow()`. `manual()` gives an opaque-redirect
   response (`status == 0`, empty headers, `url` = requested URL, `read()`
-  returns nil); cross-origin `no_cors()` gives an opaque response with
-  `url == nil`.
+  returns nil). Cross-origin `no_cors()` gives an opaque response with
+  `url == nil` only under `follow()`; with `manual()`/`error()` it raises
+  `OperationError` `EIO`, as Fetch requires.
 - Rejected with strings before any request: a `ca_file`; `CONNECT`, `TRACE`,
   `TRACK`; any `GET`/`HEAD` body; and Fetch's forbidden request headers
   (`Cookie`, `Origin`, `Referer`, `Accept-Encoding`, `Connection`, `Date`,
   `Proxy-*`, `Sec-*`, method-override headers naming a forbidden method, and
-  the rest of the standard's list). A `Host` equal to the URL authority and a
-  `Content-Length` equal to the body length are removed instead; any other
-  valid `Host` raises a string, and a malformed one `url.Error`, as natively.
+  the rest of the standard's list). A `Host` matching the URL's host and port
+  (default ports normalized) and a `Content-Length` equal to the body length
+  are removed instead; any other valid `Host` raises a string, and a malformed
+  one `url.Error`, as natively.
 - `read` returns decoded bytes while `Content-Encoding`/`Content-Length`
   describe the wire: never decompress again or bound reads by
   `Content-Length`.
@@ -1108,6 +1111,10 @@ CORS, cookies, its HTTP cache, certificate trust, and connection pooling.
   `async.OperationError` named `"EIO"` with operation `"http.request"`
   (`"http.read"` mid-body); `ssl.Error` never appears. Under Node, which has no
   HTTP cache, `only_if_cached()` misses without a request.
+- Host limitations, not Titan policy: WebKit sends an `only_if_cached()` miss
+  to the network and returns that response; Node aborts the body of a
+  `follow()` redirect without `Location` (an `"http.read"` failure); Firefox and
+  WebKit drop a quoted-list override value such as `"foo,TRACE,bar"`.
 
 See [HTTP on the browser](../../../doc/language/standard-library-http.md#on-the-browser).
 
@@ -1133,6 +1140,9 @@ See [HTTP on the browser](../../../doc/language/standard-library-http.md#on-the-
   their own parser/transport lifecycle.
 - A handler or parse/framing error ends only that connection Task; the listener
   and other connections remain live.
+- An idle peer that closes before any byte of its next request is a normal
+  disconnect, also on HTTPS without `close_notify` (`TLS_TRUNCATED_EOF` there
+  ends the connection quietly); truncation after a request byte still fails.
 
 ### Request and response rules
 

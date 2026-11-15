@@ -115,10 +115,12 @@ cookies, `Origin`, fragmentation, Pong replies, and `permessage-deflate`.
 
 - `connect` needs the owner Runtime (`"async Runtime is not active"` in a
   `lua.new()` state), raises `url.Error` for a bad URL, and a string for a
-  non-`ws`/`wss` scheme or `DialOptions` with any headers or a `ca_file`.
-- Every pre-open failure, HTTP rejection, DNS, refusal, and TLS alike, is
-  `HandshakeError("WebSocket opening handshake failed", nil, nil)`; offered but
-  unselected subprotocols fail the opening instead of `subprotocol() == nil`.
+  non-`ws`/`wss` scheme or `DialOptions` with any headers or a `ca_file`. A
+  `Connection` closes with its Runtime.
+- Every pre-open failure, HTTP rejection, DNS, refusal, and TLS alike, is a
+  `HandshakeError` with nil status and headers (`"WebSocket opening handshake
+  failed"` for a rejected opening). Titan fails an offered but unselected
+  subprotocol on every engine instead of returning `subprotocol() == nil`.
 - `read_limit` applies to the decompressed length; earlier messages arrive
   first, then `Error("limit", "websocket.read", ..., 1009)` without copying
   the big message. Unread small messages are not backpressured.
