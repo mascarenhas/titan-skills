@@ -1095,7 +1095,8 @@ CORS, cookies, its HTTP cache, certificate trust, and connection pooling.
   (`Cookie`, `Origin`, `Referer`, `Accept-Encoding`, `Connection`, `Date`,
   `Proxy-*`, `Sec-*`, method-override headers naming a forbidden method, and
   the rest of the standard's list). A `Host` equal to the URL authority and a
-  `Content-Length` equal to the body length are removed instead.
+  `Content-Length` equal to the body length are removed instead; any other
+  valid `Host` raises a string, and a malformed one `url.Error`, as natively.
 - `read` returns decoded bytes while `Content-Encoding`/`Content-Length`
   describe the wire: never decompress again or bound reads by
   `Content-Length`.
@@ -1325,7 +1326,7 @@ ordering. A pending read cancellation terminalizes its TLS connection.
 | `url.parse`, `url.parse_request` | `(Url?, Error?)` result | Malformed input does not raise |
 | `net` and libuv-backed file/network operations | `read*` returns nil EOF | `async.OperationError {code,name,message,operation}` plus argument/state strings |
 | `ssl` | authenticated `close_notify` becomes nil EOF | `ssl.Error` for TLS/cert failures; wrapped `net`/`fs` errors remain `async.OperationError`; argument/state errors may be strings |
-| `http.request/get` | body `read*` returns nil EOF | invalid URL raises `url.Error`; request-option policy failures raise `async.OperationError` `EIO`/`http.request` on both targets; native TLS/network errors retain their types; HTTP parse/framing/state and argument errors may be strings (there is no `http.Error`); browser host failures are all `OperationError` `EIO` |
+| `http.request/get` | body `read*` returns nil EOF | invalid URL or malformed supplied `Host` raises `url.Error`; request-option policy failures raise `async.OperationError` `EIO`/`http.request` on both targets; native TLS/network errors retain their types; HTTP parse/framing/state and argument errors may be strings (there is no `http.Error`); browser host failures are all `OperationError` `EIO` |
 | HTTP server handler | request body nil EOF | uncaught handler/protocol error terminates only that connection Task |
 
 Use `error is T` only when policy genuinely distinguishes that record. Then
