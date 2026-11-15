@@ -1116,6 +1116,8 @@ CORS, cookies, its HTTP cache, certificate trust, and connection pooling.
   to the network and returns that response; Node aborts the body of a
   `follow()` redirect without `Location` (an `"http.read"` failure); Firefox and
   WebKit drop a quoted-list override value such as `"foo,TRACE,bar"`.
+  WebKit can expose a body on a manual redirect without `Location`; Titan
+  closes that session and returns the required empty opaque-redirect body.
 
 See [HTTP on the browser](../../../doc/language/standard-library-http.md#on-the-browser).
 

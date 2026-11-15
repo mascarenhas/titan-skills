@@ -130,10 +130,19 @@ cookies, `Origin`, fragmentation, Pong replies, and `permessage-deflate`.
   queued until 64 KiB remain. Success means the browser accepted the message,
   not delivery. A closing, closed, or failed connection raises instead of
   silently dropping the message.
+  Loss notification can lag queue drainage: Node may stay OPEN after a paused
+  peer's FIN until the peer resumes reading, and WebKit may drain before
+  reporting a remote Close/reset. An admitted write may succeed while the host
+  reports OPEN; a later write raises once loss is reported.
 - `shutdown` accepts only 1000 and 3000..4999; any other code, 1001..1014
   included, raises `state`.
   `close()` is local, synchronous, and idempotent; the browser then sends an
   empty Close after queued data.
+- Firefox retains a cancelled or timed-out opening's TCP connection until the
+  peer answers the handshake or the browser closes. Node retains a rejected
+  opening's TCP connection (invalid response or unselected subprotocol) until
+  the peer closes. Titan has already detached listeners and closed the host
+  socket; local retirement does not promise immediate TCP closure.
 - A valid peer Close, even followed by a reset, makes `read` return
   `(nil, nil)`; `close_status()` keeps any code except 1005/1006/1015.
   Transport loss raises `Error("abnormal", op, "transport ended before
