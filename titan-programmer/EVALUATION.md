@@ -245,11 +245,31 @@ flow and explicit statements that:
 `titan-async` only when the prompt directly designs Task/timer mechanics)
 
 Produce a verified HTTPS GET with a custom header and complete streaming body,
-plus a plain HTTP server lifecycle. Require exact current API names and explain
-TCP versus TLS concurrent-operation rules, TLS shutdown versus truncation,
-HTTP idle-timeout ownership asymmetry, ordered duplicate header semantics, and
-the initial request/response framing limits. Reject LuaSocket, Go, Node, or
-invented convenience APIs.
+plus a plain HTTP server lifecycle. Require exact current API names, the header
+and CA passed through one `http.RequestOptions { headers = ..., ca_file = ... }`
+named call rather than positional arguments, and the native `manual()`
+redirect default. Explain TCP versus TLS concurrent-operation rules, TLS
+shutdown versus truncation, HTTP idle-timeout ownership asymmetry, ordered
+duplicate header semantics, and the initial request/response framing limits.
+Reject LuaSocket, Go, Node, or invented convenience APIs.
+
+### N2 — browser network clients (`titan-programmer` + `titan-networking` + `titan-websocket`)
+
+Ask for one browser-target module that POSTs binary bytes with a JSON
+`Content-Type` through `http.request`, follows redirects, treats a 0 status as
+opaque, and then echoes one text message over `websocket.connect` before a
+`shutdown(1000)`. Also review a port of native code that sends `Cookie` and
+`Accept-Encoding` headers, passes a `ca_file`, gunzips the body, catches
+`ssl.Error`, and compares `http.CacheMode` values with `==`. Require one
+`RequestOptions` named call, `case` for mode values, the browser `follow()`
+default, rejection of `ca_file`, `Cookie`, and `Accept-Encoding` before any
+request, decoded bodies with wire `Content-Encoding`, host failures as
+`async.OperationError` `"EIO"`/`"http.request"`, `HandshakeError` without
+status or headers for every pre-open WebSocket failure, no `ping`, `accept`, or
+dial headers on the browser, and the owner-Runtime requirement. Reject an
+invented `fetch` binding, positional options, a second decompression, or
+`ssl.Error`. The module must compile with `titanc --target browser` against
+the matching installed browser SDK.
 
 ### F1 — FFI and Lua escape hatch (`titan-programmer` + `titan-ffi`)
 
@@ -701,8 +721,12 @@ these queries:
     serialization in `titan-compiler`;
 25. configure `rust-analyzer` in omp `lsp.json` for a Rust repository;
 26. expose a Titan closure to JavaScript with `titan.browser` and await its
-    result from a web page; and
-27. add `browser.tests` cases for a new `titan.browser` request form.
+    result from a web page;
+27. add `browser.tests` cases for a new `titan.browser` request form;
+28. POST bytes with `http.request` from a `--target browser` page and handle a
+    CORS failure; and
+29. read messages from a browser `websocket.connect` session and report its
+    close status.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -722,6 +746,10 @@ JSON); query 24 selects **completion** (adding programmer only when `.titan`
 files are read or edited); query 25 is a negative control and selects `none`.
 Queries 26 and 27 select **programmer + ffi**, adding **tester** for 27; the
 bridge's promises are JavaScript, not Titan Tasks, so neither selects async.
+Query 28 selects **programmer + networking** and query 29 **programmer +
+websocket**: the browser clients are the public `http` and `websocket`
+modules, so neither selects ffi merely because `fetch` and `WebSocket` sit
+behind the bridge.
 
 ## Recorded baseline and post-change results
 
