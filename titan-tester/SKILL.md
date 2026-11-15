@@ -655,8 +655,9 @@ selects them through `--test-dir`; the manifest audits the expected inventory,
 not a module build graph. `test.tests` remains the explicit first root, and
 `--exe` preserves `out/tests/test/tests` as the POSIX aggregate executable.
 
-The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names twenty-one owners,
-including `lua.tests`, `os.tests`, and `io.tests`, that
+The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names twenty-three owners,
+including `lua.tests`, `os.tests`, `io.tests`, `http.tests`, and
+`websocket.tests`, that
 `make titan-stdlib-browser-test` runs under Node and headless Chromium (emsdk,
 Node 26, Chromium, the browser SDK, and the installed native provider
 required). All of them build into one `--target browser --test` image,
@@ -686,7 +687,8 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
 - An owner in `TITAN_STDLIB_BROWSER_TEST_ROOTS` may import only:
   - the browser standard-library modules (`coroutine`, `gc`, `iteration`,
     `math`, `test`, `reflect`, `json`, `protobuf`, `transfer`, `peg`,
-    `string`, `url`, `path`, `io`, `os`, `lua`, `async`, `timer`);
+    `string`, `url`, `path`, `io`, `os`, `lua`, `async`, `timer`, `http`,
+    `websocket`);
   - owner-local support and `support.common.titan`;
   - `support.runtime` and `support.async`, whose `drive.native.titan` helpers
     are native-only.
@@ -698,6 +700,12 @@ owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browse
   into a browser variant. Derive target facts (`size_t` width, pointer width,
   string limits, endianness, locale, nesting limits) from the target instead
   of skipping them.
+
+  Live-server cases of the `http` and `websocket` browser clients belong to
+  `http.browser_tests` and `websocket.browser_tests`, which run outside this
+  root list against the native peers of `spec/coder/browser_net_spec.lua`;
+  keep only network-free cases (headers, options, fail-fast refusals) in
+  `http.tests` and `websocket.tests`.
 - Browser-only `titan.browser` behavior lives in its target-specific owner
   `browser.tests` (`spec/stdlib/titan/browser/tests.browser.titan`, which
   imports the helper module `browser.independent`), outside

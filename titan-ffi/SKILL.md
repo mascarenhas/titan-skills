@@ -1715,8 +1715,9 @@ disposal interrupts it; each secondary failure is reported once as cleanup.
 hooks `stdoutEnd`/`stderrEnd`, and a snapshotted per-instance `env` object.
 Sinks and end hooks may return promises; input returns bytes or EOF, directly
 or by promise. The reserved `titan:stdin`, `titan:stdout`, `titan:stderr`,
-and `titan:stdio` sources are SDK-internal, not application bindings.
-Use public `os` streams; read the
+`titan:stdio`, `titan:fetch`, and `titan:websocket` sources are SDK-internal,
+not application bindings. Use public `os` streams, and prefer the `http` and
+`websocket` clients to a hand-written `fetch` or `WebSocket` binding; read the
 [loader options](../../../doc/language/browser-target.md#the-loader-api)
 for validation, ordering, and disposal.
 
@@ -2737,12 +2738,14 @@ can perform:
 | Suspend or resume Wasm (JSPI); handle an engine failure | `TitanBrowser.enter` and `transfer`, the gate promise of `relinquish`, `poison` |
 | Hold or convert JavaScript values and host objects | the slot table (`newSlot`, `getSlot`), `CallableView` wrappers, `writeValue`, `valuesAt` |
 | Host scheduling and event APIs | `setTimeout` in `timeoutSource`, the `setImmediate`/`MessageChannel` turn source, the `AbortSignal` listener `taskAborted`, request promise continuations |
+| Host network objects | the `titan:fetch` source (`fetch`, one `AbortController` and stream reader per session, the host HTTP-cache presence) and the `titan:websocket` source (the `WebSocket`, its three listeners, `readyState`, `bufferedAmount`) |
 | The embedder-facing promise API | `admission`, `operate`, `call`, `dispose`, `TitanBrowserError` objects, `onNotificationError` |
 | Engine stack capture | `TitanBrowserTrace.capture` |
 
 Everything else is Titan. State, policy, validation, and bookkeeping go to
 `titan.browser` or to the module that owns the behavior (`async`'s browser
-backend, `timer`), and the generated launcher owns image lifecycle. Read the
+backend, `timer`, the `http` and `websocket` browser clients), and the
+generated launcher owns image lifecycle. Read the
 rules this way for JavaScript (rules 2 and 5 have no JavaScript reading):
 
 - **Rule 1.** A new import is one line that forwards to the JavaScript
