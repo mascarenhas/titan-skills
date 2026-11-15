@@ -1,6 +1,6 @@
 ---
 name: titan-networking
-description: Write, review, and test Titan TCP, TLS, HTTP/1.1, and URL code with the exact net, ssl, http, url, io, async, and timer contracts. Use for clients, servers, byte streams, certificate verification, HTTP framing, URL normalization, network cancellation, or network-resource cleanup. API-provided network timeouts are covered here; add titan-async for asynchronous networking behavior tests or when directly designing Task, timer, cancellation, or Runtime mechanics.
+description: Write, review, and test Titan TCP, TLS, HTTP/1.1, and URL code with the exact net, ssl, http, url, io, async, and timer contracts, including http.RequestOptions, redirect modes, and the browser fetch client. Use for clients, servers, byte streams, certificate verification, HTTP framing, URL normalization, network cancellation, or network-resource cleanup. API-provided network timeouts are covered here; add titan-async for asynchronous networking behavior tests or when directly designing Task, timer, cancellation, or Runtime mechanics.
 ---
 
 # Titan networking
@@ -19,7 +19,10 @@ designing Task/timer/cancellation or Runtime ownership, `titan-tester` for nativ
 behavior tests, `titan-pegs` when changing the URL grammar, and `titan-ffi` when
 changing the standard library's native boundary. Normal applications use these high-level APIs. Low-level adapters may import
 public `uv`; only `titan.uv` may import libuv headers/types/helpers. Keep
-OpenSSL and llhttp FFI inside their established library boundaries.
+OpenSSL and llhttp FFI inside their established library boundaries. On
+`--target browser` only `url` and the `http` client exist; read
+[HTTP on the browser target](#http-on-the-browser-target) before writing
+browser network code.
 
 ## Evidence labels used here
 
@@ -265,29 +268,40 @@ function Headers:values(name: string): {string}
 function Headers:remove(name: string)
 function Headers:all(): {Header}
 
+union CacheMode
+  default()  no_store()  reload()  no_cache()  force_cache()  only_if_cached()
+end
+union CredentialsMode: omit(), same_origin(), include()
+union RequestMode:     cors(), no_cors(), same_origin()
+union RedirectMode:    follow(), error(), manual()
+
+record RequestOptions   -- opaque validated snapshot; all fields private
+function RequestOptions.new(headers: Headers?, body: string?, ca_file: string?,
+                            cache: CacheMode?, credentials: CredentialsMode?,
+                            mode: RequestMode?,
+                            redirect: RedirectMode?): RequestOptions
+
 record ClientResponse
   status: integer
   reason: string
-  version: string
   headers: Headers
+  url: string?
+  redirected: boolean
 end
 
 record Client
 function Client.new(): Client
 function Client:request(method: string, source_url: string,
-                        supplied_headers: Headers?, body: string?,
-                        ca_file: string?): ClientResponse
-function Client:get(source_url: string, supplied_headers: Headers?,
-                    ca_file: string?): ClientResponse
+                        options: RequestOptions?): ClientResponse
+function Client:get(source_url: string,
+                    options: RequestOptions?): ClientResponse
 function Client:close_idle_connections()
 function Client:close()
 function close_idle_connections()
 
 function request(method: string, source_url: string,
-                 supplied_headers: Headers?, body: string?,
-                 ca_file: string?): ClientResponse
-function get(source_url: string, supplied_headers: Headers?,
-             ca_file: string?): ClientResponse
+                 options: RequestOptions?): ClientResponse
+function get(source_url: string, options: RequestOptions?): ClientResponse
 function request_upgrade_on(connection: io.ReaderWriterCloser,
                             abort: function(): (), source_url: string,
                             protocol: string, supplied_headers: Headers?): ClientResponse
@@ -368,10 +382,12 @@ listed public fields but also own private transport/parser state, so neither has
 a public generated constructor. Use `headers`, `request`/`get` (or an explicit Client), and
 `listen`/`listen_tls`.
 
-This is an HTTP/1.1-only pooled client and serial keep-alive server. There
-is no `Router`, request builder, streaming request-body Writer, response `body`
-field, redirect policy, decompressor, cookie jar, proxy mode,
-HTTP/2, endpoint getter, or generic middleware API. Validated HTTP upgrades
+Natively this is an HTTP/1.1-only pooled client and serial keep-alive server.
+There is no `Router`, request builder, streaming request-body Writer, response
+`body` field, native decompressor, cookie jar or HTTP cache, proxy mode,
+HTTP/2, endpoint getter, or generic middleware API. `RequestOptions` is the
+one request option record, and redirect policy is its `redirect` mode.
+Validated HTTP upgrades
 transfer a prefix-preserving stream exactly once. Use the dedicated
 [`titan-websocket`](../titan-websocket/SKILL.md) cartridge for the WebSocket
 protocol built on those upgrade seams. Raw incoming headers default to 64 KiB;
@@ -528,7 +544,7 @@ skill/manual for exact result unions and arities.
 
 ## Titan spelling rules that matter in network code
 
-### Omit trailing optional arguments; do not invent option records
+### Omit trailing optional arguments; use only the real option records
 
 Titan fixed calls nil-fill omitted positions, and every optional position here
 accepts nil. These are valid public calls:
@@ -537,14 +553,18 @@ accepts nil. These are valid public calls:
 net.listen("127.0.0.1", 8080)          -- backlog 128
 ssl.connect("example.com", 443)         -- default OpenSSL trust paths
 ssl.listen("127.0.0.1", 8443, "server.pem") -- combined cert/key PEM
-http.get("https://example.com/")        -- no headers, default TLS trust
+http.get("https://example.com/")        -- default options and trust
 http.listen("127.0.0.1", handler)       -- port 80, backlog 128, no deadline
 response:set_status(404)                 -- default reason phrase
 connection:read_until("\n")             -- delimiter retained
 ```
 
-Do not replace these with guessed option tables, named `Config` records, or
-Go-style functional options.
+The HTTP client's only options are one `http.RequestOptions`, built with a
+named call: `http.get(url, http.RequestOptions { headers = h, ca_file = path })`.
+Never pass headers, a body, or `ca_file` positionally to `request`/`get`.
+`websocket.DialOptions`/`AcceptOptions` are the other option records. Do not
+invent further option tables, named `Config` records, or Go-style functional
+options.
 
 ### Options auto-unwrap at their use; `value` does not
 
@@ -892,19 +912,23 @@ fails.
 
 ### Request construction
 
-- `request` validates `method` as an HTTP token. Method names are
-  case-sensitive; exact `HEAD` selects no-body response framing.
-- The source URL must be the `url` module's HTTP/HTTPS subset. HTTPS forwards
-  `ca_file` exactly to `ssl.connect`; plain HTTP ignores it.
-- Supplied `Headers` are copied. Header names compare with ASCII case folding,
-  but original spelling, duplicates, and insertion order are retained.
-  `get` returns the first; `values` returns all; `set` removes all matches and
-  appends one replacement; `all` returns copied records.
+- `request(method, source_url, options?)` validates `method` as an HTTP
+  token. Method names are case-sensitive; exact `HEAD` selects no-body
+  response framing. `get(source_url, options?)` is `GET` and rejects options
+  carrying any body (string error); native `request("GET", ...)` may send one.
+- The source URL must be the `url` module's HTTP/HTTPS subset (else
+  `url.Error`). Native HTTPS forwards the options' `ca_file` exactly to
+  `ssl.connect` on every hop; plain HTTP ignores it.
+- Option headers are copied into the `RequestOptions` snapshot. Header names
+  compare with ASCII case folding, but original spelling, duplicates, and
+  insertion order are retained. `get` returns the first; `values` returns all;
+  `set` removes all matches and appends one replacement; `all` returns copied
+  records.
 - Header names must be nonempty HTTP tokens. Values reject forbidden controls
   and DEL, including NUL/CR/LF; this prevents injection.
 - There may be at most one Host. An absent Host is generated from
   `Url.authority`; a supplied Host is separately validated as one complete
-  authority and is preserved on the wire.
+  authority and is preserved on the wire (native only).
 - The optional request body is one in-memory binary string. The client creates
   or checks exact Content-Length, rejects request Transfer-Encoding, and
   rejects Expect because it has no staged `100-continue` client state.
@@ -913,6 +937,42 @@ fails.
   `http.Client()` creates a separate pool that binds on its first request, not
   construction. Its `get` and `request`
   methods have the same arguments as the module helpers.
+
+### Request options and redirects
+
+Build options once with a named call and reuse them; the snapshot is
+immutable, copies its headers, and no request or redirect changes it. The
+constructor raises unless `only_if_cached()` comes with an explicit
+`mode = http.RequestMode.same_origin()`. A `nil` mode means the target default:
+
+| Option | `nil` on native | `nil` on browser |
+| --- | --- | --- |
+| `cache` | `default()` | `default()` |
+| `credentials` | `same_origin()` | `same_origin()` |
+| `mode` | `cors()` | `cors()` |
+| `redirect` | **`manual()`** | **`follow()`** |
+
+- **Match modes with `case`, never `==`.** Each constructor call makes a new
+  value and union equality is identity: `CacheMode.reload() ==
+  CacheMode.reload()` is false.
+- **Native targets behave like a browser with an empty cache, no cookie jar,
+  and no CORS.** Every cache mode exchanges normally except `only_if_cached()`,
+  which always misses; `credentials` adds nothing; `no_cors()` only restricts
+  methods to GET/HEAD/POST (both targets).
+- **Redirect statuses are 301, 302, 303, 307, 308, with or without
+  `Location`.** `manual()` returns that response (native: the raw 3xx, with
+  `redirected = false`); `error()` closes it and raises. `follow()` follows
+  Fetch rules natively: no `Location` returns the 3xx; at most 20 hops;
+  fragments dropped and relative/dot-segment references resolved; 301/302
+  `POST` and 303 non-GET/HEAD become bodyless `GET`; a cross-origin hop
+  (scheme, host, effective port; `https` to `http` included) strips
+  `Authorization`, `Proxy-Authorization`, `Cookie`, `Cookie2`, and `Host` for
+  the rest of the chain. `url` is the final URL and `redirected` is true.
+- **Request-option policy failures** (`only_if_cached()` miss, `error()` on a
+  redirect, a hop limit or unusable `Location`) raise `async.OperationError`
+  with `name == "EIO"` and `operation == "http.request"` on both targets.
+  Branch on `name`/`operation`, never on the target-specific `code`. Argument
+  and option violations stay strings.
 
 ### Response ownership
 
@@ -980,8 +1040,9 @@ and other methods are never replayed. Dirty input detected before output causes
 fresh dialing without replay. Public header edits cannot change wire-derived
 reuse or drain policy.
 
-Redirects and content codings are returned unchanged; the caller owns those
-policies.
+A native client returns redirect responses under the default `manual()` and
+returns content codings unchanged; pass `redirect = http.RedirectMode.follow()`
+to follow, and decompress yourself. The browser follows and decodes.
 
 **COMPOSITION SKETCH — streaming client with a bounded body policy:**
 
@@ -992,7 +1053,7 @@ local str = import "string"
 function fetch_small(source: string, maximum: integer): string
   local supplied = http.headers(nil)
   supplied:add("Accept", "text/plain")
-  local response = http.get(source, supplied, nil)
+  local response = http.get(source, http.RequestOptions { headers = supplied })
   defer response:close()
   if response.status < 200 or response.status >= 300 then
     raise "HTTP request returned status " .. str.tostring(response.status)
@@ -1009,8 +1070,45 @@ function fetch_small(source: string, maximum: integer): string
 end
 ```
 
-For HTTPS with a pinned/test trust bundle, pass it as the third `get` argument:
-`http.get(source, nil, "ca.pem")`. There is no insecure boolean.
+For HTTPS with a pinned/test trust bundle, pass it in the options:
+`http.get(source, http.RequestOptions { ca_file = "ca.pem" })`. There is no
+insecure boolean.
+
+### HTTP on the browser target
+
+On `--target browser`, `http` is a client over the host `fetch` with the
+native signatures: headers, `RequestOptions` and its unions, `Client`,
+`ClientResponse` (`read`, `read_until`, `close`), `request`, `get`, and
+`close_idle_connections`. Servers, `Request`, `Response`, `Handler`,
+`request_upgrade_on`, `take_upgrade`, `UpgradedStream`, and `Exchange` do not
+exist there. A shared interface is not shared behavior: the browser owns
+CORS, cookies, its HTTP cache, certificate trust, and connection pooling.
+
+- Requests need the instance's owner Runtime; in a `lua.new()` state they raise
+  `"async Runtime is not active"` (headers and options still work).
+- `redirect` defaults to `follow()`. `manual()` gives an opaque-redirect
+  response (`status == 0`, empty headers, `url` = requested URL, `read()`
+  returns nil); cross-origin `no_cors()` gives an opaque response with
+  `url == nil`.
+- Rejected with strings before any request: a `ca_file`; `CONNECT`, `TRACE`,
+  `TRACK`; any `GET`/`HEAD` body; and Fetch's forbidden request headers
+  (`Cookie`, `Origin`, `Referer`, `Accept-Encoding`, `Connection`, `Date`,
+  `Proxy-*`, `Sec-*`, method-override headers naming a forbidden method, and
+  the rest of the standard's list). A `Host` equal to the URL authority and a
+  `Content-Length` equal to the body length are removed instead.
+- `read` returns decoded bytes while `Content-Encoding`/`Content-Length`
+  describe the wire: never decompress again or bound reads by
+  `Content-Length`.
+- `headers` arrive lowercase, sorted, comma-joined, without `Set-Cookie` or
+  trailers; CORS hides headers the server does not expose.
+- `close()` aborts the fetch synchronously, with no drain; cancellation aborts
+  too. `close_idle_connections` does nothing.
+- Every host failure (DNS, refusal, TLS, CORS, mixed content) is
+  `async.OperationError` named `"EIO"` with operation `"http.request"`
+  (`"http.read"` mid-body); `ssl.Error` never appears. Under Node, which has no
+  HTTP cache, `only_if_cached()` misses without a request.
+
+See [HTTP on the browser](../../../doc/language/standard-library-http.md#on-the-browser).
 
 ## HTTP servers
 
@@ -1227,7 +1325,7 @@ ordering. A pending read cancellation terminalizes its TLS connection.
 | `url.parse`, `url.parse_request` | `(Url?, Error?)` result | Malformed input does not raise |
 | `net` and libuv-backed file/network operations | `read*` returns nil EOF | `async.OperationError {code,name,message,operation}` plus argument/state strings |
 | `ssl` | authenticated `close_notify` becomes nil EOF | `ssl.Error` for TLS/cert failures; wrapped `net`/`fs` errors remain `async.OperationError`; argument/state errors may be strings |
-| `http.request/get` | body `read*` returns nil EOF | invalid URL raises `url.Error`; TLS/network errors retain their types; HTTP parse/framing/state errors may be strings (there is no `http.Error`) |
+| `http.request/get` | body `read*` returns nil EOF | invalid URL raises `url.Error`; request-option policy failures raise `async.OperationError` `EIO`/`http.request` on both targets; native TLS/network errors retain their types; HTTP parse/framing/state and argument errors may be strings (there is no `http.Error`); browser host failures are all `OperationError` `EIO` |
 | HTTP server handler | request body nil EOF | uncaught handler/protocol error terminates only that connection Task |
 
 Use `error is T` only when policy genuinely distinguishes that record. Then
@@ -1367,8 +1465,8 @@ low-level networking adapter.
 
 - `net` composes public `uv` and generic `async` operations. SSL performs
   transport/path work through `net`/`fs` and confines OpenSSL to its FFI
-  boundary. HTTP composes public `net`/`ssl`/`url`/`io`/`async`/`timer` and
-  confines llhttp to its synchronous parser bridge. No consumer imports
+  boundary. Native HTTP composes public `net`/`ssl`/`url`/`io`/`async`/`timer`
+  and confines llhttp to its synchronous parser bridge. No consumer imports
   libuv FFI, including via a transitive native header or `uv.titan` import.
 - One-shot callbacks settle their exact await capability after copying
   borrowed results and retiring required native storage. Unexpected consumed
@@ -1401,8 +1499,13 @@ low-level networking adapter.
   deadline-win cancels and drains the state-owning reader. The reader drain
   uses cancellation-insensitive await on every parent exit. Do not add a native
   HTTP timeout path.
-- HTTP's folder contributors are one module. Its only native boundary is the
-  synchronous llhttp callback bridge; it has no raw/native network callback or private Task API.
+- HTTP's folder contributors are one module: shared `http.titan`,
+  `headers.titan`, `options.titan`; `*.native.titan` client, pool, parser,
+  server, transfer, and upgrade; `client.browser.titan`. Its only native
+  boundary is the synchronous llhttp callback bridge; it has no raw/native
+  network callback or private Task API. The browser client reaches the host
+  only through `titan.browser`'s `titan:fetch` source, and every header,
+  cache, redirect, and error policy stays in Titan.
   URL is pure Titan PEG/string code and synchronous.
 
 Authority:
@@ -1445,9 +1548,14 @@ Reject code or advice that does any of the following:
 - manually splits a URL, uses `host` as an HTTP Host header for IPv6, assumes
   relative URLs/fragments/userinfo are supported, or expects URL parse errors
   to raise;
-- expects `http.get` to follow redirects or decompress responses, supplies
-  a streaming request body, mutates `Response:headers()` as a live view, or
+- expects a native `http.get` to follow redirects without
+  `RedirectMode.follow()` or to decompress, compares mode unions with `==`,
+  passes headers/body/`ca_file` positionally to `request`/`get`, supplies a
+  streaming request body, mutates `Response:headers()` as a live view, or
   invents a Router/middleware/proxy/HTTP2 API;
+- uses a browser `ca_file`, custom `Host`, forbidden request header, `GET`
+  body, server, or upgrade; decompresses a browser body again; or expects
+  `ssl.Error`, `Set-Cookie`, or a native redirect default on the browser;
 - uses HTTP idle timeout as a handler/body/write timeout or expects HTTPS timeout
   cancellation to send graceful `close_notify`;
 - casts a checked `Url?`, `string?`, Connection?, Server?, or response option
@@ -1479,8 +1587,11 @@ Before proposing networking code, answer all of these:
 9. Does URL code use `host`/`port`, `target`, and `authority` for their distinct
    roles?
 10. Does HTTP code close responses, obey header/body framing, and avoid claiming
-    redirects, decompression, or broad timeout coverage? Are active/draining
-    connections excluded from reuse and Client lifetimes scoped to a Runtime?
+    native redirect following without `follow()`, decompression, or broad
+    timeout coverage? Are modes matched with `case`, options built once with a
+    named call, active/draining connections excluded from reuse, and Client
+    lifetimes scoped to a Runtime? Does browser code respect the browser
+    restrictions and error identities?
 11. Are caught failures distinguished by their real record type, with bare
     re-raise for unhandled values?
 12. Are option values consumed directly rather than cargo-cult-cast?
@@ -1522,9 +1633,11 @@ uses unbracketed IPv6 Host.
 **Prompt:** "Fetch a small HTTPS response from a test server using a checked-in
 CA and reject non-2xx status."
 
-**Pass:** `http.get(url, ..., ca_file)` or `ssl.connect(..., ca_file)`; immediate
-response/connection close; streams and bounds body; does not disable identity
-verification; does not expect redirects/decompression. **Fail:** `verify=false`,
+**Pass:** `http.get(url, http.RequestOptions { ca_file = path })` or
+`ssl.connect(..., ca_file)`; immediate response/connection close; streams and
+bounds body; does not disable identity verification; does not expect native
+redirect following or decompression. **Fail:** `verify=false`, a positional
+`ca_file` argument to `get`,
 CA-directory invention, response `.body`, or duplicate same-direction TLS operations/exclusive close during active I/O.
 
 ### Eval 4 — TLS accept-loop stall
@@ -1600,3 +1713,17 @@ run between two nonyielding assignments in a handler."
 non-reentrant loop; audits only real yields; keeps direct state flow and existing
 owner/helper. **Fail:** adds a lock, ready queue, Runtime generation, snapshot
 rollback, or defensive duplicate-close flag.
+
+### Eval 11 — Browser fetch client
+
+**Prompt:** "Port a native helper that POSTs bytes with `Cookie` and
+`Accept-Encoding: identity` headers, a `ca_file`, and gzip decompression to
+`--target browser`."
+
+**Pass:** keeps `http.request` with one `RequestOptions`; drops `ca_file`,
+`Cookie`, and `Accept-Encoding` because the browser rejects them (strings,
+before any request) and uses `credentials` for cookies; removes the manual
+decompression because browser bodies are decoded; handles host failures as
+`OperationError` `EIO`/`http.request`; notes the `follow()` default and CORS.
+**Fail:** keeps forbidden headers or `ca_file`, catches `ssl.Error`, compares
+modes with `==`, or invents a JavaScript `fetch` binding instead of `http`.

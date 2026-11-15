@@ -1,6 +1,6 @@
 ---
 name: titan-websocket
-description: Write, review, and test Titan WebSocket clients and HTTP/TLS upgrade handlers with message framing, origin/subprotocol policy, Ping/Close, cancellation, and owned session cleanup. Use for titan.websocket work; ordinary TCP/TLS/HTTP uses titan-networking.
+description: Write, review, and test Titan WebSocket clients (native and browser) and HTTP/TLS upgrade handlers with message framing, origin/subprotocol policy, Ping/Close, cancellation, and owned session cleanup. Use for titan.websocket work; ordinary TCP/TLS/HTTP uses titan-networking.
 ---
 
 # Titan WebSocket
@@ -12,7 +12,9 @@ native tests and `titan-ffi` when changing the synchronous crypto/byte boundary.
 The module is message-oriented, direct Task-blocking RFC 6455 version 13 over
 HTTP/1.1. Import `websocket`; never substitute a Node event emitter, LuaSocket
 API or private UV/HTTP/TLS fields. Ordinary `http.Handler` owns routing/auth
-before `websocket.accept`; the same handler works in `http.listen_tls`.
+before `websocket.accept`; the same handler works in `http.listen_tls`. On
+`--target browser` only the client exists, over the host `WebSocket`; read
+[the browser client](#browser-client) first.
 
 ## Public contract
 
@@ -20,6 +22,7 @@ before `websocket.accept`; the same handler works in `http.listen_tls`.
 union MessageType: text(), binary()
 const TEXT, BINARY: MessageType
 record Connection -- opaque; no public constructor
+-- native only: AcceptOptions, accept, Connection:ping, the three transfer hooks
 DialOptions(headers:http.Headers?, ca_file:string?, subprotocols:({string})?,
             read_limit:integer?, handshake_timeout:integer?)
 AcceptOptions(subprotocols:({string})?, allowed_origins:({string})?,
@@ -99,9 +102,39 @@ These paths do not produce a server accept HandshakeError.
 TLS always verifies the original URL hostname and chain. `ca_file` replaces
 default trust per SSL. Dial already-resolved numeric endpoints without changing
 Host/SNI/cert identity. No insecure mode, redirects, proxies, cookies/reconnect
-policy, automatic heartbeat, extensions/compression or HTTP2/3 support exists.
-Valid extension offers are syntactically checked and ignored; clients reject
-unsolicited extension negotiation and all nonzero RSV bits.
+policy, automatic heartbeat, extensions/compression or HTTP2/3 support exists
+natively. Valid extension offers are syntactically checked and ignored; native
+clients reject unsolicited extension negotiation and all nonzero RSV bits.
+
+## Browser client
+
+On `--target browser`, `connect`, `DialOptions`, and `Connection`'s `read`,
+`write`, `shutdown`, `close`, `subprotocol`, and `close_status` keep their
+native signatures over the host `WebSocket`. The browser owns TCP/TLS, trust,
+cookies, `Origin`, fragmentation, Pong replies, and `permessage-deflate`.
+
+- `connect` needs the owner Runtime (`"async Runtime is not active"` in a
+  `lua.new()` state), raises `url.Error` for a bad URL, and a string for a
+  non-`ws`/`wss` scheme or `DialOptions` with any headers or a `ca_file`.
+- Every pre-open failure, HTTP rejection, DNS, refusal, and TLS alike, is
+  `HandshakeError("WebSocket opening handshake failed", nil, nil)`; offered but
+  unselected subprotocols fail the opening instead of `subprotocol() == nil`.
+- `read_limit` applies to the decompressed length; earlier messages arrive
+  first, then `Error("limit", "websocket.read", ..., 1009)` without copying
+  the big message. Unread small messages are not backpressured.
+- `write` validates UTF-8, yields once, then waits while more than 256 KiB is
+  queued until 64 KiB remain. Success means the browser accepted the message,
+  not delivery. A closing, closed, or failed connection raises instead of
+  silently dropping the message.
+- `shutdown` accepts only 1000 and 3000..4999 (1001..1014 raise `state`).
+  `close()` is local, synchronous, and idempotent; the browser then sends an
+  empty Close after queued data.
+- A valid peer Close, even followed by a reset, makes `read` return
+  `(nil, nil)`; `close_status()` keeps any code except 1005/1006/1015.
+  Transport loss raises `Error("abnormal", op, "transport ended before
+  WebSocket Close", nil)`, replayed by later calls.
+
+See [WebSocket on the browser](../../../doc/language/standard-library-websocket.md#on-the-browser).
 
 ## Transferring native sessions
 
@@ -131,6 +164,11 @@ llhttp/prefix transfer. Only the tiny EVP digest/base64 bridge and portable
 rooted byte access belong here. Nonces/masks use public synchronous uv.random;
 every client frame including empty/control gets fresh 4-byte entropy. Do not
 use math.random or add an unreviewed asynchronous entropy pool.
+
+Shared `types.titan` and `utf8.titan` hold the public data, `DialOptions`, and
+validators for both targets; native protocol code is `*.native.titan`, and the
+browser `client.browser.titan` keeps state, limits, backpressure, and error
+policy in Titan over `titan.browser`'s zero-policy `titan:websocket` source.
 
 Opening admission is keyed by semantic IP bytes/port/effective IPv6 scope in an
 ephemeron runtime bucket; mapped IPv6 converges with IPv4. Resolve once, reserve
