@@ -2177,17 +2177,19 @@ to the language rules:
   module graph. The thirteen shared browser-subset modules (`coroutine`, `gc`,
   `iteration`, `math`, `test`, `reflect`, `json`, `protobuf`, `transfer`,
   `peg`, `string`, `url`, `path`) keep native source and interface parity and
-  must not gain an import path to `uv`, `async`, `timer`, `titan.browser`, or
-  a native-only module.
+  must not gain an import path to `uv`, `async`, `timer`, `http`,
+  `websocket`, `titan.browser`, or a native-only module.
   - `io` is also fully shared, but imports the selected `os` composition and
-    therefore reaches `async`. `os` and synchronous `lua` use shared mains
-    with target-selected contributors; the thirteen core modules above keep
-    their stricter closure.
-  - `async`, `timer`, and `os` reach the bridge only through
-    `titan/async/*.browser.titan`, `titan/timer.browser.titan`, and
-    `titan/os/stdio.browser.titan`.
-  - Record browser-absent public members of `async`, `os`, and `lua` in the
-    member inventory; `timer` keeps its complete interface on both targets.
+    therefore reaches `async`. `os`, synchronous `lua`, and the `http` and
+    `websocket` clients use shared sources with target-selected contributors;
+    the thirteen core modules above keep their stricter closure.
+  - `async`, `timer`, `os`, `http`, and `websocket` reach the bridge only
+    through `titan/async/*.browser.titan`, `titan/timer.browser.titan`,
+    `titan/os/stdio.browser.titan`, `titan/http/client.browser.titan`, and
+    `titan/websocket/{websocket,client}.browser.titan`.
+  - Record browser-absent public members of `async`, `os`, `lua`, `http`, and
+    `websocket` in the member inventory; `timer` keeps its complete interface
+    on both targets.
   - `titan.browser` is the reviewed browser-only exception: it imports only
     `gc`, has no native placeholder or interface, and no native module may
     import it.
