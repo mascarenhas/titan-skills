@@ -1144,8 +1144,9 @@ See [HTTP on the browser](../../../doc/language/standard-library-http.md#on-the-
 - A handler or parse/framing error ends only that connection Task; the listener
   and other connections remain live.
 - An idle peer that closes before any byte of its next request is a normal
-  disconnect, also on HTTPS without `close_notify` (`TLS_TRUNCATED_EOF` there
-  ends the connection quietly); truncation after a request byte still fails.
+  disconnect, including a plain-TCP peer reset (`ECONNRESET` from `net.read`)
+  and an HTTPS drop without `close_notify` (`TLS_TRUNCATED_EOF` from
+  `ssl.read`); a reset or truncation after any request byte still fails.
 
 ### Request and response rules
 
