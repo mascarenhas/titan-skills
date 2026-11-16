@@ -675,6 +675,13 @@ adds browser-only cases and a `.native.titan` contributor native-only ones. See
 the [browser test
 owners](../../../doc/implementation/browser-target.md#test-owners-and-the-browser-suite).
 
+The browser status inventory (`scripts/browser_stdlib_inventory.lua`) names a
+test for every implemented browser member: `<owner>.<case>` as the runner
+reports it (subtests joined by `.`), `os.browser_tests:<name>` for the OS
+stream harness, or a whole core owner. Renaming or deleting a named case
+fails the compiler-shard existence check until its row changes too, and a
+skipped case, or a parent whose subtest skipped, is never evidence.
+
 ### Where to put a new standard-library case
 
 - Put public behavior with its semantic owner below `spec/stdlib/titan/`.
@@ -1003,7 +1010,8 @@ make rock-test \
 make test
 
 # Build the browser-portable owners into one browser image, check closure and
-# member inventory, and run it under Node and Chromium.
+# the subset parity gate, and run it under Node and Chromium; an unfiltered
+# run also requires every image test the status inventory names to pass.
 make titan-stdlib-browser-test
 ```
 

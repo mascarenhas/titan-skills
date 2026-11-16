@@ -1876,8 +1876,9 @@ turn-based driver runs them instead of libuv. For the full contract, read
   - `version`;
   - Receivers (`receiver`, `send`, `Receiver`).
 
-  `ExternalWait` remains only as a type, so `run_with_cleanup`'s `final_wait`
-  is always `nil`. `uv` is native-only.
+  `ExternalWait` and `Completion` remain only as types: no browser
+  declaration produces either, which the subset parity gate checks, so
+  `run_with_cleanup`'s `final_wait` is always `nil`. `uv` is native-only.
 - **One driver, on the owner state:** only the Lua state that runs the
   instance's entries drives. In any other state, such as one that C created:
   - `async.loop()` raises `"async.loop must be driven by the browser

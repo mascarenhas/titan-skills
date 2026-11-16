@@ -57,6 +57,8 @@ Do not infer an API from a sketch. The API inventories below are the boundary.
 The public language chapters define behavior. Source confirms declarations and
 layering; the mechanically extracted current provider schema in
 [`spec/fixtures/stdlib/titan_stdlib_types.lua`](../../../spec/fixtures/stdlib/titan_stdlib_types.lua)
+(and, for `--target browser`,
+[`titan_stdlib_browser_types.lua`](../../../spec/fixtures/stdlib/titan_stdlib_browser_types.lua))
 confirms which fields, generated constructors, methods, functions, and aliases
 are actually public. Tests show supported use and ownership. Implementation
 chapters are authority for private callback/lifetime invariants, not permission
