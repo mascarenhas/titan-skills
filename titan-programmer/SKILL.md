@@ -2187,9 +2187,23 @@ to the language rules:
     through `titan/async/*.browser.titan`, `titan/timer.browser.titan`,
     `titan/os/stdio.browser.titan`, `titan/http/client.browser.titan`, and
     `titan/websocket/{websocket,client}.browser.titan`.
-  - Record browser-absent public members of `async`, `os`, `lua`, `http`, and
-    `websocket` in the member inventory; `timer` keeps its complete interface
-    on both targets.
+  - The browser library is a reviewed subset, enforced by the subset parity
+    gate against `scripts/browser_stdlib_inventory.lua`. A public
+    declaration both targets have keeps the identical signature (parameter
+    names, generics, C facts); changing it updates every implementation
+    (shared, `.native.titan`, `.browser.titan`), both type fixtures
+    (`spec/fixtures/stdlib/titan_stdlib_types.lua` and
+    `titan_stdlib_browser_types.lua`, regenerated with
+    `check_browser_stdlib.lua fixture`), and its inventory row.
+  - A public member added to a native module gets a browser implementation
+    plus a test the inventory names, or an `absent:typed` /
+    `absent:native-only` row. A delivered module never declares a public
+    member its native module lacks; browser-only API belongs in
+    `titan.browser`. No member always raises; a `raise` row needs the
+    maintainer's approval.
+  - Importing a native-only module for the browser reports `module
+    'titan.<m>' is not available for target 'browser': <reason>`, with the
+    reason from the inventory's `absent` module row.
   - `titan.browser` is the reviewed browser-only exception: it imports only
     `gc`, has no native placeholder or interface, and no native module may
     import it.
