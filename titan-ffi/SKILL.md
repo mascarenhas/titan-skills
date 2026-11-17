@@ -3364,8 +3364,8 @@ searching by analogy.
   and focused runtime GC specs.
 * Browser bridge: the native owner `spec/stdlib/titan/browser/` driven by
   `spec/fixtures/browser_bridge/integration.mjs` through
-  `spec/coder/browser_bridge_spec.lua`, and the deployment gate
-  `spec/coder/browser_deployment_spec.lua`.
+  `spec/coder/browser_bridge_spec.lua`, and the documented-page gate
+  `spec/coder/browser_docs_spec.lua` (plain HTTP, `locateFile`, and Vite).
 * Synchronous C callbacks: `spec/stdlib/titan/browser/tests.browser.titan`
   (`call_sync` statuses, borrowed handles, callback threads) and the html5
   click counter `spec/fixtures/browser_bridge/counter.{titan,mjs}`, which
