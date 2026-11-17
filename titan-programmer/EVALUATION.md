@@ -736,6 +736,12 @@ must say its overflow is undefined, and the judge skips that probe for it.
 
 ## Frontmatter-only routing set
 
+Score each model as a distribution over at least three fresh samples, with
+each sample's exact count and per-query answers: one model's samples of the
+same tree have scored 10 and 28 of the 31 queries exact ([#337
+evaluation](#issue-337-evaluation-2026-11-17)). The evaluator's instructions
+are:
+
 Read only each skill's YAML `name` and `description`. Answer `none` when no
 cartridge applies; `UNKNOWN` is not a routing answer. Choose the minimal set for
 these queries:
@@ -2281,17 +2287,58 @@ Query 26's async addition came from Luna alone, and DeepSeek answered it
 exactly, so `titan-async`'s description, which names its browser driver,
 stays as it is.
 
+DeepSeek's routing set was then rerun on the revised tree (`41681fb`, whose
+only frontmatter change is `titan-language-server`'s description), with the
+same command shape and prompt, and once more on `5991764` to separate the
+revision from sampling. All five DeepSeek samples, scored against the revised
+policy paragraph (query 11 as programmer + networking + pegs):
+
+| Sample | Tree | Exact | One off | Miss |
+| --- | --- | ---: | ---: | ---: |
+| 1 (above) | `5991764` | 28/31 | 7, 11 | 23 |
+| 2 | `5991764` | 22/31 | 11, 15 | 3, 4, 6, 8, 17, 23, 27 |
+| 3 | `41681fb` | 25/31 | — | 3, 4, 6, 8, 11, 17 |
+| 4 | `41681fb` | 10/31 | — | 21 queries |
+| 5 | `41681fb` | 28/31 | 8, 11 | 23 |
+
+The same model on the same bytes scored from 22 to 28 on one tree and from 10
+to 28 on the other, so no single sample measures a revision. The answers fall
+into two modes. In one, `titan-programmer` joins every Titan answer, as its
+description's "Mandatory base skill" says. In the other, a query with one
+specialist boundary gets that specialist alone (`async` for 3, `networking`
+for 4, `pegs` for 6, `json + pegs` for 17), the pattern of Haiku's answer
+above.
+
+- **Query 23** answered programmer + language-server in one of the three
+  samples on `41681fb` and in neither sample on `5991764`. The description's
+  new clause points the right way, but the specialist-only mode still drops
+  programmer there.
+- **Query 11** answered programmer + pegs three times, pegs alone once and
+  pegs + networking once across the five samples; networking never appeared
+  with programmer. The stated oracle changed the score, not the routing:
+  neither `titan-pegs` ("byte-oriented parsers") nor `titan-networking` ("URL
+  code") says that it owns `titan.url`'s parser. No description was changed
+  for it.
+
+Method: score the routing set as a distribution over at least three fresh
+samples per model, reporting each sample's exact count and the per-query
+answers, rather than one sample. Stating the mandatory base in the routing
+prompt would remove the bimodality, but the set would then stop testing
+whether the frontmatter carries it.
+
 Limitations:
 
-- Each cell has one answer from one model; answers vary between runs.
-- The revisions were not rerun when this record was written.
+- B2 has one answer per model and tree.
+- Haiku and Luna were not rerun, so their routing scores are single samples.
 - B2 asks for no code, so nothing was compiled.
 
-Receipts are in `/tmp/titan-337/notes/eval-cp12c`: `REPORT.md`, the intended
-answers and rubric (`INTENDED.md`), the overlay (`memory-off.yml`), the frozen
-cartridges and frontmatters (`cartridges/`, `frontmatter/`), the prompts and
-answers (`runs/`), the per-run logs and statuses (`logs/`), the runner
-(`run-queue.sh`), and the voided first launch (`voided/`).
+Receipts are in `/tmp/titan-337/notes/eval-cp12c`: `REPORT.md` (the rerun in
+its section 6), the intended answers and rubric (`INTENDED.md`), the overlay
+(`memory-off.yml`), the frozen cartridges and frontmatters (`cartridges/`,
+`frontmatter/`), the prompts and answers (`runs/`, the rerun in
+`runs/routing-41681fbc/` and `runs/routing-after/deepseek2.md`), the per-run
+logs and statuses (`logs/`), the runner (`run-queue.sh`), and the voided
+launches (`voided/`).
 
 ## Mechanical gates
 
