@@ -1989,9 +1989,10 @@ compiler frontend, and application launcher EXEs. Follow the
 layout, native dependencies, and experimental limitations.
 
 Browser builds (`--target browser`, from Linux or macOS hosts) produce `.mjs`,
-`.wasm`, `.wasm.trace`, and `.wasm.map` images; deploy the first three (the
-trace table locates Titan frames in errors) and the map only for developer
-tools. Before publishing a program or test image, or
+`.wasm`, `.wasm.trace`, and `.wasm.map` images. Deploy `.mjs`, `.wasm` and
+`.wasm.trace` (the trace table locates Titan frames in errors); the runtime
+never reads `.wasm.map`, which is only for developer tools. Before publishing
+a program or test image, or
 executing a provider's protocol image, `titanc` enforces the WebAssembly
 JavaScript Interface byte bounds: one function body, counting its
 local-declaration vector but not its length prefix, may be at most 7,654,321
@@ -2006,8 +2007,10 @@ RSS, and Linux VmData or Darwin VSZ measure different things. See
 [browser limits](../../../doc/language/browser-target.md#limits).
 
 A generated browser `.mjs` embeds Titan's loader and default-exports
-`create(options)`; a page imports it directly and deploys only the three image
-files. The instance is persistent: `run(args)` initializes when needed and runs
+`create(options)`; a page imports it directly and deploys it with its `.wasm`
+and `.wasm.trace`, with no separate loader file (layout, serving and
+deployment: [titan-application](../titan-application/SKILL.md#browser-applications)).
+The instance is persistent: `run(args)` initializes when needed and runs
 `main` once, `main`'s scope `defer`s run when it returns, and the Lua state,
 its finalizers and its JavaScript-callable handles live until
 `await instance.dispose()`, which belongs in `finally`. JavaScript interop uses

@@ -1,6 +1,6 @@
 ---
 name: titan-language-server
-description: Configure, run, and query the standalone Titan language server through omp's lsp tool or over stdio, including multi-root workspaces, per-slice SDK selection with compiler_root and titan-config.local.lua, trustedRoots policy, titan/workspaceStatus, and interpreting diagnostics, hover, definition, references, and raw completion results. Use when querying Titan code intelligence from an agent session; use titan-completion instead when changing compiler completion contexts or language-server completion internals.
+description: Configure, run, and query the standalone Titan language server through omp's lsp tool or over stdio, including multi-root workspaces, per-slice SDK selection with compiler_root and titan-config.local.lua, trustedRoots policy, titan/workspaceStatus, and interpreting diagnostics, hover, definition, references, and raw completion results. Use when querying Titan code intelligence from an agent session, alongside titan-programmer whenever the queried .titan code is read, written, or reviewed; use titan-completion instead when changing compiler completion contexts or language-server completion internals.
 ---
 
 # Titan language server in omp

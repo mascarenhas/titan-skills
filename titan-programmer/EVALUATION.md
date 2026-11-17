@@ -788,7 +788,10 @@ programmer cartridge for a Lua-only test, and no Titan networking/async/FFI
 cartridge for unrelated Python or C work; no JSON cartridge merely because
 a configuration file uses JSON. Ordinary JSON use selects programmer + json;
 JSON grammar changes add pegs, JSON tests add tester, and explicit reflection
-construction work adds reflect. Thread channel and `async.Receiver` work selects
+construction work adds reflect. Query 11 follows the same rule for `titan.url`,
+whose parser is a PEG grammar: it selects **programmer + networking + pegs**,
+networking for the URL contract that the grammar implements and pegs for the
+grammar change. Thread channel and `async.Receiver` work selects
 programmer + thread + async (adding ffi when touching `transfer.discard_message`
 or raw C callbacks, and tester when writing native tests).
 Query 21 selects **programmer + ffi**; add async only when changing the
@@ -2194,6 +2197,101 @@ prompt), the answers and their extracted modules (`answers/`,
 per-case logs, the compile log and the run sequences (`logs/`), the smoke and
 its memory-on control (`smoke/`, `smoke-control/`), `run_eval.py`, and
 `runs.json` with the argv, times and exit status of every run.
+
+### Issue #337 evaluation (2026-11-17)
+
+titan#337 delivers browser applications: the executable browser chapter, its
+complete application, deployment of the module, binary and trace table, and
+the development server. Two commits changed the cartridges before the
+evaluation:
+
+- `9da58b4`: `titan-application` gains "Browser applications" (when to choose
+  the browser target, a layout modeled on the complete application, the build
+  and deployment copy, the profile matching the SDK, the deployment set,
+  content types, CORS and CSP, local serving and bundling, and
+  `titan-browser-run` as test infrastructure), and its description and
+  `titan-programmer`'s routing line name browser applications.
+- `5991764`: routing queries 30 and 31 and case B2 are new, and the section
+  states where the module finds `app.wasm`, why a `file://` page fails, and
+  the development server's build command.
+
+The evaluated tree was `issue-337-browser-delivery` at `5991764`, based on
+`main` at `4e6a9a1`. The cases were the 31-query frontmatter routing set and
+B2, each with DeepSeek (`opencode-go/deepseek-v4.1-flash`, the acceptance
+floor), Haiku (`anthropic/claude-haiku-5-5`) and Luna
+(`openai-codex/gpt-6-luna`), plus B2 with DeepSeek on the base cartridges.
+
+Each answer came from a fresh `omp -p` process with the #388 command shape:
+high thinking, only `read,write`, `--no-skills --no-context-files --no-rules
+--no-session --no-extensions --no-prewalk --no-lsp --no-title`,
+`--approval-mode yolo`, `--max-time 20m`, an empty scratch working directory
+and the memory-off overlay, in one serial queue per provider. The routing
+prompt gave only the 13 frontmatters and the queries, without the policy
+paragraph. The B2 prompt gave only `titan-programmer` and
+`titan-application` at the evaluated (or base) revision and the case's five
+questions, without the expected answers or the rejection list. Smoke prompts
+with the overlay reported no memories for all three models, and the DeepSeek
+control without it reported them; the runs were memory-free but not shown to
+be hermetic. All seven scored processes exited 0 and wrote an answer; none
+was retried. A first launch whose runner rendered some prompts empty was
+voided unscored, and every cell ran again.
+
+Routing, scored against the policy paragraph (exact, one defensible
+specialist off, or a miss of a named route):
+
+| Model | Exact | One off | Miss |
+| --- | ---: | ---: | ---: |
+| DeepSeek | 28/31 | 7, 11 | 23 |
+| Haiku | 16/31 | — | 15 |
+| Luna | 26/31 | 8, 11, 21 | 23, 26 |
+
+Queries 30 and 31 were exact for DeepSeek and Luna: 30 selected programmer +
+application, and 31 stayed programmer + ffi. Haiku answered 31 exactly and
+dropped programmer from 30, as it did from every answer that needed a
+specialist. All three omitted programmer from query 23; DeepSeek and Luna
+chose programmer + pegs for query 11, which then had no stated oracle; Luna
+added async to query 26.
+
+| B2 | Result |
+| --- | --- |
+| DeepSeek, evaluated tree | Pass, 5/5. The deployed set, the build command into `build-browser/` and the profile match, the native development server and the `file://` reason, content types, CORS and CSP, and `locateFile`; the details the section leaves to the chapter (MIME spellings, CORS values, the `locateFile` signature, Vite) are UNKNOWN. It also states that `--exe` is relative to the working directory, which `titan-programmer` says. |
+| Haiku, evaluated tree | Pass, 5/5, with the same UNKNOWN set. |
+| Luna, evaluated tree | Pass, 5/5, with the same UNKNOWN set. |
+| DeepSeek, base tree | Fail, 0/5. It deployed `.mjs`, `.wasm` and `.wasm.map` without `.wasm.trace`, quoting `titan-programmer`'s "deploys only the three image files" a paragraph after the four images; built without `--exe` or the profile rule; and answered UNKNOWN for local serving, `file://`, content types, CORS, CSP and asset location. |
+
+No answer on the evaluated tree broke the rejection list: no separate loader,
+no runtime source map, no `file://` serving, no shared native and browser
+output directory, no files from two builds, no `titan-browser-run` serving,
+and no invented `titanc` option.
+
+The evaluation led to one revision, the commit that adds this record:
+
+- **The deployed files.** `titan-programmer` names `.mjs`, `.wasm` and
+  `.wasm.trace` wherever it says what a page deploys, states that the runtime
+  never reads `.wasm.map`, and links the application cartridge's section. No
+  other cartridge describes a deployment set.
+- **Query 23.** `titan-language-server`'s description now says to load it
+  alongside `titan-programmer` whenever the queried `.titan` code is read,
+  written or reviewed, as `titan-application`'s does.
+- **Query 11.** The policy paragraph states its oracle, programmer +
+  networking + pegs: `titan.url`'s parser is a PEG grammar, and the rule
+  matches the JSON module's grammar in query 17.
+
+Query 26's async addition came from Luna alone, and DeepSeek answered it
+exactly, so `titan-async`'s description, which names its browser driver,
+stays as it is.
+
+Limitations:
+
+- Each cell has one answer from one model; answers vary between runs.
+- The revisions were not rerun when this record was written.
+- B2 asks for no code, so nothing was compiled.
+
+Receipts are in `/tmp/titan-337/notes/eval-cp12c`: `REPORT.md`, the intended
+answers and rubric (`INTENDED.md`), the overlay (`memory-off.yml`), the frozen
+cartridges and frontmatters (`cartridges/`, `frontmatter/`), the prompts and
+answers (`runs/`), the per-run logs and statuses (`logs/`), the runner
+(`run-queue.sh`), and the voided first launch (`voided/`).
 
 ## Mechanical gates
 
