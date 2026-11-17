@@ -23,8 +23,8 @@ This is the primary cartridge. Add the relevant specialist cartridge when the
 work crosses one of these boundaries:
 
 - **[`titan-application`](../titan-application/SKILL.md)** — starting an application
-  repository, source/test build layout, initial ignore rules, and executable
-  delivery checks.
+  repository, source/test build layout, initial ignore rules, executable
+  delivery checks, and browser application layout and deployment.
 - **`titan-tester`** — native `titan.test` modules, `titanc --test`, subtests,
   cleanup, filtering, native production coverage, and repository test-layer
   ownership.

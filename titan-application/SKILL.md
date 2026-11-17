@@ -1,6 +1,6 @@
 ---
 name: titan-application
-description: Start or organize a standalone Titan application repository, including source and test layout, build artifact ownership, initial .gitignore, installed SDK use, and executable delivery checks. Use alongside titan-programmer for application scaffolding and build setup; compiler and standard-library development use their existing repository workflows.
+description: Start or organize a standalone Titan application repository, including source and test layout, build artifact ownership, initial .gitignore, installed SDK use, executable delivery checks, and browser (`--target browser`) application layout and deployment. Use alongside titan-programmer for application scaffolding and build setup; compiler and standard-library development use their existing repository workflows.
 ---
 
 # Titan application startup
@@ -350,3 +350,65 @@ Keep environment-specific compiler paths and private validation artifacts out
 of the committed project. Follow the user's commit, review, and CI instructions
 for delivery; application startup does not itself authorize CI dispatch or
 changes to the compiler repository.
+
+## Browser applications
+
+Choose `--target browser` when the application runs in a web page, or as an ES
+module in a bundler or Node 26+. Titan builds it with Emscripten 6.0.13, from
+Linux or macOS hosts only, into a WebAssembly image for JSPI-capable engines.
+Files, raw sockets, servers, child processes, threads and SQLite are not
+available there: check [the browser standard
+library](../../../doc/language/browser-target.md#the-browser-standard-library)
+first, and keep such work in a native application. The installation needs the
+[browser Lua and SDK](../../../doc/language/installation.md#the-browser-lua-and-sdk).
+Load [titan-ffi](../titan-ffi/SKILL.md) for the page bridge (`titan.browser`,
+`create({bindings})`) and [titan-async](../titan-async/SKILL.md) for Tasks and
+timers on the browser driver.
+
+The browser chapter's [complete
+application](../../../doc/language/browser-target.md#a-complete-application)
+(`doc/language/browser-app/`) is a working model:
+
+```text
+project/
+  app.titan            # main(args: {string}): integer
+  index.html           # imports ./app.mjs and calls create(...)
+  greeting.txt         # a static file the program fetches
+  build-browser/       # titanc --target browser output
+  site/                # the deployment copy that the server serves
+```
+
+A browser output directory refuses native builds and the reverse, so keep it
+apart from `build/` ([one target per output
+directory](../../../doc/language/browser-target.md#one-target-per-output-directory)):
+
+```sh
+titanc --target browser --incremental --output build-browser --exe build-browser/app.mjs app
+mkdir -p site
+cp index.html greeting.txt build-browser/app.mjs build-browser/app.wasm build-browser/app.wasm.trace site/
+# Only a page that uses typed copies, as the model's does:
+cp "$PREFIX/lib/titan-browser/0.6/titan-protobuf.mjs" site/
+```
+
+The build uses `TITAN_BUILD_PROFILE` (`production` unless set), which must
+match the profile the browser SDK recorded; keep one output directory per
+profile ([build profiles](../../../doc/language/browser-target.md#build-profiles)).
+Deploy `app.mjs`, `app.wasm` and `app.wasm.trace` of one build together: the
+module embeds the loader, refuses a binary from another build, and reads the
+trace table for Titan frames in errors. `app.wasm.map` is only for developer
+tools. Serve `.mjs` as JavaScript and `.wasm` as `application/wasm`, over HTTP
+rather than `file://`. A page on another origin needs CORS on these files, and
+a Content Security Policy needs `script-src 'wasm-unsafe-eval'`
+([deploying](../../../doc/language/browser-target.md#deploying)).
+For local serving, build the chapter's
+[`http-dev-server.titan`](../../../doc/language/browser-target.md#serving-the-page)
+natively in its own output directory and run `./http-dev-server site 8000`; it
+is a development server only. To bundle, follow [using a
+bundler](../../../doc/language/browser-target.md#using-a-bundler) for Vite's
+settings. Ignore `/build-browser/` and the generated `/site/` copy in
+`.gitignore`.
+
+`titanc --target browser --test` images run under `titan-browser-run`, under
+Node or headless Chromium, as test infrastructure; pages never use it. Check
+the reported case count, as for native tests ([testing from the command
+line](../../../doc/language/browser-target.md#testing-from-the-command-line)).
