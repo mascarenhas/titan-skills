@@ -1754,6 +1754,13 @@ to call an Emscripten API, or to give one a callback: the click counter below
 has no authored C. Its callback is a `foreign function`, and Titan registers
 and unregisters it through the imported html5 declarations.
 
+`EM_JS` and `EM_ASM` code lands in the image module, which is self-contained:
+`titanc` refuses to link one that imports or re-exports a module, calls
+`import()`, uses `require`, or calls `process.getBuiltinModule` beyond the
+Emscripten shell's `fs`, `path` and `url`. Reach other page JavaScript,
+including another ES module, as a `create({bindings})` value through
+`titan.browser`.
+
 An API that calls back into C runs that callback synchronously, with
 JavaScript frames above it, so the callback is not a loader entry. To run
 Titan code there, pin a handler and have the callback call
