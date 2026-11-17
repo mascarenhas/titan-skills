@@ -396,14 +396,21 @@ profile ([build profiles](../../../doc/language/browser-target.md#build-profiles
 Deploy `app.mjs`, `app.wasm` and `app.wasm.trace` of one build together: the
 module embeds the loader, refuses a binary from another build, and reads the
 trace table for Titan frames in errors. `app.wasm.map` is only for developer
-tools. Serve `.mjs` as JavaScript and `.wasm` as `application/wasm`, over HTTP
-rather than `file://`. A page on another origin needs CORS on these files, and
-a Content Security Policy needs `script-src 'wasm-unsafe-eval'`
+tools. The module finds `app.wasm` and `app.wasm.trace` next to itself,
+resolved against its own URL; a page that serves them elsewhere passes
+`create({locateFile})` ([asset
+location](../../../doc/language/browser-target.md#asset-location)). Serve
+`.mjs` as JavaScript and `.wasm` as `application/wasm`, over HTTP: browsers
+load neither a module script nor the loader's fetches from a `file://` page.
+A page on another origin needs CORS on these files, and a Content Security
+Policy needs `script-src 'wasm-unsafe-eval'`
 ([deploying](../../../doc/language/browser-target.md#deploying)).
-For local serving, build the chapter's
+For local serving, copy the chapter's
 [`http-dev-server.titan`](../../../doc/language/browser-target.md#serving-the-page)
-natively in its own output directory and run `./http-dev-server site 8000`; it
-is a development server only. To bundle, follow [using a
+from the Titan source tree's `doc/language/` and build it natively into the
+native output tree (`titanc -o build --exe build/http-dev-server
+http-dev-server`), then run `build/http-dev-server site 8000`; it is a
+development server only. To bundle, follow [using a
 bundler](../../../doc/language/browser-target.md#using-a-bundler) for Vite's
 settings. Ignore `/build-browser/` and the generated `/site/` copy in
 `.gitignore`.

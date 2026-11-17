@@ -583,6 +583,53 @@ unfiltered-every-owner versus filtered-at-least-one-case rule, and a stdout-only
 audit that keeps stderr and failing status. Reject invented
 `TITAN_STDLIB_BROWSER_TEST_IMAGE*` variables or a resurrected size budget.
 
+### B2 — browser application layout and deployment (`titan-programmer` + `titan-application`)
+
+Describe a project with `app.titan` (an exact `main`), a page `index.html`
+that imports the generated module and calls `create(...)`, and a static
+`greeting.txt` the program fetches, on a Linux host with an installed browser
+SDK. Ask:
+
+1. Which files must the web server deploy, and which may it leave out?
+2. What builds the program, where do its outputs go, and what must match the
+   installed browser SDK?
+3. How does a developer serve the page locally, and why does opening
+   `index.html` from disk not work?
+4. Which content types, cross-origin and Content Security Policy settings
+   does the deployment need?
+5. Where does the page find `app.wasm`, and how does it load it from another
+   folder, such as a CDN path?
+
+Expected answers, from the application cartridge's browser section alone:
+
+1. `app.mjs`, `app.wasm` and `app.wasm.trace` from one build, with the page
+   and `greeting.txt`; the module embeds the loader, so there is no loader
+   file, and it refuses a binary from another build. `app.wasm.map` is
+   optional, for developer tools only. `titan-protobuf.mjs` from the SDK only
+   when the page uses typed copies.
+2. `titanc --target browser --incremental --output build-browser --exe
+   build-browser/app.mjs app`, into an output directory of its own (a browser
+   output directory and a native one refuse each other's builds), then a
+   copy into the deployment folder. `TITAN_BUILD_PROFILE` (`production`
+   unless set) must match the profile the SDK recorded, with one output
+   directory per profile.
+3. Build the chapter's `http-dev-server.titan` natively (`titanc -o build
+   --exe build/http-dev-server http-dev-server`) and run
+   `build/http-dev-server site 8000`, a development server only. Browsers load
+   neither a module script nor the loader's fetches from a `file://` page.
+4. `.mjs` as JavaScript and `.wasm` as `application/wasm`; CORS on the three
+   files for a page on another origin; `script-src 'wasm-unsafe-eval'` under
+   a Content Security Policy.
+5. Next to `app.mjs`, resolved against the module's own URL; elsewhere through
+   `create({locateFile})`.
+
+Reject a separate loader file to deploy, a runtime need for the source map,
+serving from `file://`, a shared native and browser output directory, mixing
+files from two builds, `titan-browser-run` as a way to serve or deploy the
+page, and any invented `titanc` deployment option. Mark details the section
+leaves to the linked chapter, such as Vite's settings, **UNKNOWN** rather than
+guessing them.
+
 ### W1 — browser JavaScript bindings and a persistent instance (`titan-programmer` + `titan-ffi`)
 
 Ask for one complete browser-target module and its page script. The module
@@ -727,9 +774,12 @@ these queries:
     result from a web page;
 27. add `browser.tests` cases for a new `titan.browser` request form;
 28. POST bytes with `http.request` from a `--target browser` page and handle a
-    CORS failure; and
+    CORS failure;
 29. read messages from a browser `websocket.connect` session and report its
-    close status.
+    close status;
+30. lay out, build and deploy a static web page that runs a Titan program; and
+31. fix a `titan.browser` binding call in an existing browser application's
+    `app.titan`.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -753,6 +803,12 @@ Query 28 selects **programmer + networking** and query 29 **programmer +
 websocket**: the browser clients are the public `http` and `websocket`
 modules, so neither selects ffi merely because `fetch` and `WebSocket` sit
 behind the bridge.
+Query 30 selects **programmer + application**: a browser application's
+layout, build, deployment set and local serving belong to the application
+cartridge, and nothing in it needs ffi until the page's bindings are written.
+Queries 27 and 31 are its controls and must not select application: code
+inside an existing browser application is **programmer + ffi**, adding
+**tester** for 27's native test cases.
 
 ## Recorded baseline and post-change results
 
