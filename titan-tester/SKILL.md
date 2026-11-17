@@ -661,7 +661,7 @@ including `lua.tests`, `os.tests`, `io.tests`, `http.tests`, and
 `make titan-stdlib-browser-test` runs under Node and headless Chromium (emsdk,
 Node 26, Chromium, the browser SDK, and the installed native provider
 required). All of them build into one `--target browser --test` image,
-`images/stdlib.{mjs,wasm,wasm.map}` under `out/browser-stdlib` or
+`images/stdlib.{mjs,wasm,wasm.trace,wasm.map}` under `out/browser-stdlib` or
 `TITAN_BROWSER_TEST_BUILD_DIR`, beside `roots.txt`, `members.md`, and each
 engine's `stdlib.<engine>.log` stdout and `stdlib.<engine>.stderr.log`. A new
 browser owner joins that one root list; there is no image partition or suite

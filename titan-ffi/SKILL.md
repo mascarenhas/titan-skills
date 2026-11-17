@@ -1704,8 +1704,9 @@ try {
 The generated image is persistent. `initialize()` runs module initializers but
 not `main`; `run(args)` runs `main` once; `main`'s scope `defer`s run at return;
 state finalizers and the final output drain run at `await instance.dispose()`,
-which belongs in `finally`. `create({requireTrace: true})` turns a missing or
-invalid trace map into an ordinary initialization failure before Lua runs;
+which belongs in `finally`. `create({requireTrace: true})` turns a missing,
+invalid or mismatched trace table (`<stem>.wasm.trace`) into an ordinary
+initialization failure before Lua runs;
 `titan-browser-run` sets it unless `--allow-degraded-trace` is given. A failed
 operation keeps its captured Titan error even if its output flush fails or
 disposal interrupts it; each secondary failure is reported once as cleanup.

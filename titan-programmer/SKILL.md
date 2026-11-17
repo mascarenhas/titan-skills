@@ -1989,7 +1989,9 @@ compiler frontend, and application launcher EXEs. Follow the
 layout, native dependencies, and experimental limitations.
 
 Browser builds (`--target browser`, from Linux or macOS hosts) produce `.mjs`,
-`.wasm`, and `.wasm.map` images. Before publishing a program or test image, or
+`.wasm`, `.wasm.trace`, and `.wasm.map` images; deploy the first three (the
+trace table locates Titan frames in errors) and the map only for developer
+tools. Before publishing a program or test image, or
 executing a provider's protocol image, `titanc` enforces the WebAssembly
 JavaScript Interface byte bounds: one function body, counting its
 local-declaration vector but not its length prefix, may be at most 7,654,321
