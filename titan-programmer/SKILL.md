@@ -1988,7 +1988,8 @@ compiler frontend, and application launcher EXEs. Follow the
 [Windows build guide](../../../doc/language/windows-build.md) for toolchain,
 layout, native dependencies, and experimental limitations.
 
-Browser builds (`--target browser`, from Linux or macOS hosts) produce `.mjs`,
+Browser builds (`--target browser`, from Linux, macOS or MSYS2 CLANG64 on
+Windows) produce `.mjs`,
 `.wasm`, `.wasm.trace`, and `.wasm.map` images. Deploy `.mjs`, `.wasm` and
 `.wasm.trace` (the trace table locates Titan frames in errors); the runtime
 never reads `.wasm.map`, which is only for developer tools. Before publishing
