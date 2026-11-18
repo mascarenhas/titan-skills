@@ -355,7 +355,10 @@ changes to the compiler repository.
 
 Choose `--target browser` when the application runs in a web page, or as an ES
 module in a bundler or Node 26+. Titan builds it with Emscripten 6.0.13, from
-Linux or macOS hosts only, into a WebAssembly image for JSPI-capable engines.
+Linux, macOS or Windows (MSYS2 CLANG64), into a WebAssembly image for
+JSPI-capable engines. On Windows use `make -f Makefile.win` for `lua-browser`
+and `browser-sdk`, and use the [Windows browser setup](../../../doc/language/windows-build.md#build-for-the-browser)
+for the separate Node 26+ executable and runner.
 Files, raw sockets, servers, child processes, threads and SQLite are not
 available there: check [the browser standard
 library](../../../doc/language/browser-target.md#the-browser-standard-library)
