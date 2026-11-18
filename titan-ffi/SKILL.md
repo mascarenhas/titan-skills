@@ -1704,8 +1704,9 @@ try {
 The generated image is persistent. `initialize()` runs module initializers but
 not `main`; `run(args)` runs `main` once; `main`'s scope `defer`s run at return;
 state finalizers and the final output drain run at `await instance.dispose()`,
-which belongs in `finally`. `create({requireTrace: true})` turns a missing or
-invalid trace map into an ordinary initialization failure before Lua runs;
+which belongs in `finally`. `create({requireTrace: true})` turns a missing,
+invalid or mismatched trace table (`<stem>.wasm.trace`) into an ordinary
+initialization failure before Lua runs;
 `titan-browser-run` sets it unless `--allow-degraded-trace` is given. A failed
 operation keeps its captured Titan error even if its output flush fails or
 disposal interrupts it; each secondary failure is reported once as cleanup.
@@ -1752,6 +1753,13 @@ a `--c-source` helper behind a small header. A helper is not required merely
 to call an Emscripten API, or to give one a callback: the click counter below
 has no authored C. Its callback is a `foreign function`, and Titan registers
 and unregisters it through the imported html5 declarations.
+
+`EM_JS` and `EM_ASM` code lands in the image module, which is self-contained:
+`titanc` refuses to link one that imports or re-exports a module, calls
+`import()`, uses `require`, or calls `process.getBuiltinModule` beyond the
+Emscripten shell's `fs`, `path` and `url`. Reach other page JavaScript,
+including another ES module, as a `create({bindings})` value through
+`titan.browser`.
 
 An API that calls back into C runs that callback synchronously, with
 JavaScript frames above it, so the callback is not a loader entry. To run
@@ -3356,8 +3364,12 @@ searching by analogy.
   and focused runtime GC specs.
 * Browser bridge: the native owner `spec/stdlib/titan/browser/` driven by
   `spec/fixtures/browser_bridge/integration.mjs` through
-  `spec/coder/browser_bridge_spec.lua`, and the deployment gate
-  `spec/coder/browser_deployment_spec.lua`.
+  `spec/coder/browser_bridge_spec.lua`, the documented-page gate
+  `spec/coder/browser_docs_spec.lua` (plain HTTP, `locateFile`, and Vite), and
+  the hosted test of the chapter's complete application
+  (`doc/language/browser-app/`: typed copies, a callback through a request,
+  Tasks, `http.get`, a Lua trace), `spec/fixtures/browser_delivery/hosted.mjs`
+  on Chromium, Firefox and WebKit.
 * Synchronous C callbacks: `spec/stdlib/titan/browser/tests.browser.titan`
   (`call_sync` statuses, borrowed handles, callback threads) and the html5
   click counter `spec/fixtures/browser_bridge/counter.{titan,mjs}`, which

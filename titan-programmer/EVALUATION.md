@@ -583,6 +583,53 @@ unfiltered-every-owner versus filtered-at-least-one-case rule, and a stdout-only
 audit that keeps stderr and failing status. Reject invented
 `TITAN_STDLIB_BROWSER_TEST_IMAGE*` variables or a resurrected size budget.
 
+### B2 — browser application layout and deployment (`titan-programmer` + `titan-application`)
+
+Describe a project with `app.titan` (an exact `main`), a page `index.html`
+that imports the generated module and calls `create(...)`, and a static
+`greeting.txt` the program fetches, on a Linux host with an installed browser
+SDK. Ask:
+
+1. Which files must the web server deploy, and which may it leave out?
+2. What builds the program, where do its outputs go, and what must match the
+   installed browser SDK?
+3. How does a developer serve the page locally, and why does opening
+   `index.html` from disk not work?
+4. Which content types, cross-origin and Content Security Policy settings
+   does the deployment need?
+5. Where does the page find `app.wasm`, and how does it load it from another
+   folder, such as a CDN path?
+
+Expected answers, from the application cartridge's browser section alone:
+
+1. `app.mjs`, `app.wasm` and `app.wasm.trace` from one build, with the page
+   and `greeting.txt`; the module embeds the loader, so there is no loader
+   file, and it refuses a binary from another build. `app.wasm.map` is
+   optional, for developer tools only. `titan-protobuf.mjs` from the SDK only
+   when the page uses typed copies.
+2. `titanc --target browser --incremental --output build-browser --exe
+   build-browser/app.mjs app`, into an output directory of its own (a browser
+   output directory and a native one refuse each other's builds), then a
+   copy into the deployment folder. `TITAN_BUILD_PROFILE` (`production`
+   unless set) must match the profile the SDK recorded, with one output
+   directory per profile.
+3. Build the chapter's `http-dev-server.titan` natively (`titanc -o build
+   --exe build/http-dev-server http-dev-server`) and run
+   `build/http-dev-server site 8000`, a development server only. Browsers load
+   neither a module script nor the loader's fetches from a `file://` page.
+4. `.mjs` as JavaScript and `.wasm` as `application/wasm`; CORS on the three
+   files for a page on another origin; `script-src 'wasm-unsafe-eval'` under
+   a Content Security Policy.
+5. Next to `app.mjs`, resolved against the module's own URL; elsewhere through
+   `create({locateFile})`.
+
+Reject a separate loader file to deploy, a runtime need for the source map,
+serving from `file://`, a shared native and browser output directory, mixing
+files from two builds, `titan-browser-run` as a way to serve or deploy the
+page, and any invented `titanc` deployment option. Mark details the section
+leaves to the linked chapter, such as Vite's settings, **UNKNOWN** rather than
+guessing them.
+
 ### W1 — browser JavaScript bindings and a persistent instance (`titan-programmer` + `titan-ffi`)
 
 Ask for one complete browser-target module and its page script. The module
@@ -689,6 +736,12 @@ must say its overflow is undefined, and the judge skips that probe for it.
 
 ## Frontmatter-only routing set
 
+Score each model as a distribution over at least three fresh samples, with
+each sample's exact count and per-query answers: one model's samples of the
+same tree have scored 10 and 28 of the 31 queries exact ([#337
+evaluation](#issue-337-evaluation-2026-11-17)). The evaluator's instructions
+are:
+
 Read only each skill's YAML `name` and `description`. Answer `none` when no
 cartridge applies; `UNKNOWN` is not a routing answer. Choose the minimal set for
 these queries:
@@ -727,9 +780,12 @@ these queries:
     result from a web page;
 27. add `browser.tests` cases for a new `titan.browser` request form;
 28. POST bytes with `http.request` from a `--target browser` page and handle a
-    CORS failure; and
+    CORS failure;
 29. read messages from a browser `websocket.connect` session and report its
-    close status.
+    close status;
+30. lay out, build and deploy a static web page that runs a Titan program; and
+31. fix a `titan.browser` binding call in an existing browser application's
+    `app.titan`.
 
 The intended policy is additive: `titan-programmer` is mandatory for `.titan`
 work, while specialist skills activate only for their real boundary. Important
@@ -738,7 +794,10 @@ programmer cartridge for a Lua-only test, and no Titan networking/async/FFI
 cartridge for unrelated Python or C work; no JSON cartridge merely because
 a configuration file uses JSON. Ordinary JSON use selects programmer + json;
 JSON grammar changes add pegs, JSON tests add tester, and explicit reflection
-construction work adds reflect. Thread channel and `async.Receiver` work selects
+construction work adds reflect. Query 11 follows the same rule for `titan.url`,
+whose parser is a PEG grammar: it selects **programmer + networking + pegs**,
+networking for the URL contract that the grammar implements and pegs for the
+grammar change. Thread channel and `async.Receiver` work selects
 programmer + thread + async (adding ffi when touching `transfer.discard_message`
 or raw C callbacks, and tester when writing native tests).
 Query 21 selects **programmer + ffi**; add async only when changing the
@@ -753,6 +812,12 @@ Query 28 selects **programmer + networking** and query 29 **programmer +
 websocket**: the browser clients are the public `http` and `websocket`
 modules, so neither selects ffi merely because `fetch` and `WebSocket` sit
 behind the bridge.
+Query 30 selects **programmer + application**: a browser application's
+layout, build, deployment set and local serving belong to the application
+cartridge, and nothing in it needs ffi until the page's bindings are written.
+Queries 27 and 31 are its controls and must not select application: code
+inside an existing browser application is **programmer + ffi**, adding
+**tester** for 27's native test cases.
 
 ## Recorded baseline and post-change results
 
@@ -2138,6 +2203,142 @@ prompt), the answers and their extracted modules (`answers/`,
 per-case logs, the compile log and the run sequences (`logs/`), the smoke and
 its memory-on control (`smoke/`, `smoke-control/`), `run_eval.py`, and
 `runs.json` with the argv, times and exit status of every run.
+
+### Issue #337 evaluation (2026-11-17)
+
+titan#337 delivers browser applications: the executable browser chapter, its
+complete application, deployment of the module, binary and trace table, and
+the development server. Two commits changed the cartridges before the
+evaluation:
+
+- `9da58b4`: `titan-application` gains "Browser applications" (when to choose
+  the browser target, a layout modeled on the complete application, the build
+  and deployment copy, the profile matching the SDK, the deployment set,
+  content types, CORS and CSP, local serving and bundling, and
+  `titan-browser-run` as test infrastructure), and its description and
+  `titan-programmer`'s routing line name browser applications.
+- `5991764`: routing queries 30 and 31 and case B2 are new, and the section
+  states where the module finds `app.wasm`, why a `file://` page fails, and
+  the development server's build command.
+
+The evaluated tree was `issue-337-browser-delivery` at `5991764`, based on
+`main` at `4e6a9a1`. The cases were the 31-query frontmatter routing set and
+B2, each with DeepSeek (`opencode-go/deepseek-v4.1-flash`, the acceptance
+floor), Haiku (`anthropic/claude-haiku-5-5`) and Luna
+(`openai-codex/gpt-6-luna`), plus B2 with DeepSeek on the base cartridges.
+
+Each answer came from a fresh `omp -p` process with the #388 command shape:
+high thinking, only `read,write`, `--no-skills --no-context-files --no-rules
+--no-session --no-extensions --no-prewalk --no-lsp --no-title`,
+`--approval-mode yolo`, `--max-time 20m`, an empty scratch working directory
+and the memory-off overlay, in one serial queue per provider. The routing
+prompt gave only the 13 frontmatters and the queries, without the policy
+paragraph. The B2 prompt gave only `titan-programmer` and
+`titan-application` at the evaluated (or base) revision and the case's five
+questions, without the expected answers or the rejection list. Smoke prompts
+with the overlay reported no memories for all three models, and the DeepSeek
+control without it reported them; the runs were memory-free but not shown to
+be hermetic. All seven scored processes exited 0 and wrote an answer; none
+was retried. A first launch whose runner rendered some prompts empty was
+voided unscored, and every cell ran again.
+
+Routing, scored against the policy paragraph (exact, one defensible
+specialist off, or a miss of a named route):
+
+| Model | Exact | One off | Miss |
+| --- | ---: | ---: | ---: |
+| DeepSeek | 28/31 | 7, 11 | 23 |
+| Haiku | 16/31 | — | 15 |
+| Luna | 26/31 | 8, 11, 21 | 23, 26 |
+
+Queries 30 and 31 were exact for DeepSeek and Luna: 30 selected programmer +
+application, and 31 stayed programmer + ffi. Haiku answered 31 exactly and
+dropped programmer from 30, as it did from every answer that needed a
+specialist. All three omitted programmer from query 23; DeepSeek and Luna
+chose programmer + pegs for query 11, which then had no stated oracle; Luna
+added async to query 26.
+
+| B2 | Result |
+| --- | --- |
+| DeepSeek, evaluated tree | Pass, 5/5. The deployed set, the build command into `build-browser/` and the profile match, the native development server and the `file://` reason, content types, CORS and CSP, and `locateFile`; the details the section leaves to the chapter (MIME spellings, CORS values, the `locateFile` signature, Vite) are UNKNOWN. It also states that `--exe` is relative to the working directory, which `titan-programmer` says. |
+| Haiku, evaluated tree | Pass, 5/5, with the same UNKNOWN set. |
+| Luna, evaluated tree | Pass, 5/5, with the same UNKNOWN set. |
+| DeepSeek, base tree | Fail, 0/5. It deployed `.mjs`, `.wasm` and `.wasm.map` without `.wasm.trace`, quoting `titan-programmer`'s "deploys only the three image files" a paragraph after the four images; built without `--exe` or the profile rule; and answered UNKNOWN for local serving, `file://`, content types, CORS, CSP and asset location. |
+
+No answer on the evaluated tree broke the rejection list: no separate loader,
+no runtime source map, no `file://` serving, no shared native and browser
+output directory, no files from two builds, no `titan-browser-run` serving,
+and no invented `titanc` option.
+
+The evaluation led to one revision, the commit that adds this record:
+
+- **The deployed files.** `titan-programmer` names `.mjs`, `.wasm` and
+  `.wasm.trace` wherever it says what a page deploys, states that the runtime
+  never reads `.wasm.map`, and links the application cartridge's section. No
+  other cartridge describes a deployment set.
+- **Query 23.** `titan-language-server`'s description now says to load it
+  alongside `titan-programmer` whenever the queried `.titan` code is read,
+  written or reviewed, as `titan-application`'s does.
+- **Query 11.** The policy paragraph states its oracle, programmer +
+  networking + pegs: `titan.url`'s parser is a PEG grammar, and the rule
+  matches the JSON module's grammar in query 17.
+
+Query 26's async addition came from Luna alone, and DeepSeek answered it
+exactly, so `titan-async`'s description, which names its browser driver,
+stays as it is.
+
+DeepSeek's routing set was then rerun on the revised tree (`41681fb`, whose
+only frontmatter change is `titan-language-server`'s description), with the
+same command shape and prompt, and once more on `5991764` to separate the
+revision from sampling. All five DeepSeek samples, scored against the revised
+policy paragraph (query 11 as programmer + networking + pegs):
+
+| Sample | Tree | Exact | One off | Miss |
+| --- | --- | ---: | ---: | ---: |
+| 1 (above) | `5991764` | 28/31 | 7, 11 | 23 |
+| 2 | `5991764` | 22/31 | 11, 15 | 3, 4, 6, 8, 17, 23, 27 |
+| 3 | `41681fb` | 25/31 | — | 3, 4, 6, 8, 11, 17 |
+| 4 | `41681fb` | 10/31 | — | 21 queries |
+| 5 | `41681fb` | 28/31 | 8, 11 | 23 |
+
+The same model on the same bytes scored from 22 to 28 on one tree and from 10
+to 28 on the other, so no single sample measures a revision. The answers fall
+into two modes. In one, `titan-programmer` joins every Titan answer, as its
+description's "Mandatory base skill" says. In the other, a query with one
+specialist boundary gets that specialist alone (`async` for 3, `networking`
+for 4, `pegs` for 6, `json + pegs` for 17), the pattern of Haiku's answer
+above.
+
+- **Query 23** answered programmer + language-server in one of the three
+  samples on `41681fb` and in neither sample on `5991764`. The description's
+  new clause points the right way, but the specialist-only mode still drops
+  programmer there.
+- **Query 11** answered programmer + pegs three times, pegs alone once and
+  pegs + networking once across the five samples; networking never appeared
+  with programmer. The stated oracle changed the score, not the routing:
+  neither `titan-pegs` ("byte-oriented parsers") nor `titan-networking` ("URL
+  code") says that it owns `titan.url`'s parser. No description was changed
+  for it.
+
+Method: score the routing set as a distribution over at least three fresh
+samples per model, reporting each sample's exact count and the per-query
+answers, rather than one sample. Stating the mandatory base in the routing
+prompt would remove the bimodality, but the set would then stop testing
+whether the frontmatter carries it.
+
+Limitations:
+
+- B2 has one answer per model and tree.
+- Haiku and Luna were not rerun, so their routing scores are single samples.
+- B2 asks for no code, so nothing was compiled.
+
+Receipts are in `/tmp/titan-337/notes/eval-cp12c`: `REPORT.md` (the rerun in
+its section 6), the intended answers and rubric (`INTENDED.md`), the overlay
+(`memory-off.yml`), the frozen cartridges and frontmatters (`cartridges/`,
+`frontmatter/`), the prompts and answers (`runs/`, the rerun in
+`runs/routing-41681fbc/` and `runs/routing-after/deepseek2.md`), the per-run
+logs and statuses (`logs/`), the runner (`run-queue.sh`), and the voided
+launches (`voided/`).
 
 ## Mechanical gates
 
