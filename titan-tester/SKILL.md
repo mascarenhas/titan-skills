@@ -1193,7 +1193,7 @@ behavior cases in the native owner, never a Busted stdlib wrapper.
 
 Use separate build trees for simultaneous coverage runs because startup resets
 shared counter paths. Keep the build artifacts at their embedded absolute
-paths. See [`native coverage`](../../../doc/language/native-coverage.md) for
+paths. See [`native coverage`](../../../doc/language/toolchain.md#native-source-coverage) for
 source selection, backend tools and report paths.
 
 ## 11. When Busted is the right layer, use its existing scaffolding

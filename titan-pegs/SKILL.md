@@ -1366,7 +1366,7 @@ This cartridge was derived from the repository at commit
 * **Regex contrast and behavior tests:**
   `doc/language/standard-library-string.md:278-497` and
   `spec/stdlib/titan/string/regex_test.titan:234-325,471-529`.
-* **Runnable introductory contrast:** `doc/quick-tour.md:322-380`.
+* **Runnable introductory grammar:** `doc/language/standard-library-peg.md`.
 * **Skill-tree mandate:** GitHub issue #82, especially maintainer comment
   `https://github.com/mascarenhas/titan/issues/82#issuecomment-5309065757`,
   which asks this skill to privilege Relabel while also teaching combinators

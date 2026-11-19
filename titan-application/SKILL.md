@@ -232,9 +232,9 @@ Add `-v` to see native command echoes and object/native/link hits and miss
 reasons on stderr; worker output and diagnostics also go there, leaving
 `--print-c-objects` stdout as paths only. Capture both streams for a build log
 (`2>&1`), but leave stderr separate when capturing object paths. Consult
-[incremental compilation](../../../doc/language/incremental-compilation.md)
+[incremental compilation](../../../doc/language/toolchain.md#incremental-and-separate-compilation)
 for certification boundaries and
-[output directories](../../../doc/language/output-directory.md) for native
+[output directories](../../../doc/language/toolchain.md#output-directories) for native
 switches, executable destinations, and locking.
 
 `check-delivery` must not depend on the phony images, a generator, or

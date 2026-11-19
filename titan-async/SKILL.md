@@ -677,7 +677,7 @@ completion, because neither a borrowed pointer nor caught-error recovery
 extends that lifetime. Context storage whose mutable address is passed
 directly to a C or Titan call keeps that callee's writes after a raise, so it
 needs no pointer-local workaround ([C storage after a caught
-error](../../../doc/language/c-ffi-expressions.md#c-storage-after-a-caught-error)).
+error](../../../doc/language/ffi.md#c-storage-after-a-caught-error)).
 
 `prepare_native_retirement` strongly retains `owner` through callback return and
 committed readiness. That GC root is not a cross-state-close native pin:

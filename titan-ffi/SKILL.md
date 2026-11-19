@@ -777,7 +777,7 @@ first-class constructors and mutable pointer fields retain ordinary behavior.
 Arguments and size failures occur in lexical order (including named arguments).
 Empty tails have distinct non-null addresses; borrowed views remain uncounted.
 Initialize native handles only after the final owner exists, never before a copy.
-See `doc/language/nominal-storage.md` for examples and
+See `doc/language/ffi.md` (§ Native C storage in records and unions) for examples and
 `doc/implementation/nominal-storage.md` for lowering and review invariants.
 
 For a positive integer literal or eligible object-like integer macro count:
@@ -831,7 +831,7 @@ the old object can be collected. A foreign writer still keeps a fresh GC object
 rooted through its whole normal and error-handler handoff; this is not tracing
 of arbitrary C memory. The rule relies on Titan's supported GCC/Clang
 toolchain contract, with ISO C's unqualified-access caveat; see [C storage
-after a caught error](../../../doc/language/c-ffi-expressions.md#c-storage-after-a-caught-error).
+after a caught error](../../../doc/language/ffi.md#c-storage-after-a-caught-error).
 
 ### Source-written owners
 
@@ -2473,8 +2473,8 @@ Every standard-library or runtime change that touches C (authored C, a
 `foreign function` callback, or a `lua_*`/`luaL_*` call, the browser bridge
 included) or browser JavaScript (the loader, a `--js-library` file, an
 `EM_JS` or `EM_ASM` block, generated JavaScript glue) follows these six
-rules, whose normative text is the style guide's
-[Write native bindings Titan-first](../../../doc/style-guide.md#write-native-bindings-titan-first).
+rules, whose normative text is in
+[Standard-library maintenance](../../../doc/implementation/standard-library-maintenance.md#keep-c-and-the-lua-c-api-to-what-titan-cannot-do).
 A review counts the new Lua C API calls, authored C lines, and authored
 JavaScript lines in the diff and justifies each one against them. The wrong
 examples come from the initial browser bridge at commit `843b446e` (titan
@@ -3243,26 +3243,25 @@ searching by analogy.
 
 ## Authoritative user documentation
 
-* `doc/language/ffi.md` — foreign import, type families, calls, conversions,
-  strings, arrays, owners, linking, platform limitations.
-* `doc/language/c-ffi-expressions.md` — tag names, target-directed allocation,
-  pointer probes, operators, macros, field projections.
-* `doc/language/const-values.md` — binding constness, inline C storage,
-  qualified Arrays, and Lua write boundaries.
+* `doc/language/ffi.md` — foreign import, type families, tag names, calls,
+  conversions, operators, macros, strings, target-directed/owned/FAM allocation,
+  native C storage in records and unions, linking, platform limitations.
+* `doc/language/statements.md`, `records.md`, `interfaces.md`, `arrays-maps.md`,
+  and `modules.md` — `const` bindings, fields, snapshots, and qualified Arrays.
 * `doc/language/foreign-functions.md` — restricted source C functions,
   visibility, generated headers, body subset.
-* `doc/language/types.md` — normative boundary matrix, strict versus dynamic
-  `value`, direct coercions, written `as`/`is`.
-* `doc/language/option-types.md` — automatic force/introduction and the limited
-  composition rules.
+* `doc/language/types.md` — type aliases, Option types (`T?`), strict versus
+  dynamic `value`, direct coercions, written `as`/`is` (and conversion tables
+  in `doc/language/grammar.md`).
 * `doc/language/lua-interop.md` — Lua representations, module/record/container
   behavior, Lua callable dispatch, multiple states.
 * `doc/language/standard-library-lua.md` — `titan.lua` API and async require
   semantics.
 * `doc/language/standard-library-gc.md` — weak maps, finalizers, collector
   actions.
-* `doc/style-guide.md`, especially “Keep Lua and C machinery behind narrow
-  audited boundaries,” “Write native bindings Titan-first,” “Acquire, then
+* `doc/style-guide.md` and `doc/implementation/standard-library-maintenance.md`,
+  especially “Keep Lua and C machinery behind narrow audited boundaries,”
+  “Keep C and the Lua C API to what Titan cannot do,” and “Acquire, then
   defer the close,” and finalizer rules.
 * `doc/language/standard-library-browser.md` and the [loader
   API](../../../doc/language/browser-target.md#the-loader-api) — browser-only

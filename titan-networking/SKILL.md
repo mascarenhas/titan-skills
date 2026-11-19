@@ -51,7 +51,7 @@ Do not infer an API from a sketch. The API inventories below are the boundary.
 | WebSocket sessions | [`titan-websocket/SKILL.md`](../titan-websocket/SKILL.md) | [`doc/language/standard-library-websocket.md`](../../../doc/language/standard-library-websocket.md), [`titan/websocket/`](../../../titan/websocket) |
 | Stream abstraction | [`doc/language/standard-library-io.md`](../../../doc/language/standard-library-io.md) | [`titan/io.titan`](../../../titan/io.titan), [`doc/language/interfaces.md`](../../../doc/language/interfaces.md) |
 | Tasks, deadlines, cancellation | [`doc/language/async-io.md`](../../../doc/language/async-io.md) | [`doc/implementation/libuv-runtime.md`](../../../doc/implementation/libuv-runtime.md), [`titan/async/`](../../../titan/async) |
-| Cleanup/error/option spelling | [`doc/style-guide.md`](../../../doc/style-guide.md), [`doc/language/defer.md`](../../../doc/language/defer.md), [`doc/language/error-handling.md`](../../../doc/language/error-handling.md), [`doc/language/option-types.md`](../../../doc/language/option-types.md) | Adjacent code and tests |
+| Cleanup/error/option spelling | [`doc/style-guide.md`](../../../doc/style-guide.md), [`doc/language/error-handling.md`](../../../doc/language/error-handling.md), [`doc/language/types.md#option-types-t`](../../../doc/language/types.md#option-types-t) | Adjacent code and tests |
 | Native tests | [`doc/language/standard-library-test.md`](../../../doc/language/standard-library-test.md) | Existing owner under [`spec/stdlib/titan/`](../../../spec/stdlib/titan), repository commands in [`AGENTS.md`](../../../AGENTS.md) |
 
 The public language chapters define behavior. Source confirms declarations and

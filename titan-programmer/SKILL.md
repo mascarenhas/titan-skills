@@ -931,7 +931,7 @@ can be embedded by copy; reading them borrows a pointer into the owner. Keep
 that owner live and distinguish shallow binding constness from explicit C
 pointee qualifiers. Direct fresh const-array/FAM constructor arguments can use
 storage in that same owner. Use the FFI cartridge for these cases and
-`doc/language/nominal-storage.md` for examples; do not infer field storage from
+`doc/language/ffi.md` (§ Native C storage in records and unions) for examples; do not infer field storage from
 Lua uservalue indices. Wide native C fields may fail only when an actual
 Lua/`value`/reflection observation needs checked boxing.
 
@@ -1392,7 +1392,7 @@ Replacing a file does not hot-reload an initialized module. Validate replacement
 files in a fresh process with the consumer unchanged; also exercise plugins
 against an already initialized host provider when that is the deployment model.
 Compiler cache validity and rebuilding affected consumers are separate decisions. See
-[`binary-compatibility.md`](../../../doc/language/binary-compatibility.md).
+[`toolchain.md#replacing-shared-library-dependencies`](../../../doc/language/toolchain.md#replacing-shared-library-dependencies).
 
 Native bootstrap code can use a newly generated logical module's
 `const char *<mangled>_abi_value(void)` query without Lua, allocation, or module
@@ -2131,8 +2131,8 @@ inputs are read again. Missing or malformed cache data is ignored, and the
 coordinator atomically saves it under the output lock. No persistent digest
 cache is used without `--output`.
 
-See [`incremental compilation`](../../../doc/language/incremental-compilation.md)
-and [`output directories`](../../../doc/language/output-directory.md), or the
+See [`incremental compilation`](../../../doc/language/toolchain.md#incremental-and-separate-compilation)
+and [`output directories`](../../../doc/language/toolchain.md#output-directories), or the
 [application build pattern](../titan-application/SKILL.md#establish-output-ownership-before-compiling).
 For a standalone delivery claim, check a relocated executable with the compiler
 and Titan provider unavailable. `--static` is a preference and can still select
@@ -2321,28 +2321,24 @@ disagree, resolve it at the narrow owner:
 
 - language overview and runnable examples:
   [`doc/language/index.md`](../../../doc/language/index.md) and
-  [`doc/quick-tour.md`](../../../doc/quick-tour.md);
+  [`doc/language/tour.md`](../../../doc/language/tour.md);
 - type relations, automatic conversion, Options, and dynamic boundaries:
-  [`types.md`](../../../doc/language/types.md),
-  [`option-types.md`](../../../doc/language/option-types.md), and
+  [`types.md`](../../../doc/language/types.md) and
   [`expressions.md`](../../../doc/language/expressions.md);
-- declarations and data modeling:
+- statements, declarations, and data modeling:
+  [`statements.md`](../../../doc/language/statements.md),
   [`functions.md`](../../../doc/language/functions.md),
-  [`spread-expressions.md`](../../../doc/language/spread-expressions.md),
   [`closures.md`](../../../doc/language/closures.md),
-  [`const-values.md`](../../../doc/language/const-values.md),
   [`generics.md`](../../../doc/language/generics.md),
   [`arrays-maps.md`](../../../doc/language/arrays-maps.md),
   [`records.md`](../../../doc/language/records.md),
   [`unions.md`](../../../doc/language/unions.md), and
   [`interfaces.md`](../../../doc/language/interfaces.md);
-- module visibility and physical source shape:
-  [`modules.md`](../../../doc/language/modules.md),
-  [`source-import-visibility.md`](../../../doc/language/source-import-visibility.md),
-  and [`folder-modules.md`](../../../doc/language/folder-modules.md);
+- module visibility, folder/target files, and toolchain:
+  [`modules.md`](../../../doc/language/modules.md) and
+  [`toolchain.md`](../../../doc/language/toolchain.md);
 - errors, cleanup, and project idiom:
-  [`error-handling.md`](../../../doc/language/error-handling.md),
-  [`defer.md`](../../../doc/language/defer.md), and
+  [`error-handling.md`](../../../doc/language/error-handling.md) and
   [`doc/style-guide.md`](../../../doc/style-guide.md);
 - core libraries:
   [`string`](../../../doc/language/standard-library-string.md),
@@ -2397,7 +2393,7 @@ changes the default `out/.coverage/report` with `-o out`. Metrics cover Titan ex
 branches/functions. Join children normally, keep build artifacts at their
 embedded absolute paths, and use separate build trees for concurrent coverage
 runs. Combination and Codecov uploads stay external. See
-[`native coverage`](../../../doc/language/native-coverage.md) for commands and
+[`native coverage`](../../../doc/language/toolchain.md#native-source-coverage) for commands and
 [`implementation`](../../../doc/implementation/native-coverage.md) for ownership.
 
 ## Before finishing
