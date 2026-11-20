@@ -73,9 +73,9 @@ It takes an ordered, semicolon-separated list of roots, quoted for the shell:
 `tests`, so a runner under `tests/` imports `src` modules by their usual names
 (`demo.main`) while keeping its own (`runner`). Omitting `--tree` uses `.` as
 the authored root, and in both cases source lookup falls back to the read-only
-installed module directory `<root>/lib/titan/0.6` after authored roots (requiring
-`--output` if an installed source is selected); there is no source-path
-environment variable.
+implicit SDK root `<root>/lib/titan/0.6` after authored roots (requiring
+`--output` if an installed source is selected through that fallback); there is
+no source-path environment variable.
 Keep generated files outside the installed SDK. Target-specific runner and
 entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
 helpers live under `build/.native/`. Treat these as compiler-owned inventories,

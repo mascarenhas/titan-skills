@@ -2074,22 +2074,22 @@ for quiet builds. See
 independently. `--tree` takes an ordered, semicolon-separated root list, quoted
 for the shell (`--tree 'src;tests'`); each logical module is looked up in those
 authored roots in order (default `.`) before falling back to the read-only
-installed module directory `<root>/lib/titan/0.6` on both native and browser
-targets (there is no source-path environment variable). Passing `--tree`
-replaces `.` without disabling that fallback; on `--target browser`,
-`<root>/lib/titan/0.6` is searched for `.titan` source only. Generated C,
-objects, and FFI headers recreate the selected source root's hierarchy under
-the output directory; final providers, loaders, default executables, and
-temporary compiler files also live there. `--exe PATH` selects a
-standalone/test executable destination relative to the working directory, not
-to `--output`. For example, `titanc --tree /project/src -o out app.main` writes
-`out/app/main.c`, never `/project/src/app/main.c`. Authored quoted headers and
-source diagnostics still use the original source location. Output routing does
-not add a binary search root: use `TITAN_PATH_0_6` for previously built
-providers, for both `titanc` and Lua hosts. Omitting `--output` retains legacy
-source-adjacent outputs except when a build selects an installed `.titan`
-source through the SDK fallback, which requires `--output DIR` so nothing is
-written or locked inside the SDK.
+implicit SDK root `<root>/lib/titan/0.6` on both native and browser targets
+(there is no source-path environment variable). Passing `--tree` replaces `.`
+without disabling that fallback; on `--target browser`, `<root>/lib/titan/0.6`
+is searched for `.titan` source only. Generated C, objects, and FFI headers
+recreate the selected source root's hierarchy under the output directory; final
+providers, loaders, default executables, and temporary compiler files also live
+there. `--exe PATH` selects a standalone/test executable destination relative
+to the working directory, not to `--output`. For example, `titanc --tree
+/project/src -o out app.main` writes `out/app/main.c`, never
+`/project/src/app/main.c`. Authored quoted headers and source diagnostics still
+use the original source location. Output routing does not add a binary search
+root: use `TITAN_PATH_0_6` for previously built providers, for both `titanc`
+and Lua hosts. Omitting `--output` retains legacy source-adjacent outputs
+except when a build selects an installed `.titan` source through that implicit
+fallback, which requires `--output DIR` so nothing is written or locked in the
+implicit fallback root.
 
 Target-specific runner and entrypoint files live under
 `out/.titan-links/<key>/synthetic/`; authored C helpers passed with `--c-source`
