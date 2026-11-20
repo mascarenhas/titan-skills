@@ -2789,3 +2789,53 @@ The evaluation covers this provider and these cases only. Receipts in the
 #421 validation materials: `eval/{RUBRIC,BASELINE,AFTER-1,FINAL}.md`,
 `eval/{before,after,revision}/`, `eval/run.sh`, `eval/memory-off.yml`, and
 `logs/{baseline-author-check,author-exact-ff2c41d1,revised-author-exact-ff2c41d1}.log`.
+
+## External installed source-only dependencies of compiled libraries (`titan-package` + `titan-programmer`, titan#427)
+
+Evaluated on `2026-11-20` with one fresh independent `omp -p` process per
+answer using `opencode-go/deepseek-v4.1-flash` (`--thinking high`,
+`--tools read,write`, `--no-skills --no-context-files --no-rules --no-session
+--no-extensions --no-prewalk --no-lsp --no-title`, `--approval-mode yolo
+--max-time 20m`, and `--config=/tmp/titan-427/eval/memory-off.yml`). No other
+evaluator was requested or run. Each evaluator received only the fixed
+explanatory prompt (`eval/task.md`, without the rubric) and read-only exports
+of `titan-programmer/SKILL.md` and `titan-package/SKILL.md` for baseline
+`7e498872` versus candidate `349abe90`. Six binary dimensions were scored with
+no partial credit (`eval/RUBRIC.md`).
+
+| Dimension | Before (`7e498872`) | After (`349abe90`) | Evidence (`before/answer.md` → `after/answer.md`) |
+| --- | ---: | ---: | --- |
+| Library authoring | 0 | 1 | `60–86` rejected binary-library + installed-source shape → `67–70, 138–151, 187–205`: public import, two unaffected libraries, own files/normal flags, no alternative binary prerequisite. |
+| App consumer | 0 | 1 | `60–86` proposed all-source or all-compiled instead → `19–23, 210–223, 255–263`: no surrogate direct import; one source object in dynamic and `--static` applications. |
+| Source lookup & ownership | 1 | 1 | `137–151, 213–226` → `187–196, 240–245`: authored `--tree`, source fallback needs `--output`, distinct from provider path, read-only SDK. |
+| Platform distinctions | 1 | 1 | `175–200` → `198–201, 275–280, 295–300`: paired Unix `.so`/`.a`, DLL-only Windows/app DLL, browser source-vs-native-artifact boundary. |
+| Missing source/deployment | 0 | 1 | `217–221, 275–287` claimed clean app could not build or needed no source at compile time → `53–59, 405–433`: actual source required, referring module named, valid rebuild remedy; bare Lua cannot compile Titan source. |
+| Independent proof | 1 | 1 | `223–226, 234–245, 251–265` → `318–401, 405–427`: fresh outside checkout, one TU/object, shared state/identity from both libraries, static inspection rather than filenames alone. |
+| **Total** | **3/6** | **6/6** | Evaluated strictly on `7e498872` vs `349abe90` (explanatory case; no submission compiled). |
+
+Ancillary errors and caveats recorded on `349abe90`:
+
+- `after/answer.md:277` guessed `app.dll` from `--exe out/bin/app.exe` despite
+  positional root `main` (the actual Windows application provider DLL is
+  `main.dll`, named after the logical root).
+- `after/answer.md:393` wrongly expected `ldd` to list Titan provider DSOs
+  loaded on demand via `dlopen`.
+- `after/answer.md:9, 432` stated obligations travel "through public
+  interfaces", whereas the actual source obligation comes from separate build
+  metadata and can be wholly private.
+- Some broad claims about duplicate images omitted explicit owner-conflict
+  rejection.
+- Both neutral isolation controls (`control/output.log` with `memory-off.yml`
+  and `on-control/output.log` without it) reported no visible project memory,
+  skill catalog, `AGENTS`, or peer context (an evaluator self-report, not proof
+  of training-data isolation).
+- This 3/6 → 6/6 score covers `349abe90` only, **not** the subsequent editorial
+  and factual refinement commit (`a3fd59a`), which is recorded as a separate
+  editorial delta with no model rerun. It measures cartridge routing/guidance
+  only and does not substitute for real product tests.
+
+Receipts in the #427 validation materials: `eval/{task,RUBRIC,BASELINE,FINAL}.md`,
+`eval/{before,after}/{command,output}.log`, `eval/{before,after}/answer.md`,
+`eval/{control,on-control}/output.log`, `eval/run.sh`, `eval/memory-off.yml`,
+and `logs/skills-mechanical-349abe90.log` (14 frontmatters, 235 relative links,
+109 anchors, all 107 complete Titan fences parsed).
