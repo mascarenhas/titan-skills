@@ -2046,7 +2046,7 @@ include:
 -o DIR / --output DIR directory for all generated files (created if needed)
 -j N / --jobs N       bound frontend workers and native compilation
 --incremental         certify objects and final links; compile/link only misses
---static              Linux/macOS: prefer Titan .a dependencies; not linker -static
+--static              Linux/macOS: embed Titan .a closure; not linker -static
 --exe PATH            standalone/test executable destination, relative to cwd
 --test                build a native Titan test executable
 --test-dir DIR        discover conventionally named test roots under DIR
@@ -2151,9 +2151,14 @@ cache is used without `--output`.
 See [`incremental compilation`](../../../doc/language/toolchain.md#incremental-and-separate-compilation)
 and [`output directories`](../../../doc/language/toolchain.md#output-directories), or the
 [application build pattern](../titan-application/SKILL.md#establish-output-ownership-before-compiling).
-For a standalone delivery claim, check a relocated executable with the compiler
-and Titan provider unavailable. `--static` is a preference and can still select
-a DSO, so successful compilation alone does not prove provider independence.
+On Linux/macOS, `--static` standalone and `--test` executables embed the
+complete transitive Titan dependency closure from `.a` archives (with no
+fallback to shared Titan providers; a missing archive is a link-time error)
+alongside compiled authored project sources, without statically linking `libc`
+or external native libraries. For a standalone delivery claim, still validate a
+relocated executable with the compiler and Titan SDK unavailable, since
+non-static builds and external native libraries still need runtime resolution
+checks.
 
 The compiler checks source misses in dependency order; certified objects
 restore unchanged modules without parsing or typechecking. Explicit

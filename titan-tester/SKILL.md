@@ -145,9 +145,11 @@ canonical installed standard modules are public compiled dependencies. Those
 native cases test public behavior rather than production-private machinery.
 After changing production `titan/*.titan`, rebuild/reinstall the provider before
 using a leaf native-suite target; `make test` performs the current installation
-first. `--static` only swaps `.a` versus `.so` preference in the compiled
-fallback; it neither defeats source-first test resolution nor means
-“static-only.”
+first. On Linux/macOS, `--static` embeds the complete transitive Titan
+dependency closure from `.a` archives (with no fallback to shared Titan
+providers; a missing archive is a link-time error) while still compiling
+authored project sources; it does not statically link `libc` or external native
+libraries.
 
 ### Module and filename rules still apply
 
@@ -892,8 +894,12 @@ echoes and object/native/link hit and miss diagnostics on stderr; worker output
 also goes to stderr. Runner `-v` is a separate runtime option. Follow the
 [application build guidance](../titan-application/SKILL.md#establish-output-ownership-before-compiling)
 for always-invoked Make targets, native inputs, and jobserver policy.
-`--static` prefers the standard archive on Linux/macOS but may select a DSO;
-it is unsupported on Windows. At run time a selected DSO is searched in the
+On Linux/macOS, `--static` embeds the complete transitive Titan dependency
+closure from `.a` archives with no fallback to shared Titan providers (a
+missing archive is a link-time error; authored project sources still compile
+into the runner, and `libc`/native libraries link normally); `--static` is
+unsupported on Windows. Without `--static` (or on Windows), a selected DSO or
+DLL is searched at run time in the
 executable's directory, then `../lib/titan/0.6` beside it, then once per Lua
 state in the installed SDK (`TITAN_ROOT`, or `titanc --print-root` from
 `PATH`/`TITANC`), never in the working directory. For a provider elsewhere,

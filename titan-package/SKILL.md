@@ -152,6 +152,19 @@ titan-uninstall titan-cui
 - **Dependencies:** In LuaRocks, `~>` is a prefix match (`"lua ~> 5.5"`
   matches `5.5.*`; `"titan ~> 0.6"` matches Titan `0.6.*` releases—`TITAN_ABI_VERSION`
   is tracked independently of package version).
+- **Provider pairs vs bundles vs `--static` executables:** Build a normal
+  native library module—or a collection of related modules compiled together—
+  **without `--static`** so it publishes only its own `.so`/`.a` pair on
+  Linux/macOS (`.dll` only on Windows) and never embeds the standard library or
+  other package dependencies; declare dependencies in `dependencies` instead
+  (e.g. a router package consumes the canonical standard library rather than
+  embedding it). Reserve native `--static` library builds for canonical bundles
+  of related modules such as the standard library (other libraries never embed
+  it). On Linux/macOS, `--static` standalone and `--test` executables embed the
+  complete transitive Titan dependency closure from `.a` archives alongside
+  compiled authored project sources—with no fallback to shared Titan providers
+  (a missing archive is a link-time error)—without statically linking `libc`,
+  OS support, or external native libraries.
 - **Clean staging:** Stage only exact final regular files—no `build/` copy, no
   `.c`/`.o`/`.titan`/`.titan-links`, no `dist/bin/`, no symlinks, no direct
   SDK writes. Relative paths under `dist/` must use portable ASCII ordinary
