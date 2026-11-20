@@ -207,8 +207,17 @@ roots first before falling back to the read-only implicit SDK root
 providers there are never eligible). Selecting an installed source through
 that fallback requires `-o`/`--output` so generated files stay in the
 consumer's output tree and `titanc` neither writes nor locks in the implicit
-SDK root. Ordinary Lua `require` loads compiled providers, not uncompiled
-`.titan` sources.
+SDK root. Separately from the positional-root rule, compiling an ordinary
+binary library fails if a dependency resolves **only** through the implicit
+installed source fallback rather than copying another rock's module into the
+library's provider: install that dependency's compiled provider, or publish
+your library as source-only until
+[titan#427](https://github.com/mascarenhas/titan/issues/427) allows an
+external installed-source dependency to be compiled once by the final program.
+Same-repo authored sources under `--tree` (or default `.`) still compile
+together into a library, and ordinary/`--static` applications and `--test`
+builds still compile installed fallback sources into `--output`. Ordinary Lua
+`require` loads compiled providers, not uncompiled `.titan` sources.
 
 ## Publishing, packing, and removal
 
