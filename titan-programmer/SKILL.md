@@ -2107,35 +2107,25 @@ so nothing is written or locked in the implicit fallback root.
 
 A library build (including plain non-`main`, non-`--test`, non-`--static` `-c`
 and `--source-first`) may import an installed source-only module via an
-ordinary public `import` without compiling, embedding, or owning it (even for a
-private or initializer-only import, with no extra manifest or public API change;
-plain non-`main` `-c` writes only owned library objects, and explicit `.titan`
-collaboration across that installed-source library boundary stays rejected and
-strictly source-only). Native library providers carry only authored `--tree`
-modules (plus any explicit non-Titan `-X` payloads); browser library archives
-likewise leave external installed sources external while retaining browser's
-preexisting separate archive composition for compiled browser dependencies.
-Consuming applications and `--test` executables satisfy each external
-dependency recorded by reached members of imported prebuilt libraries through
-**ordinary single-owner election**—with no redundant `import` in the
-application and no broad runtime plugin scan—choosing authored or installed
-source (compiled once into the application, requiring `--output` only when
-installed fallback source is actually selected or on `--target browser`), a
-compatible standalone compiled provider, or a canonical common-prefix bundle
-(Unix `--static` accepts `.a` archives or compiled source and rejects a
-DSO-only provider; `--target browser` accepts eligible Wasm `.a` archives or
-browser/shared source, never host binaries). An already-built application keeps
-its own compiled copy if disk distribution later changes; a newly built
-application can bind a compatible compiled provider or prefix bundle without
-rebuilding the prebuilt library, while ABI/interface mismatches, genuine
-duplicate physical owners, cross-boundary cycles, and missing owners remain
-errors. Editors and the language server lazily recover exposed types on demand
-using the same ordinary selection; bare Lua `require` hosts have no Titan
-application binding table or Lua-side compiler and require such a dependency to
-be already initialized or preloaded in the Lua state. See
+ordinary public `import` without compiling, embedding, or owning it (keeping
+explicit `.titan` collaboration strictly source-only and confined to authored
+`--tree` roots in libraries). Consuming applications and `--test` executables
+satisfy each external dependency recorded by reached members of imported
+prebuilt libraries through ordinary single-owner election—choosing a compatible
+compiled provider (standalone or canonical common-prefix bundle, linked from
+`.a` or loaded lazily from a DSO/DLL) or compiling source once (requiring
+`--output` only when installed fallback source is actually selected or on
+`--target browser`), with Unix `--static` rejecting DSO-only providers and
+`--target browser` accepting only eligible Wasm archives or source. An existing
+application retains any module it compiled from source if disk distribution
+changes, while a newly built application can bind a compatible compiled
+provider without rebuilding the prebuilt library; editors lazily recover
+exposed types on demand, and bare Lua hosts loading a library built against a
+dependency as source need that dependency already initialized or natively
+preloaded first. See
 [`titan-package`](../titan-package/SKILL.md#source-only-packages) and
 [Source-only modules](../../../doc/language/modules.md#source-only-modules) for
-the full per-target, rebuild, and packaging rules.
+the full per-target, conflict, rebuild, and packaging rules.
 
 Target-specific runner and entrypoint files live under
 `out/.titan-links/<key>/synthetic/`; authored C helpers passed with `--c-source`

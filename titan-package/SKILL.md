@@ -250,27 +250,34 @@ changes:
   candidate, claim, and preference order as a written `import`, with no
   redundant `import` required in the application and no broad filesystem or
   runtime plugin scan for arbitrarily named non-prefix DSOs:
-  - **Source or compiled provider:** ordinary selection can choose authored
-    `--tree` source, installed `<root>/lib/titan/0.6` source (preferred first
-    under `--test` / `--source-first`), a standalone compiled provider
-    (`.so`/`.a` on Unix, `.dll` on Windows, `.a` on `--target browser`), a
-    canonical common-prefix bundle claiming that logical module (such as
-    `pkg.so`/`pkg.a`/`pkg.dll` supplying `pkg.meter`), or an already-carried
-    member of a selected archive/bundle.
-  - **Targets and `--static`:** When source is chosen, dynamic Unix, Unix
+  - **Source or compiled provider:** default ordinary lookup tries compiled
+    providers before source (so a compatible compiled provider can win even
+    when source also exists), while `--test` and `--source-first` try source
+    first; within source lookup, authored `--tree` roots precede the read-only
+    `<root>/lib/titan/0.6` fallback. Eligible compiled providers are a
+    standalone provider (`.so`/`.a` on Unix, `.dll` on Windows, `.a` on
+    `--target browser`), a canonical common-prefix bundle claiming that logical
+    module (such as `pkg.so`/`pkg.a`/`pkg.dll` supplying `pkg.meter`), or an
+    already-carried member of a selected archive/bundle.
+  - **Targets and `--static`:** When source is chosen, default Unix, Unix
     `--static`, Windows (via the companion application provider DLL behind the
     launcher), and `--target browser` compile that source **once** into the
     application; `--output` is required only when the build actually selects
     installed fallback `.titan` source (or on `--target browser`), not when a
     compiled provider or authored `--tree` source satisfies it. When a compiled
-    provider is chosen, dynamic Unix and Windows load that single selected
-    DSO/DLL lazily through the application at run time; Unix `--static` accepts
-    only `.a` archives or compiled source and rejects a DSO-only provider;
-    `--target browser` accepts only eligible WebAssembly `.a` archives or
-    `.browser.titan`/shared `.titan` source (never native host binaries or
-    dynamic loading). Every library shares the application's single chosen
-    owner and state lazily in written import order through the checked public
-    ABI; unreached siblings in a multi-module library impose nothing.
+    provider is chosen, a selected shared DSO or DLL (default Unix or Windows)
+    loads lazily through the application at run time, whereas a selected `.a`
+    archive (default Unix archive-only fallback, Unix `--static`, or
+    `--target browser`) links its reached member into the executable or
+    WebAssembly image rather than opening a DSO at run time. Unix `--static`
+    accepts only `.a` archives or compiled source and rejects a DSO-only
+    provider; `--target browser` accepts only eligible WebAssembly `.a`
+    archives or `.browser.titan`/shared `.titan` source (never native host
+    binaries or dynamic loading). Every library shares the application's single
+    chosen owner and state lazily in written import order through the checked
+    public ABI; a dormant sibling in a multi-module library imposes no
+    additional logical source or build demand merely by being dormant (physical
+    symbol/container rules still apply).
 - **Diagnostics, ABI checks, and conflicts:** Missing all eligible owners fails
   the build naming both the requesting library and the missing dependency. An
   incompatible ABI or used public interface, a malformed claimed provider,
@@ -278,9 +285,9 @@ changes:
   module, or a cross-boundary cycle remains a compile/link or load error—never
   weakened or silently skipped.
 - **Upgrades, existing apps, editors, and bare Lua hosts:** An already-built
-  application compiled when the dependency was installed as source keeps its
-  own app-compiled copy and continues running unchanged if that dependency on
-  disk is later replaced by a compiled provider or removed. A later application
+  application whose selected owner was compiled from source retains that
+  app-compiled module and continues running unchanged if the dependency on disk
+  is later replaced by a compiled provider or removed. A later application
   rebuilt against the **same** prebuilt library (without rebuilding that
   library) accepts a compatible compiled provider—standalone or canonical
   prefix bundle—when ordinary election chooses it, with no source codegen for
@@ -291,11 +298,15 @@ changes:
   (`--incremental` detects the change). Editors and the language server lazily
   recover exposed types from a prebuilt library's recorded dependencies on
   demand using the same ordinary module selection (checking nothing for purely
-  private requirements with no exposed-type demand until a build runs). Bare
-  Lua `require` hosts have no Lua-side Titan compiler and no Titan application
-  binding table: loading a prebuilt library whose external dependency was not
-  supplied by a Titan application requires that dependency to be already
-  initialized or preloaded in the Lua state.
+  private requirements with no exposed-type demand until a build runs). In a
+  bare Lua host (which has no Lua-side Titan compiler and no Titan application
+  binding table), loading a prebuilt library **built against that dependency as
+  installed source** requires the dependency to be already initialized or
+  registered via Titan's native preload machinery in that Lua state—for example
+  by `require`-ing an independently installed compiled provider first—rather
+  than relying on an arbitrary Lua `package.preload` function (ordinary
+  compiled imports and directly `require`-ing an installed compiled provider
+  keep their normal Titan searcher behavior).
 
 ## Publishing, packing, and removal
 
@@ -316,9 +327,9 @@ Distinguish three concepts:
    chosen owner through ordinary module selection—compiling the source once
    (under `--output` whenever installed fallback source is selected or on
    `--target browser`) or binding a later compatible compiled provider or
-   canonical prefix bundle without rebuilding the library (bare Lua `require`
-   requires the dependency to be already initialized or preloaded in the Lua
-   state).
+   canonical prefix bundle without rebuilding the library. In a bare Lua state,
+   loading a library built against that dependency as source requires it to be
+   already initialized or natively preloaded first.
 
 Packing an installed native rock (`luarocks pack titan-cui 0.1.0-1`) archives
 `$(PREFIX)` (including `dist/`) and may label it `.all.rock` because `dist/`
