@@ -2205,7 +2205,11 @@ checks (`ldd` / `otool -L` inspect direct OS linker dependencies only and do
 not list Titan provider DSOs opened on demand via `dlopen`).
 
 The compiler checks source misses in dependency order; certified objects
-restore unchanged modules without parsing or typechecking. Explicit
+restore unchanged owned modules without parsing or typechecking (in a library
+build with external installed source-only dependencies, those external sources
+have no persisted `.o` or separate interface cache and may be rechecked in
+memory on each warm build while owned library objects and the final provider
+still hit). Explicit
 command-line roots are selected from source; ordinary
 dependencies prefer compiled providers, then source, but expose only their
 public interfaces either way. `--test` deliberately changes ordinary dependency

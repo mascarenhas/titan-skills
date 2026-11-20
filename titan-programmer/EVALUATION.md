@@ -2833,9 +2833,22 @@ Ancillary errors and caveats recorded on `349abe90`:
   and factual refinement commit (`a3fd59a`), which is recorded as a separate
   editorial delta with no model rerun. It measures cartridge routing/guidance
   only and does not substitute for real product tests.
+- The fixed prompt and rubric (`eval/task.md`, `eval/RUBRIC.md`) were
+  explanatory and required no executable submission from the evaluator.
+  Separately, after scoring `349abe90`, an independent Linux replay
+  (`logs/eval-token-de1e386c.log`, `2026-11-20`, `eval/replay-token.py` against
+  product checkpoint `de1e386c`) compiled and ran verbatim the evaluator's
+  three suggested token-witness Titan fences (`meter`, `alpha`, `main`) with a
+  `beta` rockspec derived from the evaluator's `alpha` recipe as instructed,
+  passing both dynamic and `--static` builds and reverse-order
+  `titan-uninstall` (exit 0, 12.7 s). That later replay checks those Linux
+  snippets against `de1e386c`; it does not alter the measured `349abe90` score
+  or cover Windows, macOS, or browser.
 
 Receipts in the #427 validation materials: `eval/{task,RUBRIC,BASELINE,FINAL}.md`,
 `eval/{before,after}/{command,output}.log`, `eval/{before,after}/answer.md`,
 `eval/{control,on-control}/output.log`, `eval/run.sh`, `eval/memory-off.yml`,
-and `logs/skills-mechanical-349abe90.log` (14 frontmatters, 235 relative links,
-109 anchors, all 107 complete Titan fences parsed).
+`logs/skills-mechanical-349abe90.log` (14 frontmatters, 235 relative links,
+109 anchors, all 107 complete Titan fences parsed), and
+`logs/eval-token-de1e386c.log` (independent post-scoring Linux replay of the
+three suggested Titan fences + derived `beta` rockspec).
