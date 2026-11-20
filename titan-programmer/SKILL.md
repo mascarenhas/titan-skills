@@ -322,14 +322,21 @@ function(): integer  ->  function(): float     rejected
 function(): integer  ->  function(): integer?  rejected
 ```
 
-`{T}` and `const { T }` are distinct invariant types. `const? { T }` is a
-maybe-const view type: `{T}`, `const { T }`, and `const? { T }` can all be
-implicitly assigned to `const? { T }` (and `({T})?` / `(const {T})?` to
-`(const? {T})?`). `const? { T }` cannot be implicitly assigned back to `{T}`
-or `const { T }`, but can be explicitly downcast with `as {T}` or `as const {T}`
-(which perform runtime metatable checks). A direct `as const { T }` from a
-mutable `{T}` performs an explicit shallow snapshot (or in-place freeze when
-linear).
+`{T}` and `const { T }` are distinct invariant types. A fresh Array literal
+in a `const? { T }` context, including an optional one, builds a const Array.
+An existing Array of any qualifier can widen implicitly to `const? { T }`
+when the element types are equal or gradually consistent. The view keeps the
+same Array and runtime tag without copying or freezing it; reads still
+check the target element type. This rule also applies between Options (nil
+passes through), when introducing an Option, or when forcing one (nil
+raises). It does not lift through other types or add written Option casts
+or tests.
+
+To downcast a maybe-const view, `is {T}` and `is const { T }` test the
+Array's actual tag, and the corresponding `as` succeeds only for that tag.
+There is no implicit downcast. Unlike the const downcast from a view,
+`as const { T }` on a known mutable `{T}` takes a shallow snapshot (or
+freezes in place when the Array is linear).
 
 Put the scalar expression in the scalar target instead:
 
