@@ -325,11 +325,14 @@ run is not test evidence.
 The generated runner uses the same compiled `titan.test` provider as ordinary
 imports, through public `Case.new` and `run`; it needs no private test source
 installation. On Linux/macOS, `--static` standalone and `--test` executables
-embed the complete transitive Titan dependency closure from `.a` archives (with
-no fallback to shared Titan providers; a missing archive is a link-time error)
-alongside compiled authored sources; it governs Titan modules and does not
-request a fully static system executable (`libc`, OS support, and external
-native libraries still link normally). Validate
+embed the full reached Titan dependency closure from `.a` archives plus source
+compiled in the application (with no fallback to shared Titan providers; a
+missing archive is a link-time error; `--static` is rejected on final no-main
+library outputs, though `-c --static` still compiles objects for a later
+executable). Dynamic/default applications may still fall back to an
+archive-only dependency or compile source. `--static` governs Titan module
+archives and does not force `libc`, OS support, or external native libraries to
+link statically (nor forbid explicit linker flags that request it). Validate
 the delivery claim with a relocated application in a temporary directory and
 an environment without compiler or SDK search paths: unset `TITAN_ROOT`,
 `TITANC`, `TITAN_PATH_0_6`, and `TITAN_PATH`, and keep `titanc` and the SDK's

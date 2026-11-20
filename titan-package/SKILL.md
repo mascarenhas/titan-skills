@@ -152,19 +152,22 @@ titan-uninstall titan-cui
 - **Dependencies:** In LuaRocks, `~>` is a prefix match (`"lua ~> 5.5"`
   matches `5.5.*`; `"titan ~> 0.6"` matches Titan `0.6.*` releases—`TITAN_ABI_VERSION`
   is tracked independently of package version).
-- **Provider pairs vs bundles vs `--static` executables:** Build a normal
-  native library module—or a collection of related modules compiled together—
-  **without `--static`** so it publishes only its own `.so`/`.a` pair on
-  Linux/macOS (`.dll` only on Windows) and never embeds the standard library or
-  other package dependencies; declare dependencies in `dependencies` instead
-  (e.g. a router package consumes the canonical standard library rather than
-  embedding it). Reserve native `--static` library builds for canonical bundles
-  of related modules such as the standard library (other libraries never embed
-  it). On Linux/macOS, `--static` standalone and `--test` executables embed the
-  complete transitive Titan dependency closure from `.a` archives alongside
-  compiled authored project sources—with no fallback to shared Titan providers
-  (a missing archive is a link-time error)—without statically linking `libc`,
-  OS support, or external native libraries.
+- **Libraries vs bundles vs executables:** Build a single library module or a
+  related canonical bundle in ordinary library mode with explicit logical roots
+  (the standard library names all of its own roots; no other package embeds
+  it), publishing only its own `.so`/`.a` pair on Linux/macOS (`.dll` only on
+  Windows) without incorporating external Titan dependencies; declare
+  dependencies in `dependencies` instead. `--static` is rejected on every final
+  no-main library output, including canonical bundles (`-c --static` still
+  compiles individual objects for a later executable, not a linked library).
+  Dynamic/default applications may still fall back to an archive-only
+  dependency or compile source; on Linux/macOS, `--static` standalone and
+  `--test` executables embed the full reached Titan dependency closure from
+  `.a` archives plus source compiled in the application, with no fallback to
+  shared Titan providers (a missing archive is a link-time error). `--static`
+  governs Titan module archives and does not force `libc`, OS support, or
+  external native libraries to link statically (nor forbid external linker
+  flags that request it).
 - **Clean staging:** Stage only exact final regular files—no `build/` copy, no
   `.c`/`.o`/`.titan`/`.titan-links`, no `dist/bin/`, no symlinks, no direct
   SDK writes. Relative paths under `dist/` must use portable ASCII ordinary

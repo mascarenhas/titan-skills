@@ -145,11 +145,13 @@ canonical installed standard modules are public compiled dependencies. Those
 native cases test public behavior rather than production-private machinery.
 After changing production `titan/*.titan`, rebuild/reinstall the provider before
 using a leaf native-suite target; `make test` performs the current installation
-first. On Linux/macOS, `--static` embeds the complete transitive Titan
-dependency closure from `.a` archives (with no fallback to shared Titan
-providers; a missing archive is a link-time error) while still compiling
-authored project sources; it does not statically link `libc` or external native
-libraries.
+first. On Linux/macOS, `--static` embeds the full reached Titan dependency
+closure from `.a` archives plus source compiled in the test executable (with no
+fallback to shared Titan providers; a missing archive is a link-time error;
+`--static` is rejected on final no-main library outputs, while dynamic/default
+executables may still fall back to archive-only or source dependencies).
+`--static` governs Titan module archives and does not force `libc` or external
+native libraries to link statically.
 
 ### Module and filename rules still apply
 
@@ -898,11 +900,12 @@ echoes and object/native/link hit and miss diagnostics on stderr; worker output
 also goes to stderr. Runner `-v` is a separate runtime option. Follow the
 [application build guidance](../titan-application/SKILL.md#establish-output-ownership-before-compiling)
 for always-invoked Make targets, native inputs, and jobserver policy.
-On Linux/macOS, `--static` embeds the complete transitive Titan dependency
-closure from `.a` archives with no fallback to shared Titan providers (a
-missing archive is a link-time error; authored project sources still compile
-into the runner, and `libc`/native libraries link normally); `--static` is
-unsupported on Windows. Without `--static` (or on Windows), a selected DSO or
+On Linux/macOS, `--static` embeds the full reached Titan dependency closure
+from `.a` archives plus source compiled in the runner, with no fallback to
+shared Titan providers (a missing archive is a link-time error; `--static` does
+not force `libc` or external native libraries to link statically); `--static`
+is unsupported on Windows and rejected on final no-main library outputs.
+Without `--static` (or on Windows), a selected DSO or
 DLL is searched at run time in the
 executable's directory, then `../lib/titan/0.6` beside it, then once per Lua
 state in the installed SDK (`TITAN_ROOT`, or `titanc --print-root` from
