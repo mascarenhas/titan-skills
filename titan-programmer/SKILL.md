@@ -1332,7 +1332,13 @@ or Windows `.dll` providers; compilation fails if no matching source module exis
 
 Only that explicit, loader-proven source import exposes the producer's `local`
 declarations. The capability is **direct only**: another module's import does
-not grant private access, and binary providers and Lua remain public-only. A
+not grant private access, and binary providers and Lua remain public-only. In a
+library build (including plain non-`main`, non-`--test`, non-`--static` `-c`),
+explicit `.titan` collaboration stays confined to authored `--tree` roots and
+is rejected when the target resolves from the read-only implicit installed SDK
+fallback `<root>/lib/titan/0.6` (use an ordinary public `import` or an authored
+`--tree` checkout; explicit `.titan` collaboration remains valid inside
+applications and `--test` builds). A
 dotted logical module name whose final component is `titan`, such as
 `app.titan`, is forbidden because that spelling always means a marked import of
 `app`. Bare logical module `titan` and an interior component such as
@@ -1991,7 +1997,9 @@ Experimental Windows library builds emit DLL providers with no paired
 Titan archive; `--static` and selected Titan archive providers are unsupported.
 `--jobs` bounds frontend workers and native compilation on Windows as well.
 The `check` program above produces `out/bin/check.exe` and
-`out/lib/titan/0.6/check.dll` on Windows. `--exe out/bin/custom.exe` selects
+`out/lib/titan/0.6/check.dll` on Windows (that application provider DLL also
+carries any source-only dependencies materialized for prebuilt library DLLs,
+sharing one initialized instance lazily across loaded library DLLs). `--exe out/bin/custom.exe` selects
 the launcher destination without moving the provider DLL; `.exe` is appended
 when absent. Windows uses the matched controlled Lua DLL and its SDK, not an
 ordinary stock Windows Lua build. Keep that Lua DLL beside the Lua interpreter,
@@ -2093,8 +2101,32 @@ use the original source location. Output routing does not add a binary search
 root: use `TITAN_PATH_0_6` for previously built providers, for both `titanc`
 and Lua hosts. Omitting `--output` retains legacy source-adjacent outputs
 except when a build selects an installed `.titan` source through that implicit
-fallback, which requires `--output DIR` so nothing is written or locked in the
-implicit fallback root.
+fallback—even when a library build only checks it—which requires `--output DIR`
+so nothing is written or locked in the implicit fallback root.
+
+A library build (including plain non-`main`, non-`--test`, non-`--static` `-c`,
+and `--source-first`) may import an installed source-only module through an
+ordinary public `import` without compiling, embedding, or owning it (or its
+private helpers): only authored `--tree` modules belong to the library provider
+(browser retains its preexisting separate archive composition for compiled
+browser archives), and plain non-`main` `-c` writes only owned library objects
+(no orphan object for the installed source). Explicit `.titan` collaboration
+across that installed-source library boundary is rejected. When a consuming
+application or `--test` executable (dynamic native, Unix `--static`, Windows
+DLL, or `--target browser`) imports prebuilt libraries whose reached logical
+members depend on installed source-only modules, `titanc` compiles each
+required source module once into `--output` with no redundant `import` in the
+application, sharing one lazily initialized instance across all libraries
+through the checked public ABI (unreached siblings impose no source build).
+Each such obligation requires **actual source** (authored `--tree` roots first,
+then `<root>/lib/titan/0.6`), never silently satisfied by a later compiled
+binary; if source is missing, install the source rock, supply a checkout via
+`--tree`, or rebuild the referring library against the binary distribution.
+Compatible implementation or private-dependency edits to the installed source
+require rebuilding only the consuming application; changing a compiled
+intermediate library's source-only obligations requires rebuilding forwarding
+libraries (`--incremental` detects it). Ordinary Lua `require` hosts have no
+Lua-side Titan compiler and cannot compile `.titan` sources on the fly.
 
 Target-specific runner and entrypoint files live under
 `out/.titan-links/<key>/synthetic/`; authored C helpers passed with `--c-source`
@@ -2111,9 +2143,12 @@ command echoes, worker output, and diagnostics go to stderr, including with
 generation emits fewer parts.
 
 Always run `titanc --incremental` rather than deciding in Make whether it is
-needed: the compiler certifies sources, C headers, dependency interfaces, the
+needed: the compiler certifies sources, C headers, dependency interfaces,
+folded source-only obligations, the
 compiler/SDK, native flags, and final links itself, so no external Make module
-graph is needed. Plain `-c` recompiles the whole source closure; `-c --incremental`
+graph is needed. Plain `-c` recompiles owned sources (treating non-`main`,
+non-`--test`, non-`--static` roots as prospective libraries without emitting
+objects for external installed sources); `-c --incremental`
 certifies requested roots too. Pass the same output directory throughout
 related builds. Application and test builds safely share its lock and reuse
 unchanged production objects when native flags, SDK, and resolved provider

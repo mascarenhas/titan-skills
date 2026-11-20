@@ -76,8 +76,13 @@ the authored root. Positional `titanc` build roots and `--test-dir` resolve
 only from authored `--tree` roots (never the implicit SDK fallback); ordinary
 `import` statements inside a valid authored root fall back to the read-only
 implicit SDK root `<root>/lib/titan/0.6` after authored roots (requiring
-`--output` if an installed source is selected through that fallback). There is
-no source-path environment variable.
+`--output` whenever an installed source is selected through that fallback).
+When the application imports prebuilt libraries that depend on installed
+source-only modules, `titanc` compiles each required source module once into
+`--output` with no redundant `import` in the application (requiring actual
+source from authored `--tree` roots or `<root>/lib/titan/0.6`, never silently
+substituted by a later compiled binary). There is no source-path environment
+variable.
 Keep generated files outside the installed SDK. Target-specific runner and
 entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
 helpers live under `build/.native/`. Treat these as compiler-owned inventories,

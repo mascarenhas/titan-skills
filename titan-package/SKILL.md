@@ -156,19 +156,21 @@ titan-uninstall titan-cui
   related canonical bundle in ordinary library mode with explicit logical roots
   (the standard library names all of its own roots; no other package embeds
   it), publishing only its own `.so`/`.a` pair on Linux/macOS (`.dll` only on
-  Windows) without incorporating external Titan dependencies; declare
+  Windows, `.a` only on browser) without incorporating external compiled Titan
+  dependencies or external installed source-only dependencies; declare package
   dependencies in `dependencies` instead. `--static` is rejected on every final
   no-main library output, including canonical bundles (`-c --static` still
   compiles individual objects for a later executable, not a linked library).
   Dynamic/default applications may still fall back to an archive-only
   dependency or compile source; on Linux/macOS, `--static` standalone and
   `--test` executables embed the full reached Titan dependency closure from
-  `.a` archives plus source compiled in the application, with no fallback to
-  shared Titan providers (a missing archive for an external prebuilt dependency
-  not satisfied by application-compiled source is a build error). `--static`
-  governs Titan module archives and does not force `libc`, OS support, or
-  external native libraries to link statically (nor forbid external linker
-  flags that request it).
+  `.a` archives plus source compiled in the application (including any
+  source-only dependencies required by reached members of imported prebuilt
+  libraries), with no fallback to shared Titan providers (a missing archive for
+  an external prebuilt dependency not satisfied by application-compiled source
+  is a build error). `--static` governs Titan module archives and does not force
+  `libc`, OS support, or external native libraries to link statically (nor
+  forbid external linker flags that request it).
 - **Clean staging:** Stage only exact final regular files—no `build/` copy, no
   `.c`/`.o`/`.titan`/`.titan-links`, no `dist/bin/`, no symlinks, no direct
   SDK writes. Relative paths under `dist/` must use portable ASCII ordinary
@@ -209,23 +211,48 @@ roots first before falling back to the read-only implicit SDK root
 `<root>/lib/titan/0.6` on both native and browser targets (browser uses it for
 `.titan` source only, selecting `.browser.titan`/shared variants; native
 providers there are never eligible). Selecting an installed source through
-that fallback requires `-o`/`--output` so generated files stay in the
-consumer's output tree and `titanc` neither writes nor locks in the implicit
-SDK root. Separately from the positional-root rule, compiling an ordinary
-binary library fails if a dependency is selected from the implicit installed
-source fallback (including under `--source-first` when a paired compiled
-provider is also installed) rather than copying another rock's module into the
-library's provider: install or use that dependency's compiled provider
-(building without `--source-first` if one is already installed), or publish
-your library as source-only until
-[titan#427](https://github.com/mascarenhas/titan/issues/427) allows an
-external installed-source dependency to be compiled once by the final program.
-(Without `-o`/`--output`, the generic missing-`--output` diagnostic can appear
-first; passing `-o` does not permit vendoring an installed source into a binary
-library.) Same-repo authored sources under `--tree` (or default `.`) still
-compile together into a library, and ordinary/`--static` applications and
-`--test` builds still compile installed fallback sources into `--output`. Ordinary Lua
-`require` loads compiled providers, not uncompiled `.titan` sources.
+that fallback—even when a library build only checks it—requires `-o`/`--output`
+so generated files stay in the caller's output tree and `titanc` neither
+writes nor locks in the implicit SDK root.
+
+A compiled library (including plain non-`main`, non-`--test`, non-`--static`
+`-c`, and `--source-first` when both a provider and an installed source exist)
+may depend on an installed source-only module through an ordinary public
+`import`. The library typechecks against that module's public interface without
+compiling, embedding, or owning it (or pulling in its private helpers or native
+dependencies): only authored `--tree` roots and authored helpers link into the
+library provider (note: browser retains its preexisting separate archive
+composition for compiled browser archives). Declare the source-only rock in
+`dependencies` and stage only your library's own provider files; plain
+non-`main` `-c` compiles as a prospective library and writes only owned library
+objects (no orphan object for the installed source). Explicit `.titan`
+private source collaboration across that installed-source library boundary is
+rejected—use an ordinary public `import` or bring the source into an authored
+`--tree` checkout (explicit `.titan` collaboration remains valid within
+authored `--tree` roots and inside applications and `--test` builds).
+
+When a consumer application or `--test` executable (dynamic native, Unix
+`--static`, Windows DLL via the companion application provider DLL behind the
+launcher, or `--target browser`) imports one or more prebuilt libraries whose
+reached logical members depend on installed source-only modules—directly or
+through another compiled library—`titanc` compiles each required source module
+**once** into the consumer's `--output` directory, with no redundant `import`
+in the application. Multiple libraries share that single compiled module and
+its state lazily in written import order through the checked public ABI;
+unreached siblings in a multi-module library impose no source build. Each such
+obligation requires **actual source** in the consuming build (authored `--tree`
+roots first, then `<root>/lib/titan/0.6`); a later installed compiled binary
+never satisfies it silently, and an independently carried physical owner for
+the same logical module is a conflict. If no allowed source is found, `titanc`
+names the missing module and referring library and directs the user to install
+the source rock, supply a checkout via `--tree`, or rebuild the referring
+library against the binary distribution. Compatible implementation or
+private-dependency edits to the installed source itself require rebuilding only
+the consuming application; if a compiled intermediate library changes which
+source-only modules it requires, rebuild compiled libraries that forward those
+obligations (`--incremental` detects the change automatically). Ordinary Lua
+`require` hosts have no Lua-side Titan compiler: they load compiled providers
+and cannot compile `.titan` sources on the fly.
 
 ## Publishing, packing, and removal
 
@@ -240,8 +267,11 @@ Distinguish three concepts:
    run `upload` during local verification).
 2. **Package-built native provider:** Compiled during `luarocks install` /
    `luarocks make` into `<tree>/lib/titan/0.6/`; usable from Titan and Lua.
-3. **Installed source-only module:** `.titan` files in `<tree>/lib/titan/0.6/`;
-   compiled into each Titan consumer's `--output` directory (not Lua `require`).
+3. **Installed source-only module:** `.titan` files in `<tree>/lib/titan/0.6/`.
+   Compiled libraries can typecheck against them and publish without owning
+   them, and each consuming Titan application or `--test` executable compiles
+   them once into its `--output` directory (bare Lua `require` cannot compile
+   `.titan` sources).
 
 Packing an installed native rock (`luarocks pack titan-cui 0.1.0-1`) archives
 `$(PREFIX)` (including `dist/`) and may label it `.all.rock` because `dist/`
