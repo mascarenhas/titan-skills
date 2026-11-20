@@ -2852,3 +2852,53 @@ Receipts in the #427 validation materials: `eval/{task,RUBRIC,BASELINE,FINAL}.md
 109 anchors, all 107 complete Titan fences parsed), and
 `logs/eval-token-de1e386c.log` (independent post-scoring Linux replay of the
 three suggested Titan fences + derived `beta` rockspec).
+
+## Application-supplied ordinary selection for library external dependencies (`titan-package` + `titan-programmer` + `titan-application`, titan#432)
+
+Evaluated on `2026-11-20` against a frozen operator case (`eval432/task.md`,
+650-word limit, without the rubric) and six binary dimensions (`eval432/RUBRIC.md`,
+no partial credit), fixed before any cartridge edit. Each export ran in one
+fresh independent `omp -p` process using DeepSeek V4.1 Flash (`high` thinking,
+read/write-only tools, memory-off, and context/rules/skills/LSP/extensions/prewalk
+disabled; exact arguments and outputs in `eval432/{before,after}/{command,output}.log`).
+Each evaluator received read-only exports of `titan-programmer/SKILL.md`,
+`titan-package/SKILL.md`, and `titan-application/SKILL.md` for baseline
+`78566d18` versus revised candidate `682ed75`. No extra evaluator runs or
+generated examples were used.
+
+| Frozen dimension | Before (`78566d18`) | After (`682ed75`) | Evidence (`before/answer.md` → `after/answer.md`) |
+| --- | ---: | ---: | --- |
+| Original source phase incl. `--output` | 0 | 0 | `3–6, 34–36` omitted installed-source `--output` and no-direct-import → `3–7, 11` kept library external, no redundant app import, one app copy, but still omitted the explicit `--output` requirement for installed-fallback source compilation. |
+| Old/new binary or bundle, library unchanged | 1 | 1 | `8–21, 28–37` predicted replacement despite baseline's contrary rule → `5, 7, 11` distinguished original app-compiled owner from new ordinary binary election (standalone or canonical prefix bundle) without rebuilding the library. |
+| Single lazy state & ordering | 0 | 1 | `35–43` attributed sharing to directory search/first init rather than app-supplied binding → `7, 11` stated one elected owner supplied lazily in written import order, sharing one state across users. |
+| Targets & strict `--static` | 1 | 1 | `23–26, 38–42` → `7–11`: default Unix shared, Unix `--static` source/archive only, Windows launcher + DLL with no `--static`, Wasm archive/source with no host binary. |
+| Missing/incompatible/bare host/semantic | 0 | 1 | `45–48, 55–58` missed bare-Lua first-load of library built against source and used old source-only remedy → `13–17` named both modules, separated ABI/claim errors from absence, noted lazy editor selection, and noted bare-Lua prior init/preload requirement without an app table. |
+| Discriminating test | 0 | 1 | `65–68` loaded the library first in bare Lua with no app table/prior registration → `19` removed the chosen dynamic provider and other search roots, ran the app, restored, and checked mutation (negative control distinguishing compiled-in source from a newly selected DSO). |
+| **Total** | **2/6** | **5/6** | Evaluated strictly on `78566d18` vs `682ed75` (design-only explanatory oracle; no submission compiled). |
+
+Caveats, limited oracle, and mechanical receipts on `682ed75`:
+
+- `after/answer.md:9–11` described default Unix builds as loading a DSO without
+  noting archive-only fallback, and `:11` could be read to equate ordinary
+  `--test` with `--test --static` (ordinary local `--test` does not forbid DSOs).
+- Dimension 1 stayed `0/1` on `682ed75` because the evaluator omitted `--output`
+  for installed-fallback compilation even though all three candidate cartridges
+  stated it explicitly; no second model attempt was run.
+- Dimension 6's discriminating check (`after/answer.md:19`) is design-only and
+  does not independently demonstrate shared state across two libraries.
+- Both runs self-reported seeing only the three provided cartridges; self-report
+  is not proof of training-data isolation (memory-off and context-disable flags
+  are observable in `eval432/{before,after}/command.log`).
+- This **2/6 → 5/6** result is a documentation-comprehension check covering
+  `682ed75` only—not product verification (which runs real native/Wasm
+  replacement tests outside the evaluator) and **not** a new score for the
+  subsequent editorial and factual refinement commit `5d4f47e` addressing
+  `reviews/docs-432.md` (`D432-S1..S3`), which was not re-evaluated.
+- Candidate mechanical check on `682ed75`:
+  `logs/skills-mechanical-systempy-682ed75.log` (exit 0; 14 frontmatters, 239
+  relative links, 113 anchors, all 107 complete Titan fences parsed; an initial
+  attempt under Homebrew Python lacked PyYAML, not a skill defect).
+
+Receipts in the #431/#432 validation materials: `eval432/{task,RUBRIC,BASELINE,FINAL}.md`,
+`eval432/{before,after}/{command,output}.log`, `eval432/{before,after}/answer.md`,
+`reviews/docs-432.md`, and `logs/skills-mechanical-systempy-682ed75.log`.

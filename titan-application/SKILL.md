@@ -77,12 +77,17 @@ only from authored `--tree` roots (never the implicit SDK fallback); ordinary
 `import` statements inside a valid authored root fall back to the read-only
 implicit SDK root `<root>/lib/titan/0.6` after authored roots (requiring
 `--output` whenever an installed source is selected through that fallback).
-When the application imports prebuilt libraries that depend on installed
-source-only modules, `titanc` compiles each required source module once into
-the application (under `--output` whenever an installed fallback source is
-selected or on `--target browser`) with no redundant `import` in the
-application (requiring actual source from authored `--tree` roots or
-`<root>/lib/titan/0.6`, never silently substituted by a later compiled binary).
+When the application imports prebuilt libraries whose reached members recorded
+external dependencies from installed source, `titanc` supplies one owner per
+module through ordinary selection—compiling source once (requiring `--output`
+only when installed fallback source is actually selected or on
+`--target browser`) or selecting a compatible compiled provider or canonical
+common-prefix bundle (linked from `.a` or loaded lazily from a DSO/DLL; Unix
+`--static` rejects DSO-only providers) without rebuilding the library. An
+existing application retains any module it compiled from source if disk
+distribution changes; see
+[`titan-package`](../titan-package/SKILL.md#source-only-packages) for full
+per-target, conflict, upgrade, and bare-Lua rules.
 There is no source-path environment variable.
 Keep generated files outside the installed SDK. Target-specific runner and
 entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
