@@ -165,7 +165,7 @@ titan-uninstall titan-cui
   `--test` executables embed the full reached Titan dependency closure from
   `.a` archives plus source compiled in the application, with no fallback to
   shared Titan providers (a missing archive for an external prebuilt dependency
-  not satisfied by application-compiled source is a link-time error). `--static`
+  not satisfied by application-compiled source is a build error). `--static`
   governs Titan module archives and does not force `libc`, OS support, or
   external native libraries to link statically (nor forbid external linker
   flags that request it).

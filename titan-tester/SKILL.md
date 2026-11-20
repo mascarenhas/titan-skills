@@ -148,7 +148,7 @@ using a leaf native-suite target; `make test` performs the current installation
 first. On Linux/macOS, `--static` embeds the full reached Titan dependency
 closure from `.a` archives plus source compiled in the test executable (with no
 fallback to shared Titan providers; a missing archive for an external prebuilt
-dependency not satisfied by application-compiled source is a link-time error;
+dependency not satisfied by application-compiled source is a build error;
 `--static` is rejected on final no-main library outputs, while dynamic/default
 executables may still fall back to archive-only or source dependencies).
 `--static` governs Titan module archives and does not force `libc` or external
@@ -904,7 +904,7 @@ for always-invoked Make targets, native inputs, and jobserver policy.
 On Linux/macOS, `--static` embeds the full reached Titan dependency closure
 from `.a` archives plus source compiled in the runner, with no fallback to
 shared Titan providers (a missing archive for an external prebuilt dependency
-not satisfied by application-compiled source is a link-time error; `--static`
+not satisfied by application-compiled source is a build error; `--static`
 does not force `libc` or external native libraries to link statically);
 `--static` is unsupported on Windows and rejected on final no-main library
 outputs.
