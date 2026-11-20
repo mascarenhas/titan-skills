@@ -2158,8 +2158,9 @@ and [`output directories`](../../../doc/language/toolchain.md#output-directories
 [application build pattern](../titan-application/SKILL.md#establish-output-ownership-before-compiling).
 On Linux/macOS, `--static` standalone and `--test` executables embed the full
 reached Titan dependency closure from `.a` archives plus source compiled in the
-application (with no fallback to shared Titan providers; a missing archive is a
-link-time error). `--static` is rejected on final no-main library outputs
+application (with no fallback to shared Titan providers; a missing archive for
+an external prebuilt dependency not satisfied by application-compiled source is
+a link-time error). `--static` is rejected on final no-main library outputs
 (though `-c --static` still compiles objects for a later executable), while
 dynamic/default applications may still fall back to an archive-only dependency
 or compile source. `--static` governs Titan module archives and does not force

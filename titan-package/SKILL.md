@@ -164,7 +164,8 @@ titan-uninstall titan-cui
   dependency or compile source; on Linux/macOS, `--static` standalone and
   `--test` executables embed the full reached Titan dependency closure from
   `.a` archives plus source compiled in the application, with no fallback to
-  shared Titan providers (a missing archive is a link-time error). `--static`
+  shared Titan providers (a missing archive for an external prebuilt dependency
+  not satisfied by application-compiled source is a link-time error). `--static`
   governs Titan module archives and does not force `libc`, OS support, or
   external native libraries to link statically (nor forbid external linker
   flags that request it).
@@ -211,15 +212,19 @@ providers there are never eligible). Selecting an installed source through
 that fallback requires `-o`/`--output` so generated files stay in the
 consumer's output tree and `titanc` neither writes nor locks in the implicit
 SDK root. Separately from the positional-root rule, compiling an ordinary
-binary library fails if a dependency resolves **only** through the implicit
-installed source fallback rather than copying another rock's module into the
-library's provider: install that dependency's compiled provider, or publish
+binary library fails if a dependency is selected from the implicit installed
+source fallback (including under `--source-first` when a paired compiled
+provider is also installed) rather than copying another rock's module into the
+library's provider: install or use that dependency's compiled provider
+(building without `--source-first` if one is already installed), or publish
 your library as source-only until
 [titan#427](https://github.com/mascarenhas/titan/issues/427) allows an
 external installed-source dependency to be compiled once by the final program.
-Same-repo authored sources under `--tree` (or default `.`) still compile
-together into a library, and ordinary/`--static` applications and `--test`
-builds still compile installed fallback sources into `--output`. Ordinary Lua
+(Without `-o`/`--output`, the generic missing-`--output` diagnostic can appear
+first; passing `-o` does not permit vendoring an installed source into a binary
+library.) Same-repo authored sources under `--tree` (or default `.`) still
+compile together into a library, and ordinary/`--static` applications and
+`--test` builds still compile installed fallback sources into `--output`. Ordinary Lua
 `require` loads compiled providers, not uncompiled `.titan` sources.
 
 ## Publishing, packing, and removal
