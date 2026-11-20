@@ -1332,7 +1332,13 @@ or Windows `.dll` providers; compilation fails if no matching source module exis
 
 Only that explicit, loader-proven source import exposes the producer's `local`
 declarations. The capability is **direct only**: another module's import does
-not grant private access, and binary providers and Lua remain public-only. A
+not grant private access, and binary providers and Lua remain public-only. In a
+library build (including plain non-`main`, non-`--test`, non-`--static` `-c`),
+explicit `.titan` collaboration stays confined to authored `--tree` roots and
+is rejected when the target resolves from the read-only implicit installed SDK
+fallback `<root>/lib/titan/0.6` (use an ordinary public `import` or an authored
+`--tree` checkout; explicit `.titan` collaboration remains valid inside
+applications and `--test` builds). A
 dotted logical module name whose final component is `titan`, such as
 `app.titan`, is forbidden because that spelling always means a marked import of
 `app`. Bare logical module `titan` and an interior component such as
@@ -1991,8 +1997,10 @@ Experimental Windows library builds emit DLL providers with no paired
 Titan archive; `--static` and selected Titan archive providers are unsupported.
 `--jobs` bounds frontend workers and native compilation on Windows as well.
 The `check` program above produces `out/bin/check.exe` and
-`out/lib/titan/0.6/check.dll` on Windows. `--exe out/bin/custom.exe` selects
-the launcher destination without moving the provider DLL; `.exe` is appended
+`out/lib/titan/0.6/check.dll` on Windows (that application provider DLL also
+carries any source-only dependencies materialized for prebuilt library DLLs,
+sharing one initialized instance lazily across loaded library DLLs). `--exe out/bin/custom.exe` selects
+the launcher destination without moving or renaming the provider DLL (which stays `check.dll`, named after the logical root); `.exe` is appended
 when absent. Windows uses the matched controlled Lua DLL and its SDK, not an
 ordinary stock Windows Lua build. Keep that Lua DLL beside the Lua interpreter,
 compiler frontend, and application launcher EXEs. Follow the
@@ -2093,8 +2101,30 @@ use the original source location. Output routing does not add a binary search
 root: use `TITAN_PATH_0_6` for previously built providers, for both `titanc`
 and Lua hosts. Omitting `--output` retains legacy source-adjacent outputs
 except when a build selects an installed `.titan` source through that implicit
-fallback, which requires `--output DIR` so nothing is written or locked in the
-implicit fallback root.
+fallback—even when a library build only checks it—which requires `--output DIR`
+so nothing is written or locked in the implicit fallback root.
+
+A library build (including plain non-`main`, non-`--test`, non-`--static` `-c`
+and `--source-first`) may import an installed source-only module via an
+ordinary public `import` without compiling, embedding, or owning it (even for a
+private or initializer-only import, with no extra manifest or public API change;
+plain non-`main` `-c` writes only owned library objects, and explicit `.titan`
+collaboration across that installed-source library boundary is rejected). Native
+library providers carry only authored `--tree` modules (plus any explicit
+non-Titan `-X` payloads); browser library archives likewise leave external
+installed sources external while retaining browser's preexisting separate
+archive composition for compiled browser dependencies. Consuming applications
+and `--test` executables compile each source-only dependency required by
+reached members of imported prebuilt libraries once into the application (under
+`--output` whenever an installed fallback source is selected or on `--target
+browser`), with no redundant `import` in the application. Each obligation
+requires actual source (authored `--tree` roots first, then
+`<root>/lib/titan/0.6`; never silently satisfied by a later compiled binary;
+conflicting physical owners and cross-boundary cycles fail at build time), and
+bare Lua `require` hosts cannot compile `.titan` sources on the fly. See
+[`titan-package`](../titan-package/SKILL.md#source-only-packages) and
+[Source-only modules](../../../doc/language/modules.md#source-only-modules) for
+missing-source remedies and rebuild rules.
 
 Target-specific runner and entrypoint files live under
 `out/.titan-links/<key>/synthetic/`; authored C helpers passed with `--c-source`
@@ -2111,9 +2141,12 @@ command echoes, worker output, and diagnostics go to stderr, including with
 generation emits fewer parts.
 
 Always run `titanc --incremental` rather than deciding in Make whether it is
-needed: the compiler certifies sources, C headers, dependency interfaces, the
+needed: the compiler certifies sources, C headers, dependency interfaces,
+folded source-only obligations, the
 compiler/SDK, native flags, and final links itself, so no external Make module
-graph is needed. Plain `-c` recompiles the whole source closure; `-c --incremental`
+graph is needed. Plain `-c` recompiles owned sources (treating non-`main`,
+non-`--test`, non-`--static` roots as prospective libraries without emitting
+objects for external installed sources); `-c --incremental`
 certifies requested roots too. Pass the same output directory throughout
 related builds. Application and test builds safely share its lock and reuse
 unchanged production objects when native flags, SDK, and resolved provider
@@ -2168,10 +2201,15 @@ or compile source. `--static` governs Titan module archives and does not force
 linker flags that request it). For a standalone delivery claim, still validate
 a relocated executable with the compiler and Titan SDK unavailable, since
 non-static builds and external native libraries still need runtime resolution
-checks.
+checks (`ldd` / `otool -L` inspect direct OS linker dependencies only and do
+not list Titan provider DSOs opened on demand via `dlopen`).
 
 The compiler checks source misses in dependency order; certified objects
-restore unchanged modules without parsing or typechecking. Explicit
+restore unchanged owned modules without parsing or typechecking (in a library
+build with external installed source-only dependencies, those external sources
+have no persisted `.o` or separate interface cache and may be rechecked in
+memory on each warm build while owned library objects and the final provider
+still hit). Explicit
 command-line roots are selected from source; ordinary
 dependencies prefer compiled providers, then source, but expose only their
 public interfaces either way. `--test` deliberately changes ordinary dependency
