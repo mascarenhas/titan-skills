@@ -1140,13 +1140,16 @@ Final coverage links require a test or standalone executable. Use
 `--coverage -c` for separate object compilation before that link; library-only
 provider links are rejected.
 
-By default, source imports without top-level `test_` functions are measured.
-A module containing tests is excluded as a whole; prebuilt modules are ignored.
-Selection follows the source dependency graph, not every repository file.
-Import unused production modules from the test graph to retain their zero-hit
-lines. Override selection with repeated `--coverage-module 'app.*'` globs;
-`*` matches any sequence and `?` one character, including dots. Test-containing
-and prebuilt modules remain excluded. Empty selection fails usefully.
+By default, authored source imports without top-level `test_` functions are
+measured. Source-only modules resolved through the implicit SDK fallback
+(`<root>/lib/titan/0.6`), modules containing tests (excluded as a whole), and
+prebuilt providers are excluded. Selection follows the source dependency graph,
+not every repository file. Import unused authored production modules from the
+test graph to retain their zero-hit lines. Override selection with repeated
+`--coverage-module 'app.*'` globs; `*` matches any sequence and `?` one
+character, including dots. A matching glob opts an installed fallback source
+into instrumentation, while test-containing and selected compiled providers
+remain excluded. Empty selection fails usefully.
 
 Coverage C/headers/objects live in `.coverage` subdirectories at their normal
 output locations, with separate incremental discovery from ordinary objects.

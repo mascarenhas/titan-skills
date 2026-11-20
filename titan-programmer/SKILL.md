@@ -2378,18 +2378,21 @@ Use `titanc -q -o out --test --coverage calc_tests`, then run
 `./out/calc_tests` normally.
 Final links require a test or standalone executable; `--coverage -c` supports
 separate object compilation, while library-only provider links are rejected.
-Automatic selection instruments source imports without top-level `test_`
-functions. A mixed production/test module is excluded as a whole; prebuilt
-modules and native dependencies stay unmeasured. This follows the source import
-graph, so import an unused module from a test root to keep its zero-hit lines
-in the denominator.
+Automatic selection instruments authored source imports without top-level
+`test_` functions. Source-only modules resolved through the implicit SDK
+fallback (`<root>/lib/titan/0.6`), mixed production/test modules (excluded as
+a whole), prebuilt providers, and native dependencies stay unmeasured. This
+follows the source import graph, so import an unused authored module from a
+test root to keep its zero-hit lines in the denominator.
 
 Repeated `--coverage-module 'app.*'` overrides automatic selection with a union
 of complete logical-name globs: `*` matches any sequence and `?` one character,
-including dots. Explicit mode still skips test-containing and prebuilt modules.
-Quote globs; an empty selection is an error. Generated C, headers and objects
-live in `.coverage` subdirectories inside the selected output tree. Ordinary
-and coverage incremental objects cannot satisfy each other's lookup, so an
+including dots. A matching glob opts an installed fallback source into
+instrumentation, while test-containing and selected compiled providers remain
+excluded. Quote globs; an empty selection is an error. Generated C, headers and
+objects live in `.coverage` subdirectories inside the selected output tree.
+Ordinary and coverage incremental objects cannot satisfy each other's lookup,
+so an
 optimized release build needs no cleanup after coverage.
 
 Running the test executable resets its own `.gcda` counters, retains `.gcno`

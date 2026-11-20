@@ -141,7 +141,7 @@ titan-uninstall titan-cui
 | Staged under `$(PREFIX)/dist/` | Published to | Contents |
 | --- | --- | --- |
 | `dist/modules/` | `<tree>/lib/titan/0.6/` | Unix `<prefix>.so` + `<prefix>.a`, Windows `<prefix>.dll` only, or `.titan` source files; preserve logical subpaths (`cui/box.so` for `cui.box`). |
-| `dist/include/` *(optional)* | `<tree>/include/` | Public C headers (`.titan.h`, companion FFI headers). |
+| `dist/include/` *(optional)* | `<tree>/include/` | Public C headers (`.titan.h`, companion FFI headers); `include/titan/` is reserved for SDK headers, so use a package-specific directory such as `dist/include/cui/`. |
 | `dist/lib/` *(optional)* | `<tree>/lib/` | Optional native link inputs (C archives or Windows import `.lib`); not stand-alone Titan providers. |
 
 - **`$(PREFIX)` vs shell `$PREFIX`:** Inside a rockspec, `$(PREFIX)` is the
@@ -222,11 +222,18 @@ and build profile.
   published files are preserved.
 - **Reinstalls, upgrades & collisions:** One active published version per
   rock. Preflight checks all destinations first: a collision with any foreign
-  file, Titan SDK-owned path, or protected `lib/` subtree refuses the install
-  before changing any published files (separate from mid-copy I/O failures;
-  there is no blanket transaction guarantee). On a succeeding same-version
-  reinstall or upgrade, `titan-install` retires only stale files owned by that
-  rock and prunes shared directories only when empty.
+  file, Titan SDK-owned path (including the reserved `include/titan/` header
+  subtree), or protected `lib/` subtree refuses the install before changing
+  any published files (separate from mid-copy I/O failures; there is no
+  blanket transaction guarantee). Ownership is tracked per physical
+  destination file with no compiler or DSO metadata introspection on publish:
+  keep one rock per logical module/namespace and distinct author prefixes (as
+  with Lua module rocks), because two rocks shipping different physical
+  representations of the same logical module (for example `.titan` source
+  versus prebuilt `.so`/`.a`/`.dll`, or flat versus folder files) are not
+  rejected by logical name and can shadow each other. On a succeeding
+  same-version reinstall or upgrade, `titan-install` retires only stale files
+  owned by that rock and prunes shared directories only when empty.
 - **No arguments:** `titan-uninstall` alone requests whole-Titan removal
   (also subject to LuaRocks' dependency check). On Windows, close consumers
   holding a module's DLL before upgrading or removing it.
