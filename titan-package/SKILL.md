@@ -195,14 +195,20 @@ build = {
 Or check `dist/modules/cui.titan` directly into the repo (without ignoring
 `/dist/`) and use `build = { type = "none", copy_directories = { "dist" } }`.
 
-`titanc` searches authored `--tree` roots (default `.`) before falling back to
-the read-only implicit SDK root `<root>/lib/titan/0.6` on both native and
-browser targets (browser uses it for `.titan` source only, selecting
-`.browser.titan`/shared variants; native providers there are never eligible).
-Selecting an installed source through that fallback requires `-o`/`--output`
-so generated files stay in the consumer's output tree and `titanc` neither
-writes nor locks in the implicit SDK root. Ordinary Lua `require` loads
-compiled providers, not uncompiled `.titan` sources.
+Positional `titanc` build roots—for a library, program, `-c`, explicit
+`--test`, or `--exe` build—resolve **only** from authored `--tree` roots
+(default `.`), never from the implicit installed source fallback: build a
+library from its checkout with `--tree` (as the rockspec does for `cui`),
+never by naming an installed dependency as a positional root. Ordinary
+`import` statements inside a valid authored root search authored `--tree`
+roots first before falling back to the read-only implicit SDK root
+`<root>/lib/titan/0.6` on both native and browser targets (browser uses it for
+`.titan` source only, selecting `.browser.titan`/shared variants; native
+providers there are never eligible). Selecting an installed source through
+that fallback requires `-o`/`--output` so generated files stay in the
+consumer's output tree and `titanc` neither writes nor locks in the implicit
+SDK root. Ordinary Lua `require` loads compiled providers, not uncompiled
+`.titan` sources.
 
 ## Publishing, packing, and removal
 

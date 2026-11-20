@@ -2072,12 +2072,17 @@ for quiet builds. See
 
 `--tree` selects authored source roots and `--output` selects generated files
 independently. `--tree` takes an ordered, semicolon-separated root list, quoted
-for the shell (`--tree 'src;tests'`); each logical module is looked up in those
-authored roots in order (default `.`) before falling back to the read-only
-implicit SDK root `<root>/lib/titan/0.6` on both native and browser targets
-(there is no source-path environment variable). Passing `--tree` replaces `.`
-without disabling that fallback; on `--target browser`, `<root>/lib/titan/0.6`
-is searched for `.titan` source only. Generated C, objects, and FFI headers
+for the shell (`--tree 'src;tests'`, default `.`; there is no source-path
+environment variable). Positional `titanc` build roots (library, program, `-c`,
+explicit `--test`, or `--exe`) and `--test-dir` resolve **only** from these
+authored roots, never from the implicit installed source fallback (if a
+requested root exists only as installed source, compile from a source checkout
+with `--tree`). Ordinary `import` statements inside a valid authored root
+search authored `--tree` roots in order before falling back to the read-only
+implicit SDK root `<root>/lib/titan/0.6` on both native and browser targets.
+Passing `--tree` replaces `.` without disabling that fallback for ordinary
+imports; on `--target browser`, `<root>/lib/titan/0.6` is searched for `.titan`
+source only. Generated C, objects, and FFI headers
 recreate the selected source root's hierarchy under the output directory; final
 providers, loaders, default executables, and temporary compiler files also live
 there. `--exe PATH` selects a standalone/test executable destination relative

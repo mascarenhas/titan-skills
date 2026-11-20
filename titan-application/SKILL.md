@@ -72,9 +72,11 @@ It takes an ordered, semicolon-separated list of roots, quoted for the shell:
 `--tree 'src;tests'` looks up each logical module in `src` first, then in
 `tests`, so a runner under `tests/` imports `src` modules by their usual names
 (`demo.main`) while keeping its own (`runner`). Omitting `--tree` uses `.` as
-the authored root, and in both cases source lookup falls back to the read-only
+the authored root. Positional `titanc` build roots and `--test-dir` resolve
+only from authored `--tree` roots (never the implicit SDK fallback); ordinary
+`import` statements inside a valid authored root fall back to the read-only
 implicit SDK root `<root>/lib/titan/0.6` after authored roots (requiring
-`--output` if an installed source is selected through that fallback); there is
+`--output` if an installed source is selected through that fallback). There is
 no source-path environment variable.
 Keep generated files outside the installed SDK. Target-specific runner and
 entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
