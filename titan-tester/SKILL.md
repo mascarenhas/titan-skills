@@ -877,11 +877,12 @@ default `.`), and the first listed root containing it supplies the logical
 prefix: `--tree . --test-dir tests` keeps the `tests.*` namespace. Folder
 contributors are not separate roots. Both `--test-dir` discovery and explicit
 positional `--test` roots resolve **only** from authored `--tree` roots, never
-from the implicit installed source fallback (ordinary `import`s inside those
-tests—and installed source-only dependencies demanded by prebuilt libraries
-they import—still compile once into `--output DIR`, without becoming positional
-or synthetic `--test` roots and staying excluded from automatic `--coverage`
-unless matched by `--coverage-module`). Add explicit roots for other names; repeatable
+from the implicit installed source fallback (a source-only dependency resolved
+from that installed fallback—directly or via a prebuilt library—compiles once
+under `--output DIR` without becoming a positional or synthetic `--test` root;
+see [Opt-in native production coverage](#opt-in-native-production-coverage) for
+automatic exclusion of implicit installed fallback sources versus authored
+`--tree` sources). Add explicit roots for other names; repeatable
 `--test-exclude MODULE` removes exact automatic roots only, not explicit roots
 or imported dependencies. Root selection does not replace semantic `test_`
 function discovery. See the

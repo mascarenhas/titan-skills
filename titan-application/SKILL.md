@@ -79,10 +79,11 @@ implicit SDK root `<root>/lib/titan/0.6` after authored roots (requiring
 `--output` whenever an installed source is selected through that fallback).
 When the application imports prebuilt libraries that depend on installed
 source-only modules, `titanc` compiles each required source module once into
-`--output` with no redundant `import` in the application (requiring actual
-source from authored `--tree` roots or `<root>/lib/titan/0.6`, never silently
-substituted by a later compiled binary). There is no source-path environment
-variable.
+the application (under `--output` whenever an installed fallback source is
+selected or on `--target browser`) with no redundant `import` in the
+application (requiring actual source from authored `--tree` roots or
+`<root>/lib/titan/0.6`, never silently substituted by a later compiled binary).
+There is no source-path environment variable.
 Keep generated files outside the installed SDK. Target-specific runner and
 entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
 helpers live under `build/.native/`. Treat these as compiler-owned inventories,
@@ -138,7 +139,8 @@ outside them.
 Use `--exe build/app` and `--exe build/app-tests` for exact executable
 destinations, relative to the working directory, rather than moving a compiler
 output afterward. Windows appends `.exe` when absent and keeps the application
-provider DLL under the output tree; preserve the documented payload layout.
+provider DLL under the output tree (named after the logical root module, not
+the `--exe` basename); preserve the documented payload layout.
 
 Pass native inputs directly: `-I DIR` and `-D NAME=VALUE` for headers/defines,
 `-L DIR` and `-l LIB` for linking, and repeatable single-argument
@@ -349,7 +351,10 @@ A program searches its selected DSOs only in its own directory and in
 or `titanc --print-root`) once per Lua state, so a passing run with `titanc`
 still reachable can hide a missing provider. Deploy dynamic providers in one of
 those two directories. Check its native dependencies; clearing `PATH` alone
-does not rule out embedded absolute paths. Use a bounded smoke test that
+does not rule out embedded absolute paths, and `ldd` / `otool -L` inspect
+direct OS linker dependencies only (not Titan provider DSOs opened lazily via
+`dlopen`, or `LoadLibraryExW` on Windows), so rely on the relocated run to
+prove provider independence. Use a bounded smoke test that
 exercises the application's entry point and representative functionality.
 
 When Windows is part of the requested target, follow the
