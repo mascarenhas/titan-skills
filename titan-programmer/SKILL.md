@@ -2379,7 +2379,7 @@ Use `titanc -q -o out --test --coverage calc_tests`, then run
 Final links require a test or standalone executable; `--coverage -c` supports
 separate object compilation, while library-only provider links are rejected.
 Automatic selection instruments authored source imports without top-level
-`test_` functions. Source-only modules resolved through the implicit SDK
+`test_` functions. Modules resolved from source through the implicit SDK
 fallback (`<root>/lib/titan/0.6`), mixed production/test modules (excluded as
 a whole), prebuilt providers, and native dependencies stay unmeasured. This
 follows the source import graph, so import an unused authored module from a

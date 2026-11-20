@@ -1141,7 +1141,7 @@ Final coverage links require a test or standalone executable. Use
 provider links are rejected.
 
 By default, authored source imports without top-level `test_` functions are
-measured. Source-only modules resolved through the implicit SDK fallback
+measured. Modules resolved from source through the implicit SDK fallback
 (`<root>/lib/titan/0.6`), modules containing tests (excluded as a whole), and
 prebuilt providers are excluded. Selection follows the source dependency graph,
 not every repository file. Import unused authored production modules from the
