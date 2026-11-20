@@ -156,7 +156,8 @@ titan-uninstall titan-cui
   `.c`/`.o`/`.titan`/`.titan-links`, no `dist/bin/`, no symlinks, no direct
   SDK writes. Relative paths under `dist/` must use portable ASCII ordinary
   file components (spaces allowed; Windows reserved names, symlinks, and
-  path/case aliases refused; absolute roots unrestricted).
+  path/case aliases refused; this portable-entry naming rule does not apply to
+  the absolute SDK or checkout path).
 - **Windows `platforms.windows`:** Use native `cmd.exe` commands with `\\`,
   explicit `.exe`/`.bat`, double-quoted paths, and parenthesized
   `(if not exist ... mkdir ...) && copy /Y ...` so `&&` stays outside the `if`.
@@ -196,8 +197,11 @@ Distinguish three concepts:
 
 1. **Source distribution (`.rockspec` / `.src.rock`):** `luarocks pack
    titan-cui-0.1.0-1.rockspec` fetches the pinned `source` URL/tag and packs
-   rockspec + sources into `titan-cui-0.1.0-1.src.rock`. Publish the rockspec
-   or `.src.rock` through your LuaRocks account (`luarocks upload`).
+   rockspec + sources into `titan-cui-0.1.0-1.src.rock`. To publish through
+   your LuaRocks account, run `luarocks upload titan-cui-0.1.0-1.rockspec`
+   (which packs a `.src.rock` by default; pass a prepacked
+   `titan-cui-0.1.0-1.src.rock` only as the optional second argument—do not
+   run `upload` during local verification).
 2. **Package-built native provider:** Compiled during `luarocks install` /
    `luarocks make` into `<tree>/lib/titan/0.6/`; usable from Titan and Lua.
 3. **Installed source-only module:** `.titan` files in `<tree>/lib/titan/0.6/`;
@@ -216,9 +220,13 @@ and build profile.
   behind; follow with `titan-uninstall ROCK [VERSION]` to clean them (repeat
   cleanup of an absent rock is a no-op). When LuaRocks' dependency check fails,
   published files are preserved.
-- **Upgrades & collisions:** One active published version per rock; upgrades
-  retire only owned stale files, never overwrite foreign or SDK files, and
-  prune shared directories only when empty.
+- **Reinstalls, upgrades & collisions:** One active published version per
+  rock. Preflight checks all destinations first: a collision with any foreign
+  file, Titan SDK-owned path, or protected `lib/` subtree refuses the install
+  before changing any published files (separate from mid-copy I/O failures;
+  there is no blanket transaction guarantee). On a succeeding same-version
+  reinstall or upgrade, `titan-install` retires only stale files owned by that
+  rock and prunes shared directories only when empty.
 - **No arguments:** `titan-uninstall` alone requests whole-Titan removal
   (also subject to LuaRocks' dependency check). On Windows, close consumers
   holding a module's DLL before upgrading or removing it.
