@@ -1998,8 +1998,9 @@ Titan archive; `--static` and selected Titan archive providers are unsupported.
 `--jobs` bounds frontend workers and native compilation on Windows as well.
 The `check` program above produces `out/bin/check.exe` and
 `out/lib/titan/0.6/check.dll` on Windows (that application provider DLL also
-carries any source-only dependencies materialized for prebuilt library DLLs,
-sharing one initialized instance lazily across loaded library DLLs). `--exe out/bin/custom.exe` selects
+carries any source dependencies compiled for prebuilt library DLLs, while
+external compiled DLLs selected for them load lazily through the application so
+every library shares one initialized instance). `--exe out/bin/custom.exe` selects
 the launcher destination without moving or renaming the provider DLL (which stays `check.dll`, named after the logical root); `.exe` is appended
 when absent. Windows uses the matched controlled Lua DLL and its SDK, not an
 ordinary stock Windows Lua build. Keep that Lua DLL beside the Lua interpreter,
@@ -2109,22 +2110,32 @@ and `--source-first`) may import an installed source-only module via an
 ordinary public `import` without compiling, embedding, or owning it (even for a
 private or initializer-only import, with no extra manifest or public API change;
 plain non-`main` `-c` writes only owned library objects, and explicit `.titan`
-collaboration across that installed-source library boundary is rejected). Native
-library providers carry only authored `--tree` modules (plus any explicit
-non-Titan `-X` payloads); browser library archives likewise leave external
-installed sources external while retaining browser's preexisting separate
-archive composition for compiled browser dependencies. Consuming applications
-and `--test` executables compile each source-only dependency required by
-reached members of imported prebuilt libraries once into the application (under
-`--output` whenever an installed fallback source is selected or on `--target
-browser`), with no redundant `import` in the application. Each obligation
-requires actual source (authored `--tree` roots first, then
-`<root>/lib/titan/0.6`; never silently satisfied by a later compiled binary;
-conflicting physical owners and cross-boundary cycles fail at build time), and
-bare Lua `require` hosts cannot compile `.titan` sources on the fly. See
+collaboration across that installed-source library boundary stays rejected and
+strictly source-only). Native library providers carry only authored `--tree`
+modules (plus any explicit non-Titan `-X` payloads); browser library archives
+likewise leave external installed sources external while retaining browser's
+preexisting separate archive composition for compiled browser dependencies.
+Consuming applications and `--test` executables satisfy each external
+dependency recorded by reached members of imported prebuilt libraries through
+**ordinary single-owner election**—with no redundant `import` in the
+application and no broad runtime plugin scan—choosing authored or installed
+source (compiled once into the application, requiring `--output` only when
+installed fallback source is actually selected or on `--target browser`), a
+compatible standalone compiled provider, or a canonical common-prefix bundle
+(Unix `--static` accepts `.a` archives or compiled source and rejects a
+DSO-only provider; `--target browser` accepts eligible Wasm `.a` archives or
+browser/shared source, never host binaries). An already-built application keeps
+its own compiled copy if disk distribution later changes; a newly built
+application can bind a compatible compiled provider or prefix bundle without
+rebuilding the prebuilt library, while ABI/interface mismatches, genuine
+duplicate physical owners, cross-boundary cycles, and missing owners remain
+errors. Editors and the language server lazily recover exposed types on demand
+using the same ordinary selection; bare Lua `require` hosts have no Titan
+application binding table or Lua-side compiler and require such a dependency to
+be already initialized or preloaded in the Lua state. See
 [`titan-package`](../titan-package/SKILL.md#source-only-packages) and
 [Source-only modules](../../../doc/language/modules.md#source-only-modules) for
-missing-source remedies and rebuild rules.
+the full per-target, rebuild, and packaging rules.
 
 Target-specific runner and entrypoint files live under
 `out/.titan-links/<key>/synthetic/`; authored C helpers passed with `--c-source`
