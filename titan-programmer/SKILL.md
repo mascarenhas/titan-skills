@@ -25,6 +25,10 @@ work crosses one of these boundaries:
 - **[`titan-application`](../titan-application/SKILL.md)** — starting an application
   repository, source/test build layout, initial ignore rules, executable
   delivery checks, and browser application layout and deployment.
+- **[`titan-package`](../titan-package/SKILL.md)** — packaging, publishing,
+  testing, and uninstalling reusable Titan library modules as LuaRocks rocks
+  with `titan-install`, `titan-uninstall`, format 3.0 rockspecs, and `dist/`
+  staging.
 - **`titan-tester`** — native `titan.test` modules, `titanc --test`, subtests,
   cleanup, filtering, native production coverage, and repository test-layer
   ownership.
@@ -2042,7 +2046,7 @@ include:
 -o DIR / --output DIR directory for all generated files (created if needed)
 -j N / --jobs N       bound frontend workers and native compilation
 --incremental         certify objects and final links; compile/link only misses
---static              Linux/macOS: prefer Titan .a dependencies; not linker -static
+--static              Linux/macOS: embed Titan .a closure; not linker -static
 --exe PATH            standalone/test executable destination, relative to cwd
 --test                build a native Titan test executable
 --test-dir DIR        discover conventionally named test roots under DIR
@@ -2066,20 +2070,31 @@ Makefile or build-script invocations at the default unless the project asks
 for quiet builds. See
 [build output](../../../doc/language/modules.md#build-output).
 
-`--tree` selects source lookup and `--output` selects generated files
+`--tree` selects authored source roots and `--output` selects generated files
 independently. `--tree` takes an ordered, semicolon-separated root list, quoted
-for the shell (`--tree 'src;tests'`); each logical module is looked up in the
-roots in order, and the default is `.` (there is no source-path environment
-variable). Generated C, objects, and FFI headers recreate the selected
-source root's hierarchy under the output directory; final providers, loaders,
-default executables, and temporary compiler files also live there. `--exe PATH`
-selects a standalone/test executable destination relative to the working
-directory, not to `--output`. For example,
-`titanc --tree /project/src -o out app.main` writes `out/app/main.c`, never
+for the shell (`--tree 'src;tests'`, default `.`; there is no source-path
+environment variable). Positional `titanc` build roots (library, program, `-c`,
+explicit `--test`, or `--exe`) and `--test-dir` resolve **only** from these
+authored roots, never from the implicit installed source fallback (if a
+requested root exists only as installed source, compile from a source checkout
+with `--tree`). Ordinary `import` statements inside a valid authored root
+search authored `--tree` roots in order before falling back to the read-only
+implicit SDK root `<root>/lib/titan/0.6` on both native and browser targets.
+Passing `--tree` replaces `.` without disabling that fallback for ordinary
+imports; on `--target browser`, `<root>/lib/titan/0.6` is searched for `.titan`
+source only. Generated C, objects, and FFI headers
+recreate the selected source root's hierarchy under the output directory; final
+providers, loaders, default executables, and temporary compiler files also live
+there. `--exe PATH` selects a standalone/test executable destination relative
+to the working directory, not to `--output`. For example, `titanc --tree
+/project/src -o out app.main` writes `out/app/main.c`, never
 `/project/src/app/main.c`. Authored quoted headers and source diagnostics still
 use the original source location. Output routing does not add a binary search
 root: use `TITAN_PATH_0_6` for previously built providers, for both `titanc`
-and Lua hosts. Omitting `--output` retains legacy source-adjacent outputs.
+and Lua hosts. Omitting `--output` retains legacy source-adjacent outputs
+except when a build selects an installed `.titan` source through that implicit
+fallback, which requires `--output DIR` so nothing is written or locked in the
+implicit fallback root.
 
 Target-specific runner and entrypoint files live under
 `out/.titan-links/<key>/synthetic/`; authored C helpers passed with `--c-source`
@@ -2141,9 +2156,19 @@ cache is used without `--output`.
 See [`incremental compilation`](../../../doc/language/toolchain.md#incremental-and-separate-compilation)
 and [`output directories`](../../../doc/language/toolchain.md#output-directories), or the
 [application build pattern](../titan-application/SKILL.md#establish-output-ownership-before-compiling).
-For a standalone delivery claim, check a relocated executable with the compiler
-and Titan provider unavailable. `--static` is a preference and can still select
-a DSO, so successful compilation alone does not prove provider independence.
+On Linux/macOS, `--static` standalone and `--test` executables embed the full
+reached Titan dependency closure from `.a` archives plus source compiled in the
+application (with no fallback to shared Titan providers; a missing archive for
+an external prebuilt dependency not satisfied by application-compiled source is
+a build error). `--static` is rejected on final no-main library outputs
+(though `-c --static` still compiles objects for a later executable), while
+dynamic/default applications may still fall back to an archive-only dependency
+or compile source. `--static` governs Titan module archives and does not force
+`libc` or external native libraries to link statically (nor forbid explicit
+linker flags that request it). For a standalone delivery claim, still validate
+a relocated executable with the compiler and Titan SDK unavailable, since
+non-static builds and external native libraries still need runtime resolution
+checks.
 
 The compiler checks source misses in dependency order; certified objects
 restore unchanged modules without parsing or typechecking. Explicit
@@ -2368,18 +2393,21 @@ Use `titanc -q -o out --test --coverage calc_tests`, then run
 `./out/calc_tests` normally.
 Final links require a test or standalone executable; `--coverage -c` supports
 separate object compilation, while library-only provider links are rejected.
-Automatic selection instruments source imports without top-level `test_`
-functions. A mixed production/test module is excluded as a whole; prebuilt
-modules and native dependencies stay unmeasured. This follows the source import
-graph, so import an unused module from a test root to keep its zero-hit lines
-in the denominator.
+Automatic selection instruments authored source imports without top-level
+`test_` functions. Modules resolved from source through the implicit SDK
+fallback (`<root>/lib/titan/0.6`), mixed production/test modules (excluded as
+a whole), prebuilt providers, and native dependencies stay unmeasured. This
+follows the source import graph, so import an unused authored module from a
+test root to keep its zero-hit lines in the denominator.
 
 Repeated `--coverage-module 'app.*'` overrides automatic selection with a union
 of complete logical-name globs: `*` matches any sequence and `?` one character,
-including dots. Explicit mode still skips test-containing and prebuilt modules.
-Quote globs; an empty selection is an error. Generated C, headers and objects
-live in `.coverage` subdirectories inside the selected output tree. Ordinary
-and coverage incremental objects cannot satisfy each other's lookup, so an
+including dots. A matching glob opts an installed fallback source into
+instrumentation, while test-containing and selected compiled providers remain
+excluded. Quote globs; an empty selection is an error. Generated C, headers and
+objects live in `.coverage` subdirectories inside the selected output tree.
+Ordinary and coverage incremental objects cannot satisfy each other's lookup,
+so an
 optimized release build needs no cleanup after coverage.
 
 Running the test executable resets its own `.gcda` counters, retains `.gcno`

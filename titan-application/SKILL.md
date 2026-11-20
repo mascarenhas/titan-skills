@@ -71,8 +71,13 @@ headers, and native outputs there, preserving the selected source hierarchy.
 It takes an ordered, semicolon-separated list of roots, quoted for the shell:
 `--tree 'src;tests'` looks up each logical module in `src` first, then in
 `tests`, so a runner under `tests/` imports `src` modules by their usual names
-(`demo.main`) while keeping its own (`runner`). Omitting `--tree` means `.`;
-there is no source-path environment variable.
+(`demo.main`) while keeping its own (`runner`). Omitting `--tree` uses `.` as
+the authored root. Positional `titanc` build roots and `--test-dir` resolve
+only from authored `--tree` roots (never the implicit SDK fallback); ordinary
+`import` statements inside a valid authored root fall back to the read-only
+implicit SDK root `<root>/lib/titan/0.6` after authored roots (requiring
+`--output` if an installed source is selected through that fallback). There is
+no source-path environment variable.
 Keep generated files outside the installed SDK. Target-specific runner and
 entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
 helpers live under `build/.native/`. Treat these as compiler-owned inventories,
@@ -319,8 +324,16 @@ run is not test evidence.
 
 The generated runner uses the same compiled `titan.test` provider as ordinary
 imports, through public `Case.new` and `run`; it needs no private test source
-installation. On Linux/macOS, `--static` prefers Titan archives and can fall
-back to DSOs; it does not request a fully static system executable. Validate
+installation. On Linux/macOS, `--static` standalone and `--test` executables
+embed the full reached Titan dependency closure from `.a` archives plus source
+compiled in the application (with no fallback to shared Titan providers; a
+missing archive for an external prebuilt dependency not satisfied by
+application-compiled source is a build error; `--static` is rejected on
+final no-main library outputs, though `-c --static` still compiles objects for
+a later executable). Dynamic/default applications may still fall back to an
+archive-only dependency or compile source. `--static` governs Titan module
+archives and does not force `libc`, OS support, or external native libraries to
+link statically (nor forbid explicit linker flags that request it). Validate
 the delivery claim with a relocated application in a temporary directory and
 an environment without compiler or SDK search paths: unset `TITAN_ROOT`,
 `TITANC`, `TITAN_PATH_0_6`, and `TITAN_PATH`, and keep `titanc` and the SDK's

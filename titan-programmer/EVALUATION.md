@@ -2746,3 +2746,46 @@ All four evaluators disclosed their harness-injected context: the omp role/runti
 | `LS2` | 6/6. Kept `pullDiagnostics` enabled in omp; replaced `file="*"` with concrete `.titan` files/globs; identified `symbols`, `type_definition`, `implementation`, and `code_actions` as unimplemented (`MethodNotFound` `-32601`); supplied mandatory `symbol` on `definition` and zero-based UTF-16 positions on raw `textDocument/completion`; distinguished saved-file features from buffer-based completion/private hover; explained why FFI and metadata-only stdlib modules have hover without definition targets; explained that modules failing typechecking publish no semantic facts while `diagnostics` reports the error; required `apply=false` on `rename` and `titanc`/tests as verification proof. | Pass. |
 | `LS3` (run 1) | 5/5. Created only untracked `/tmp/vst/eval/work/slice-b/titan-config.local.lua` with `compiler_root = "/tmp/vst/sdk-b/prefix"`; verified via `titan/workspaceStatus` that `slice-a` used `titanRoot = "/tmp/vst/sdk/prefix"` (`compilerRoot = null`, `trusted = true`, `state = "ready"`) and `slice-b` used `compilerRoot = "/tmp/vst/sdk-b/prefix"`, `titanRoot = "/tmp/vst/sdk-b/prefix"` (`trusted = true`, `state = "ready"`, distinct `workerPid` and `probePrefix`); reported exact diagnostics (`slice-a/src/main.titan:6:26` integer vs string, `slice-b/src/main.titan:5:26` float vs string) and `mathutil.double` signatures (`double(n: integer): integer` "Doubles an integer." vs `double(x: float): float` "Halves a float."); verified empty hover/definition on failed `main.titan` vs full hover/definition on valid `mathutil.titan`; left tracked files untouched and listed all touched paths. | Pass. |
 | `LS3` (run 2) | 5/5. Created only untracked `slice-b/titan-config.local.lua` with `compiler_root = "/tmp/vst/sdk-b/prefix"`; proved per-root SDK isolation through `titan/workspaceStatus` (`file=` in `slice-b`) plus an A/B control clearing the override; reported exact `main.titan` diagnostics (`6:26` and `5:26`) and `mathutil.double` signatures/docs in both slices; verified and explained empty hover/definition in failed `main.titan` vs valid `mathutil.titan`; left tracked files and `.omp/lsp.json` untouched and disclosed all touched files. | Pass. |
+
+## Packaging Titan modules as LuaRocks rocks (`titan-package`, titan#421)
+
+Two independent cases used fresh `omp -p` processes with
+`opencode-go/deepseek-v4.1-flash`, high thinking, `--tools read,write` and a
+`memory.backend: "off"` overlay. Skills, context files, rules, extensions,
+prewalk, LSP, title generation and session reuse were disabled. Each evaluator
+received only its prompt and paths to exported cartridges; `before` had
+`titan-programmer` and `titan-application`, and `after` added `titan-package`.
+The rubric was written before scoring and checked against the installer,
+compiler and stock LuaRocks 3.13.0. Each cell is one answer, not a success rate.
+
+| Case | Before (`efd1f08`) | After (`7403005`) | One wording revision (`b1c66ef`) |
+| --- | ---: | ---: | ---: |
+| Write a working `titan-chime` rockspec, library and independent consumer; explain staging, publishing and removal | 2/7 | 6/7 | 7/7 |
+| Package source-only `cui.widgets` and native `tones.low`/`tones.high`; explain Windows, collisions, reinstall, upgrade and cleanup after plain removal | 0/7 | 6/7 | 6/7 |
+
+The baseline built the provider but tried to copy a nonexistent
+`build/lib/titan/0.6/` into an unmanaged destination. Both candidate submissions
+installed their **unchanged** rockspec, built and ran the unchanged consumer
+against the default and static providers, loaded the library from Lua, and
+uninstalled it without a manual copy. The first answer gave `luarocks upload`
+the wrong first argument. The revision explicitly named the rockspec first
+and a prepacked `.src.rock` second; the revised answer got this right. The
+commands were checked against LuaRocks, **not** executed against its registry.
+
+The other wording change addressed a real ambiguity: preflight refuses a
+foreign-file collision before changing any published file; it does not merely
+skip that path or promise rollback on I/O failure. The revised operations
+answer got this and same-version stale-file retirement right. It correctly
+showed a shared `tones` provider in its worked recipe but contradicted that
+result in its final qualifications and misnamed the optional separately built
+archives (`tones/low.a`, `tones/high.a`). This missed point is retained; no
+further revision or model sampling was used.
+
+All evaluators reported no injected project memory. The author case reported a
+catalog in the two candidate runs (the revised answer expressly meant the
+three provided files); the operations cases and isolation controls reported
+none. The neutral control without the overlay also saw no project memory.
+The evaluation covers this provider and these cases only. Receipts in the
+#421 validation materials: `eval/{RUBRIC,BASELINE,AFTER-1,FINAL}.md`,
+`eval/{before,after,revision}/`, `eval/run.sh`, `eval/memory-off.yml`, and
+`logs/{baseline-author-check,author-exact-ff2c41d1,revised-author-exact-ff2c41d1}.log`.

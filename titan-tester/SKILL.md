@@ -145,9 +145,14 @@ canonical installed standard modules are public compiled dependencies. Those
 native cases test public behavior rather than production-private machinery.
 After changing production `titan/*.titan`, rebuild/reinstall the provider before
 using a leaf native-suite target; `make test` performs the current installation
-first. `--static` only swaps `.a` versus `.so` preference in the compiled
-fallback; it neither defeats source-first test resolution nor means
-“static-only.”
+first. On Linux/macOS, `--static` embeds the full reached Titan dependency
+closure from `.a` archives plus source compiled in the test executable (with no
+fallback to shared Titan providers; a missing archive for an external prebuilt
+dependency not satisfied by application-compiled source is a build error;
+`--static` is rejected on final no-main library outputs, while dynamic/default
+executables may still fall back to archive-only or source dependencies).
+`--static` governs Titan module archives and does not force `libc` or external
+native libraries to link statically.
 
 ### Module and filename rules still apply
 
@@ -866,11 +871,15 @@ build output](../titan-programmer/SKILL.md#compile-with-titanc)).
 
 Repeatable `--test-dir DIR` recursively selects flat or folder modules whose
 final logical component is `test`, `tests`, `spec`, `specs`, or ends in `_test`,
-`_tests`, `_spec`, or `_specs`. The directory must lie inside a `--tree` root
-(an ordered, quoted list such as `--tree 'src;tests'` is allowed), and the
-first listed root containing it supplies the logical prefix:
-`--tree . --test-dir tests` keeps the `tests.*` namespace. Folder contributors
-are not separate roots. Add explicit roots for other names; repeatable
+`_tests`, `_spec`, or `_specs`. The directory must lie inside an authored
+`--tree` root (an ordered, quoted list such as `--tree 'src;tests'` is allowed;
+default `.`), and the first listed root containing it supplies the logical
+prefix: `--tree . --test-dir tests` keeps the `tests.*` namespace. Folder
+contributors are not separate roots. Both `--test-dir` discovery and explicit
+positional `--test` roots resolve **only** from authored `--tree` roots, never
+from the implicit installed source fallback (ordinary `import`s inside those
+tests can still use the installed source fallback when `--output DIR` is
+passed). Add explicit roots for other names; repeatable
 `--test-exclude MODULE` removes exact automatic roots only, not explicit roots
 or imported dependencies. Root selection does not replace semantic `test_`
 function discovery. See the
@@ -892,8 +901,15 @@ echoes and object/native/link hit and miss diagnostics on stderr; worker output
 also goes to stderr. Runner `-v` is a separate runtime option. Follow the
 [application build guidance](../titan-application/SKILL.md#establish-output-ownership-before-compiling)
 for always-invoked Make targets, native inputs, and jobserver policy.
-`--static` prefers the standard archive on Linux/macOS but may select a DSO;
-it is unsupported on Windows. At run time a selected DSO is searched in the
+On Linux/macOS, `--static` embeds the full reached Titan dependency closure
+from `.a` archives plus source compiled in the runner, with no fallback to
+shared Titan providers (a missing archive for an external prebuilt dependency
+not satisfied by application-compiled source is a build error; `--static`
+does not force `libc` or external native libraries to link statically);
+`--static` is unsupported on Windows and rejected on final no-main library
+outputs.
+Without `--static` (or on Windows), a selected DSO or
+DLL is searched at run time in the
 executable's directory, then `../lib/titan/0.6` beside it, then once per Lua
 state in the installed SDK (`TITAN_ROOT`, or `titanc --print-root` from
 `PATH`/`TITANC`), never in the working directory. For a provider elsewhere,
@@ -1140,13 +1156,16 @@ Final coverage links require a test or standalone executable. Use
 `--coverage -c` for separate object compilation before that link; library-only
 provider links are rejected.
 
-By default, source imports without top-level `test_` functions are measured.
-A module containing tests is excluded as a whole; prebuilt modules are ignored.
-Selection follows the source dependency graph, not every repository file.
-Import unused production modules from the test graph to retain their zero-hit
-lines. Override selection with repeated `--coverage-module 'app.*'` globs;
-`*` matches any sequence and `?` one character, including dots. Test-containing
-and prebuilt modules remain excluded. Empty selection fails usefully.
+By default, authored source imports without top-level `test_` functions are
+measured. Modules resolved from source through the implicit SDK fallback
+(`<root>/lib/titan/0.6`), modules containing tests (excluded as a whole), and
+prebuilt providers are excluded. Selection follows the source dependency graph,
+not every repository file. Import unused authored production modules from the
+test graph to retain their zero-hit lines. Override selection with repeated
+`--coverage-module 'app.*'` globs; `*` matches any sequence and `?` one
+character, including dots. A matching glob opts an installed fallback source
+into instrumentation, while test-containing and selected compiled providers
+remain excluded. Empty selection fails usefully.
 
 Coverage C/headers/objects live in `.coverage` subdirectories at their normal
 output locations, with separate incremental discovery from ordinary objects.
