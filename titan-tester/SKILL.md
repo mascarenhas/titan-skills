@@ -663,9 +663,9 @@ not a module build graph. `test.tests` remains the explicit first root, and
 The same manifest's `TITAN_STDLIB_BROWSER_TEST_ROOTS` names twenty-three owners,
 including `lua.tests`, `os.tests`, `io.tests`, `http.tests`, and
 `websocket.tests`, that
-`make titan-stdlib-browser-test` runs under Node and headless Chromium (emsdk,
-Node 26, Chromium, the browser SDK, and the installed native provider
-required). All of them build into one `--target browser --test` image,
+`make titan-stdlib-browser-test` runs under Node and headless Chromium
+(`wasi-sdk` 34.0, Binaryen `version_133`, Node 26, Chromium, the browser SDK,
+and the installed native provider required). All of them build into one `--target browser --test` image,
 `images/stdlib.{mjs,wasm,wasm.trace,wasm.map}` under `out/browser-stdlib` or
 `TITAN_BROWSER_TEST_BUILD_DIR`, beside `roots.txt`, `members.md`, and each
 engine's `stdlib.<engine>.log` stdout and `stdlib.<engine>.stderr.log`. A new

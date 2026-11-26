@@ -2312,8 +2312,8 @@ to the language rules:
 - **Keep C, the Lua C API, and JavaScript to what Titan cannot do.**
   Standard-library or runtime work that touches C (authored C, a C-ABI
   callback, or a `lua_*`/`luaL_*` call, the browser bridge included) or
-  browser JavaScript (the loader, a `--js-library` file, an `EM_JS` or
-  `EM_ASM` block) follows the six
+  browser JavaScript (the loader, the Wasm factory, or `create({ imports })`
+  host imports) follows the six
   [guard-rails](../titan-ffi/SKILL.md#guard-rails-for-standard-library-and-runtime-c)
   in `titan-ffi`: the work in Titan, plain C off the Lua stack, protected work
   in a Titan `catch`, pins in module variables or owner fields, no pushes to
