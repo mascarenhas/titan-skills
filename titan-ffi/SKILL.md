@@ -1752,14 +1752,19 @@ host JavaScript directly through explicit WebAssembly imports:
   import_name("name")))` on `__wasm__`) or an explicit `import_module` /
   `import_name` pair.
 - Supply the JavaScript implementation via `create({ imports })`, either as a
-  plain import object or a factory `(context) => importObject` called once
-  before WebAssembly instantiation. `context` exposes `memory`, `table` (the
+  plain object (ordinary or null-prototype, from any realm) or a factory
+  `(context) => importObject` called once before WebAssembly instantiation; each
+  module map inside it must also be a plain object (arrays, `Map`s, class
+  instances, and promises from an async factory are refused with `TypeError`
+  `"must be a plain object …"`). `context` exposes `memory`, `table` (the
   exported `__indirect_function_table`), `exports`, `HEAPU8` / `HEAPU32`
   getters that survive memory growth, `readCString(ptr)`, `readBytes(ptr, len)`,
   `writeBytes(ptr, bytes)`, `trace`, and `abort(msg)`.
 - Imports under `wasi_snapshot_preview1.*`, `env.titan_browser_*`, and
-  `env.titan_mco_*` are reserved for the Titan runtime and rejected with
-  `TypeError`.
+  `env.titan_mco_*` are reserved for the Titan runtime: for the object form,
+  invalid shapes or reserved names throw `TypeError` synchronously in `create()`;
+  for the function form, `initialize()`/`run()` reject with
+  `TITAN_BROWSER_PROTOCOL` whose `cause` is that `TypeError`.
 - Keep C operations the FFI cannot express in a `--c-source` helper behind a
   small header; a helper is not required merely to declare a host import or a
   C callback. The click counter below has no authored C: its callback is a
