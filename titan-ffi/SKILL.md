@@ -1,6 +1,6 @@
 ---
 name: titan-ffi
-description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, the trusted Lua C API boundary, or the browser-only titan.browser JavaScript bridge. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, lifetimes, JavaScript bindings and callables, and direct Emscripten C APIs with synchronous C callbacks into Titan (browser.pin, titan_browser_call_sync). Do not invoke merely because an implementation is C-backed when no foreign, Lua/C, or JavaScript boundary is touched.
+description: Use Titan's C FFI, public and local source-defined foreign functions/C callbacks, direct uv.native_* synchronization entries, Lua interoperability, the titan.lua escape hatch, the trusted Lua C API boundary, or the browser-only titan.browser JavaScript bridge. Covers foreign imports, local C types, pointers, arrays, owned storage, casts, C expressions, macros/enums, rooting, lifetimes, JavaScript bindings and callables, and browser host WebAssembly imports (create({ imports }), TITAN_WASM_IMPORT) with synchronous C callbacks into Titan (browser.pin, titan_browser_call_sync). Do not invoke merely because an implementation is C-backed when no foreign, Lua/C, or JavaScript boundary is touched.
 ---
 
 # Titan FFI and Lua escape hatches
@@ -57,7 +57,7 @@ Before writing code, classify the job:
 | Perform a stack-oriented `lua_*` operation | avoid in application code; it is a narrow audited standard-library exception, described below with the guard-rails that limit it |
 | Wrap libuv or another async callback API | use this skill for the C surface and the async skill for Task/Runtime ownership; cancellation does not end native ownership |
 | Call JavaScript from Titan, or let JavaScript call a Titan closure (browser target) | `local browser = import "browser"`; see [Browser JavaScript bindings](#browser-javascript-bindings-titanbrowser) |
-| Run Titan code from a C callback that an Emscripten API calls synchronously (html5 events), or call Emscripten C APIs | `foreign import` the API's header; use `browser.pin` and `titan_browser_call_sync` for synchronous callbacks; see [Synchronous C callbacks and Emscripten APIs](#synchronous-c-callbacks-and-emscripten-apis) |
+| Run Titan code from a synchronous C callback invoked by a browser host import (`create({ imports })` + `context.table`), or call host WebAssembly imports from C | Declare the import with `TITAN_WASM_IMPORT` in a header, `foreign import` it, supply the JS import via `create({ imports })`, and use `browser.pin` + `titan_browser_call_sync`; see [Synchronous C callbacks and host WebAssembly imports](#synchronous-c-callbacks-and-host-webassembly-imports) |
 
 Do not add a C forwarding function merely because C looks more familiar. If
 Titan can spell the operation through the imported header, keep the call,
@@ -1425,8 +1425,9 @@ browser-only `titan.browser` module; native builds have no placeholder. It is
 the supported Titan/JavaScript boundary: never cast a closure to an address,
 reach a raw `lua_State *` gateway, use externref, add a synchronous
 JavaScript-to-Titan call, or build a second runtime or compatibility lifecycle.
-C that an Emscripten API calls synchronously reaches Titan only through a
-[pin and `titan_browser_call_sync`](#synchronous-c-callbacks-and-emscripten-apis).
+C that a host WebAssembly import calls synchronously through `context.table`
+reaches Titan only through a
+[pin and `titan_browser_call_sync`](#synchronous-c-callbacks-and-host-webassembly-imports).
 
 ## Calling JavaScript from Titan
 
@@ -1684,8 +1685,9 @@ method) or a lambda.
 ## Instance lifetime
 
 A page, a bundler entry or a Node script imports the generated image's
-default export, `create(options = {})`, and nothing else. The loader is
-embedded in the image, and the raw Emscripten factory and Module are private.
+default export, `create(options = {})`, and nothing else. The loader and Wasm
+factory are embedded in the image, and the raw WebAssembly instance and factory
+are private (accessible only to a `create({ imports })` factory function).
 
 ```javascript
 import create from "./app.mjs"; // the generated image
@@ -1739,32 +1741,44 @@ are already refused, and a wrapper's `release()` only invalidates the wrapper
 once its state is closing. A trap, abort or completion-protocol failure
 poisons the instance, and later methods reject that saved failure.
 
-## Synchronous C callbacks and Emscripten APIs
+## Synchronous C callbacks and host WebAssembly imports
 
-Import supported Emscripten C declarations directly, including
-`foreign import "emscripten/html5.h"`. Function-like macros are not imported:
-use a declared function when one is available. For click registration, call
-`emscripten_set_click_callback_on_thread` with
-`EM_CALLBACK_THREAD_CONTEXT_CALLING_THREAD`, the underlying operation of the
-`emscripten_set_click_callback` macro.
+On `--target browser` (`wasi-sdk` 34, `wasm32-wasip1`), authored C helpers
+compiled with `--c-source` and headers imported via `foreign import` can call
+host JavaScript directly through explicit WebAssembly imports:
 
-Keep `EM_JS` and `EM_ASM` blocks, and C operations the FFI cannot express, in
-a `--c-source` helper behind a small header. A helper is not required merely
-to call an Emscripten API, or to give one a callback: the click counter below
-has no authored C. Its callback is a `foreign function`, and Titan registers
-and unregisters it through the imported html5 declarations.
+- Declare an imported C function with `TITAN_WASM_IMPORT("name")` (from
+  `titan/browser.h`, expanding to `__attribute__((import_module("env"),
+  import_name("name")))` on `__wasm__`) or an explicit `import_module` /
+  `import_name` pair.
+- Supply the JavaScript implementation via `create({ imports })`, either as a
+  plain object (ordinary or null-prototype, from any realm) or a factory
+  `(context) => importObject` called once before WebAssembly instantiation; each
+  module map inside it must also be a plain object (arrays, `Map`s, class
+  instances, and promises from an async factory are refused with `TypeError`
+  `"must be a plain object …"`). `context` exposes `memory`, `table` (the
+  exported `__indirect_function_table`), `exports`, `HEAPU8` / `HEAPU32`
+  getters that survive memory growth, `readCString(ptr)`, `readBytes(ptr, len)`,
+  `writeBytes(ptr, bytes)`, `trace`, and `abort(msg)`.
+- Imports under `wasi_snapshot_preview1.*`, `env.titan_browser_*`, and
+  `env.titan_mco_*` are reserved for the Titan runtime: for the object form,
+  invalid shapes or reserved names throw `TypeError` synchronously in `create()`;
+  for the function form, `initialize()`/`run()` reject with
+  `TITAN_BROWSER_PROTOCOL` whose `cause` is that `TypeError`.
+- Keep C operations the FFI cannot express in a `--c-source` helper behind a
+  small header; a helper is not required merely to declare a host import or a
+  C callback. The click counter below has no authored C: its callback is a
+  `foreign function`, and Titan registers and unregisters it through the
+  imported header declaration.
 
-`EM_JS` and `EM_ASM` code lands in the image module, which is self-contained:
-`titanc` refuses to link one that imports or re-exports a module, calls
-`import()`, uses `require`, or calls `process.getBuiltinModule` beyond the
-Emscripten shell's `fs`, `path` and `url`. Reach other page JavaScript,
-including another ES module, as a `create({bindings})` value through
-`titan.browser`.
+Generated `.mjs` images are strictly self-contained (zero external `import`
+statements). For ordinary application JavaScript and ES modules, prefer
+`create({ bindings })` and `titan.browser` over custom WebAssembly imports.
 
-An API that calls back into C runs that callback synchronously, with
-JavaScript frames above it, so the callback is not a loader entry. To run
-Titan code there, pin a handler and have the callback call
-`titan_browser_call_sync`:
+A host import that calls back into C through `context.table.get(fnPtr)` runs
+that callback synchronously, with JavaScript frames above it, so the callback
+is not a loader entry. To run Titan code there, pin a handler and have the
+callback call `titan_browser_call_sync`:
 
 ```text
 record BrowserPin
@@ -1773,26 +1787,37 @@ function BrowserPin:identity(): (integer, integer, integer)
 function BrowserPin:close()
 ```
 
-The html5 click counter shows the whole shape. Its callback has html5's type
-`em_mouse_callback_func`,
-`bool (*)(int, const EmscriptenMouseEvent *, void *)`, and is written as a
-`local foreign function`. `titan_browser_call_sync` requires a
-zero-initialized result, which the body declares as a zeroed automatic local
-(`foreign titan_browser_sync_result.new()`) and passes by address. The pinned
-handlers return nil, so the callback frees only a failure's message and
-trace; `ffi.lmacro_unconst` of `titan/ffi.h` passes those pointers to const
-where `free` takes a plain one, because a Titan cast cannot discard `const`.
+The click counter shows the whole shape. Its header declares a
+`TITAN_WASM_IMPORT` registration function taking a `bool (*)(void *)` callback
+pointer, and the callback is written as a `local foreign function`.
+`titan_browser_call_sync` requires a zero-initialized result, which the body
+declares as a zeroed automatic local (`foreign titan_browser_sync_result.new()`)
+and passes by address. The pinned handlers return nil, so the callback frees
+only a failure's message and trace; `ffi.lmacro_unconst` of `titan/ffi.h`
+passes those pointers to const where `free` takes a plain one, because a Titan
+cast cannot discard `const`.
 
-Titan registers and unregisters the callback. C keeps the address of each
-identity for as long as its callback is registered, which is long after
+Titan registers and unregisters the callback. The host keeps the address of
+each identity for as long as its callback is registered, which is long after
 `listen` returns. The pin and the identity therefore live in the module-level
 `listeners` array from before the registration until `stop` removes them:
 
+```c
+/* click_host.h */
+#include <stdbool.h>
+#include "titan/browser.h"
+
+typedef bool (*click_callback)(void *userdata);
+
+TITAN_WASM_IMPORT("titan_test_set_click_callback")
+int titan_test_set_click_callback(const char *selector, void *userdata, click_callback cb);
+```
+
 ```titan
--- A click counter: html5.h click callbacks call pinned Titan handlers
+-- A click counter: host click callbacks call pinned Titan handlers
 -- synchronously, and each handler shows the count through a binding.
 local browser = import "browser"
-foreign import "emscripten/html5.h"
+foreign import "click_host.h"
 foreign import "stdio.h"
 foreign import "stdlib.h"
 foreign import "titan/browser.h"
@@ -1820,8 +1845,8 @@ local function reset(...: Value): Value
   return Value.is_nil()
 end
 
--- A registered click callback. The pin keeps its handler callable, and C
--- keeps the address of the identity as the callback's user data, so both
+-- A registered click callback. The pin keeps its handler callable, and the
+-- host keeps the address of the identity as the callback's user data, so both
 -- stay reachable until the callback is unregistered.
 local record Listener
   selector: string
@@ -1831,10 +1856,9 @@ end
 
 local listeners: {Listener} = {}
 
--- The click callback, html5's `em_mouse_callback_func`. The pinned handler
--- returns nil, so only a failure's message and trace need freeing.
-local foreign function counter_click(kind: int, event: const *EmscriptenMouseEvent,
-                                     identity: *void): bool
+-- The click callback. The pinned handler returns nil, so only a failure's
+-- message and trace need freeing.
+local foreign function counter_click(identity: *void): bool
   local result = foreign titan_browser_sync_result.new()
   local status = ffi.titan_browser_call_sync(
     identity as const *titan_browser_identity, 0, nil, result)
@@ -1849,8 +1873,8 @@ local foreign function counter_click(kind: int, event: const *EmscriptenMouseEve
   return false
 end
 
--- The listener is rooted in `listeners` before C receives the identity, so no
--- allocation can fail after the registration and leave C a dangling pointer.
+-- The listener is rooted in `listeners` before the host receives the identity,
+-- so no allocation can fail after registration and leave a dangling pointer.
 local function listen(selector: string, handler: function (...: Value): Value)
   local pin = browser.pin(handler)
   local identity: owned *titan_browser_identity = foreign titan_browser_identity.new()
@@ -1860,10 +1884,7 @@ local function listen(selector: string, handler: function (...: Value): Value)
   identity.generation = generation
   local index = #listeners + 1
   listeners[index] = Listener { selector = selector, pin = pin, identity = identity }
-  -- The short click-registration spelling is a function-like macro.
-  if ffi.emscripten_set_click_callback_on_thread(
-      selector, identity, 0, counter_click,
-      ffi.EM_CALLBACK_THREAD_CONTEXT_CALLING_THREAD) ~= ffi.EMSCRIPTEN_RESULT_SUCCESS then
+  if ffi.titan_test_set_click_callback(selector, identity, counter_click) ~= 0 then
     listeners[index] = nil
     pin:close()
     raise "cannot listen for clicks on " .. selector
@@ -1874,8 +1895,7 @@ end
 local function stop(...: Value): Value
   for index = #listeners, 1, -1 do
     local listener = listeners[index]
-    ffi.emscripten_set_click_callback_on_thread(
-      listener.selector, nil, 0, nil, ffi.EM_CALLBACK_THREAD_CONTEXT_CALLING_THREAD)
+    ffi.titan_test_set_click_callback(listener.selector, nil, nil)
     listener.pin:close()
     listeners[index] = nil
   end
@@ -1900,20 +1920,19 @@ end
 
 In the registration call:
 
-- Pass the foreign function itself (`counter_click`) as the
-  `em_mouse_callback_func` argument, and `nil` to unregister.
-- `useCapture` is a C `bool`, so pass the Titan integer `0` or `1`. The
-  legacy `EM_FALSE` macro imports as a C `int`, which that parameter rejects.
-- The identity owner converts to the `void *userData` parameter. C borrows
-  the address, and the owner in `listeners` keeps the bytes alive.
+- Pass the foreign function itself (`counter_click`) as the callback pointer
+  argument, and `nil` to unregister. On the JavaScript side, `context.table.get(fnPtr)`
+  resolves the non-zero table index to the callable WebAssembly function.
+- The identity owner converts to the `void *userdata` parameter. The host
+  borrows the address, and the owner in `listeners` keeps the bytes alive.
 
 The rules behind the example:
 
 - **HANDLE arguments are borrowed.** C keeps every handle slot it passes to
   `titan_browser_call_sync`; the callee receives its own `BrowserHandle`, whose
   `close()` or collection never retires C's slot.
-- **On V8 the poison is generic.** Authored C that calls a suspending import
-  (`emscripten_sleep`) inside the callback poisons the instance with
+- **On V8 the poison is generic.** Authored C that calls a `WebAssembly.Suspending`
+  host import inside the callback poisons the instance with
   `"a synchronous C callback ended by an exception"`, not a named switch
   diagnostic.
 - **The pin.** `browser.pin(fn)` adds one hold on `fn`'s callable slot.
@@ -1969,8 +1988,8 @@ The rules behind the example:
   import is one such exception: on V8 the engine's `SuspendError` unwinds
   before Titan's own check runs.
 - **Stack.** The callback's C frames use the interrupted code's linear stack
-  (a Task's is 256 KiB). Deep recursion fails Emscripten's stack check and
-  poisons the instance.
+  (a Task's is 256 KiB). Deep recursion fails Binaryen's `--stack-check` limit
+  and poisons the instance.
 - **The bracket.** `titan_browser_callback_enter` and
   `titan_browser_callback_leave` bracket a standard library's hand-written
   trampolines, which run on the callback thread (`frame->L`). They are not an
@@ -2028,13 +2047,14 @@ subclass's `slice` may return a view); reacquire `HEAPU8` views after any
 allocation and copy an aliased source before growth; keep at most one sink
 call in flight per stream; capture an
 operation's failure where it occurs; keep promise and listener continuations at
-module scope, capturing only a detachable mailbox cell; and keep the
-Emscripten factory input a fresh null-prototype dictionary, as its code comment
-explains. Once an abort, trap, or protocol failure has poisoned the engine, it
-wins over ordinary import-error conversion: run no C cleanup and write no
-response memory afterwards. Disposal must not retain the Module or instance
-across an awaited host promise, and it saves only the pure `{state, reason}`
-trace snapshot before dropping the Module. See [JavaScript
+module scope, capturing only a detachable mailbox cell; and copy validated
+user `create({ imports })` namespaces into fresh null-prototype maps without
+allowing reserved `wasi_snapshot_preview1.*`, `env.titan_browser_*`, or
+`env.titan_mco_*` overrides. Once an abort, trap, or protocol failure has
+poisoned the engine, it wins over ordinary import-error conversion: run no C
+cleanup and write no response memory afterwards. Disposal must not retain the
+instance context across an awaited host promise, and it saves only the pure
+`{state, reason}` trace snapshot before dropping the context. See [JavaScript
 bindings](../../../doc/language/standard-library-browser.md), the [loader
 API](../../../doc/language/browser-target.md#the-loader-api), and [browser
 bridge runtime](../../../doc/implementation/browser-bridge.md).
@@ -2471,8 +2491,8 @@ declaration must supply a state. Never store, return, replace, or use an old
 The trusted exception says what audited code may do, not when to use it.
 Every standard-library or runtime change that touches C (authored C, a
 `foreign function` callback, or a `lua_*`/`luaL_*` call, the browser bridge
-included) or browser JavaScript (the loader, a `--js-library` file, an
-`EM_JS` or `EM_ASM` block, generated JavaScript glue) follows these six
+included) or browser JavaScript (the loader, the Wasm factory, `create({ imports })`
+host imports, generated JavaScript glue) follows these six
 rules, whose normative text is in
 [Standard-library maintenance](../../../doc/implementation/standard-library-maintenance.md#keep-c-and-the-lua-c-api-to-what-titan-cannot-do).
 A review counts the new Lua C API calls, authored C lines, and authored
@@ -2490,16 +2510,16 @@ rules](#browser-javascript-under-the-same-rules) applies them to JavaScript.
 | Called by C through a function pointer (libuv callbacks, `__gc` and other `lua_CFunction`s) | `local foreign function` in the Titan module, address taken |
 | Called by name from C or generated code where any C symbol works | Public `foreign function` in the Titan module; C callers use the generated `.titan.h` (or mangled declaration), using header-free C primitive parameters when public consumers should not need a `foreign import` |
 | Private helper of such a C-ABI entry, or a C-only critical interval (a body that holds a native mutex, performs an atomic handoff, or moves a native resource between two owners, where nothing may raise, collect, or grow the Lua stack) | `local foreign function` called by name, which takes formals and returns a status; code that only computes, or that a raise on entry cannot harm, is an ordinary Titan function |
-| Needs an exact unmangled C symbol (an Emscripten export, a symbol a C library looks up) | Compiler-generated one-line forward to a public `foreign function` (with `__attribute__((weak))` when the owning module may be absent), never a hand-written runtime C wrapper |
+| Needs an exact unmangled C symbol (a WebAssembly export via `TITAN_WASM_EXPORT`, a symbol a C library looks up) | Compiler-generated one-line forward to a public `foreign function` (with `__attribute__((weak))` when the owning module may be absent), never a hand-written runtime C wrapper |
 | Program entry and image lifecycle (native `main`, browser `initialize`/`entry`/`close`) | Compiler-generated launcher sharing one error-conversion (`titan_entry_error_message`) and trace implementation; protected `lua_pcall`s live there, not in runtime libraries |
-| Needs the JavaScript host on the browser target (JSPI suspension and resumption, holding JavaScript values and host objects, host scheduling and event APIs, the embedder-facing promise API, engine stack capture) | JavaScript in the loader or a `--js-library` file, reached through a one-line import; state, policy, validation, and bookkeeping in Titan |
+| Needs the JavaScript host on the browser target (JSPI suspension and resumption, WASI/host imports, holding JavaScript values and host objects, host scheduling and event APIs, the embedder-facing promise API, engine stack capture) | JavaScript in `titan-browser.mjs` or `titan-wasm-factory.mjs`, reached through a one-line import; state, policy, validation, and bookkeeping in Titan |
 | Data and roots | Per-state roots in module variables or owner fields; a cross-state map with the host that owns the instance (the browser loader's state-token map), not C statics in runtime code; in JavaScript only what needs host lifetime (JavaScript values and host objects, promises and their continuations, items waiting for a point where Wasm can be entered), never a running copy of a count or table that Titan owns; the Lua registry only to anchor an object before any module variable exists, explicitly justified |
 | C struct access and marshalling | In Titan through `foreign import`; headers hold only struct layouts, declarations, and one-expression inline bridges (`lmacro_*` in `titan/ffi.h`) for macros, internal fields of incomplete structs, and `const` casts that the FFI cannot spell |
 | Platform-conditional operation (its headers, types, or calls differ by platform; Titan has no conditional `foreign import`) | `static inline` function in the owning module's `*_platform.h` or `*-native.h` header that takes formals and returns a status or fills a plain struct, with a comment naming the platform difference; classification, mapping to public errors, retries, and ownership stay in Titan. A platform fact that takes no argument is a macro defined on every platform (`TITAN_PATH_WINDOWS` in `titan/path_platform.h`), read through `ffi` as a constant |
 | Test-only C | In test fixtures (`spec/fixtures/`), never in the runtime or standard library |
 
 For example, `browserentry.lua` generates a one-line weak forward for the exact
-Emscripten export `titan_browser_invoke`, while `titan/browser.browser.titan`
+WebAssembly export `titan_browser_invoke`, while `titan/browser.browser.titan`
 implements the public `foreign function invoke` using the uv-trampoline shape:
 
 ```c
@@ -2735,11 +2755,10 @@ end
 ### Browser JavaScript under the same rules
 
 The rules cover authored JavaScript too: the embedded loader
-(`titan-runtime/browser/titan-browser.mjs`), the `--js-library` files
-(`titan-browser-library.js`, `titan-browser-bridge.js`,
-`titan-browser-trace.js`), an `EM_JS` or `EM_ASM` block, and JavaScript text
-that the compiler emits. JavaScript is for an operation that the host alone
-can perform:
+(`titan-runtime/browser/titan-browser.mjs`), the zero-dependency Wasm factory
+(`titan-runtime/browser/titan-wasm-factory.mjs`), user `create({ imports })`
+host imports, and JavaScript text that the compiler emits. JavaScript is for an
+operation that the host alone can perform:
 
 | Host capability | In the shipped JavaScript |
 | --- | --- |
@@ -2757,11 +2776,11 @@ generated launcher owns image lifecycle. Read the
 rules this way for JavaScript (rules 2 and 5 have no JavaScript reading):
 
 - **Rule 1.** A new import is one line that forwards to the JavaScript
-  object owning the capability, as every import in `titan-browser-bridge.js`
-  does:
+  object owning the capability, as every bridge import in
+  `titan-wasm-factory.mjs` does:
 
   ```javascript
-  titan_browser_host_wake: state => TitanBridge.trusted('wakeDriver', state >>> 0),
+  titan_browser_host_wake: state => trusted('wakeDriver', state >>> 0),
   ```
 
   The Titan side decides and passes its decision as an argument. The async
@@ -3266,8 +3285,8 @@ searching by analogy.
 * `doc/language/standard-library-browser.md` and the [loader
   API](../../../doc/language/browser-target.md#the-loader-api) — browser-only
   `titan.browser` bindings, callables, requests, errors, instance lifetime,
-  and synchronous C callbacks; [C helpers and Emscripten
-  APIs](../../../doc/language/browser-target.md#c-helpers-and-emscripten-apis).
+  and synchronous C callbacks; [C helpers and host WebAssembly
+  imports](../../../doc/language/browser-target.md#c-helpers-and-host-webassembly-imports).
 
 ## Implementation documentation
 
@@ -3370,7 +3389,7 @@ searching by analogy.
   Tasks, `http.get`, a Lua trace), `spec/fixtures/browser_delivery/hosted.mjs`
   on Chromium, Firefox and WebKit.
 * Synchronous C callbacks: `spec/stdlib/titan/browser/tests.browser.titan`
-  (`call_sync` statuses, borrowed handles, callback threads) and the html5
+  (`call_sync` statuses, borrowed handles, callback threads) and the DOM
   click counter `spec/fixtures/browser_bridge/counter.{titan,mjs}`, which
   `browser_bridge_spec.lua` runs in Chromium.
 * Retained recovery writes: `spec/fixtures/error_handling/aggregate_recovery.titan`
@@ -3672,11 +3691,12 @@ statement needs `;` when it would otherwise continue the cast.
 silent unsigned truncation, freeing borrowed bytes, accepting unrelated object
 or function pointers directly, or claiming raw memory safety from `is`.
 
-## Eval 16 — Emscripten callback into Titan
+## Eval 16 — Synchronous browser C callback into Titan
 
 **Prompt:** A draft does five things:
-- It `foreign import`s `emscripten/html5.h`, and registers a click callback
-  whose user data is a Titan closure cast to a pointer.
+- It `foreign import`s a `click_host.h` header declaring a `TITAN_WASM_IMPORT`
+  click registration function, and registers a click callback whose user data
+  is a Titan closure cast to a pointer.
 - From the callback it calls `titan_browser_call_sync`, frees nothing
   afterwards, and closes the pin before unregistering the callback.
 - The C callback passes a handle slot that it keeps (the HANDLE result of an
@@ -3684,18 +3704,17 @@ or function pointers directly, or claiming raw memory safety from `is`.
   receives open, and a comment says that closing it would release C's slot.
 - Its handler calls `coroutine.yield` to hand control to a parked Task.
 - So that the Task can run before the click returns, the C callback then
-  calls `emscripten_sleep(0)`. The draft's page test, run on Chromium, expects
-  the instance to fail with an error that names the stack switch.
+  calls a `WebAssembly.Suspending` sleep import (`test_sleep(0)`). The draft's
+  page test, run on Chromium, expects the instance to fail with an error that
+  names the stack switch.
 
 **Pass criteria:**
-- It keeps the direct `html5.h` import and uses declared functions, such as
-  `emscripten_set_click_callback_on_thread`, rather than the function-like
-  `emscripten_set_click_callback` macro. A C helper is only needed for
-  operations outside the FFI's supported surface, not for html5 declarations
-  and not for the callback.
-- It writes the callback as a `foreign function` with html5's callback
-  signature, whose C types appear without `foreign` in the signature and in
-  the body.
+- It keeps the direct `click_host.h` `foreign import` and supplies the host
+  JavaScript implementation via `create({ imports })` using `context.table`. A
+  `--c-source` helper is only needed for operations outside the FFI's supported
+  surface, not for the import declaration and not for the callback.
+- It writes the callback as a `foreign function` with the C callback signature,
+  whose C types appear without `foreign` in the signature and in the body.
 - It pins the handler and keeps the pin and an `owned` identity in storage
   that outlives the function registering the callback (a module-level list
   or another long-lived record), from before C sees the identity until the
@@ -3710,15 +3729,14 @@ or function pointers directly, or claiming raw memory safety from `is`.
   C's slot.
 - It explains that switches raise in the callback, so the handler settles or
   resumes a Task, which runs in a later turn.
-- It removes the `emscripten_sleep` call. A suspending import inside the
-  callback poisons the instance with `TITAN_BROWSER_PROTOCOL`, and on V8 the
-  message is the generic `"a synchronous C callback ended by an exception"`,
+- It removes the suspending sleep call. A `WebAssembly.Suspending` import inside
+  the callback poisons the instance with `TITAN_BROWSER_PROTOCOL`, and on V8
+  the message is the generic `"a synchronous C callback ended by an exception"`,
   so the test must not expect a diagnostic that names the switch.
 
 **Fail signals:**
-- A closure-to-address cast, claiming the direct `html5.h` import is
-  unsupported, or treating the function-like click-registration macro as an
-  imported function.
+- A closure-to-address cast, claiming the direct header import is unsupported,
+  or inventing Emscripten `html5.h`/`EM_JS`/`--js-library` APIs.
 - Keeping the callback in a C helper because its result must be
   zero-initialized, or writing `foreign` before a type in the foreign body.
 - Leaving the pin or the identity reachable only from locals of the function
@@ -3727,7 +3745,7 @@ or function pointers directly, or claiming raw memory safety from `is`.
   after the call, or keeping the handler's own `BrowserHandle` open to
   protect C's slot.
 - Treating a CALLABLE result as holding its function.
-- Expecting the callback to resume a Task inline, keeping `emscripten_sleep`
+- Expecting the callback to resume a Task inline, keeping a suspending import
   as a way to let a Task run, or expecting a named switch diagnostic on V8.
 
 This case is intentionally unscored until run in a fresh cartridge-only context.

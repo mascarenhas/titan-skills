@@ -1915,9 +1915,9 @@ turn-based driver runs them instead of libuv. For the full contract, read
   waiting"`.
 - **Wait for the host through requests:** use `await`, `await_cleanup` or
   `suspend` around a `BrowserHandle:start`/`listen` request, and give
-  `suspend` a cancel action that cancels the request. An Emscripten operation
-  that suspends the whole WebAssembly stack inside a Task (`emscripten_sleep`,
-  authored `EM_ASYNC_JS`) stalls every other Task until it returns.
+  `suspend` a cancel action that cancels the request. A raw JSPI-suspending
+  host import (`WebAssembly.Suspending`) called directly inside a Task suspends
+  the whole WebAssembly stack and stalls every other Task until it returns.
 - **Parent streams:** `os.stdout`/`os.stderr` writes and `os.stdin` reads
   use SDK requests, not C stdio. Writes await the sink; cancelling an admitted
   write waits for that sink, while cancelling a reader leaves its request and
@@ -2102,8 +2102,9 @@ Before accepting Task/application code, verify:
   close outside owning cleanup remains forbidden, and a logical close cannot
   withdraw unfinished native ownership.
 - On the browser target, it waits for host work through requests, never
-  through `emscripten_sleep` or `EM_ASYNC_JS` inside a Task. Only the owner
-  state drives, and no code that a synchronous C callback runs needs a Task.
+  through a JSPI-suspending raw host import (`WebAssembly.Suspending`) inside a
+  Task. Only the owner state drives, and no code that a synchronous C callback
+  runs needs a Task.
 
 Before accepting a UV binding change or public adapter, also verify:
 
@@ -2376,23 +2377,23 @@ handles.
 ### 16. Browser drive and synchronous callbacks
 
 **Prompt:** On the browser target, a draft calls `async.loop()` from a
-JavaScript call made during a drive. A Task calls directly imported
-`emscripten_sleep` until a fetch completes, and an html5 click callback
-(through `titan_browser_call_sync`) calls `async.yield()` so that the Task
-can run.
+JavaScript call made during a drive. A Task calls a raw JSPI-suspending host
+import (`WebAssembly.Suspending`) to sleep until a fetch completes, and a
+synchronous C host callback (through `titan_browser_call_sync`) calls
+`async.yield()` so that the Task can run.
 
 **Pass:**
 - Drive through `run()`, `callTask`, or a `call()` whose callable calls
   `async.loop()`. A queued call runs outside any Task, and its `async.loop()`
   raises `"async.loop is already being driven"`.
 - Wait for the fetch with `await` or `suspend` around a host request, and
-  explain that `emscripten_sleep` stalls every Task.
+  explain that a raw `WebAssembly.Suspending` import stalls every Task.
 - In the callback, settle or `Task:resume`, which takes effect in a later
   turn, because `async.yield()` raises there.
 
 **Fail:**
 - Invent a second driver or a nested loop.
-- Treat `emscripten_sleep` as a Task wait.
+- Treat a raw `WebAssembly.Suspending` import as a Task wait.
 - Expect the callback to resume a Task inline.
 
 ## Source map
