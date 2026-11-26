@@ -382,7 +382,7 @@ changes to the compiler repository.
 ## Browser applications
 
 Choose `--target browser` when the application runs in a web page, or as an ES
-module in a bundler or Node 26+. Titan builds it with `wasi-sdk` 34.0 and
+module in a bundler or Node 26+. Titan builds it with `wasi-sdk` 34 and
 Binaryen `version_133`, from Linux, macOS or Windows (MSYS2 CLANG64), into a
 WebAssembly image for JSPI-capable engines. On Windows use `make -f Makefile.win` for `lua-browser`
 and `browser-sdk`, and use the [Windows browser setup](../../../doc/language/windows-build.md#build-for-the-browser)

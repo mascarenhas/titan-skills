@@ -1743,7 +1743,7 @@ poisons the instance, and later methods reject that saved failure.
 
 ## Synchronous C callbacks and host WebAssembly imports
 
-On `--target browser` (`wasi-sdk` 34.0, `wasm32-wasip1`), authored C helpers
+On `--target browser` (`wasi-sdk` 34, `wasm32-wasip1`), authored C helpers
 compiled with `--c-source` and headers imported via `foreign import` can call
 host JavaScript directly through explicit WebAssembly imports:
 
