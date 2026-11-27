@@ -1,0 +1,53 @@
+local json = import "json"
+local strings = import "string"
+local c = import "codec"
+
+function main(_args: {string}): integer
+  -- 1. Verify portable codec description marks text vs raw bytes and omits local field `calibration`
+  local pcodec = c.make_codec()
+  local desc = pcodec:describe()
+  if #desc == 0 then return 1 end
+  local parsed: {string: value} = json.decode(desc, nil)
+  local nominals: {string: value} = parsed["nominals"]
+  local reading_meta: {string: value} = nominals["codec.Reading"]
+  local reading_fields: {value} = reading_meta["record"]
+  if #reading_fields ~= 3 then return 2 end
+  local f1: {value} = reading_fields[1]
+  local f2: {value} = reading_fields[2]
+  local f3: {value} = reading_fields[3]
+  if f1[1] ~= "sensor" or f1[2] ~= "text" then return 3 end
+  if f2[1] ~= "sample" or f2[2] ~= "integer" then return 4 end
+  if f3[1] ~= "payload" or f3[2] ~= "bytes" then return 5 end
+
+  local note_meta: {string: value} = nominals["codec.Note"]
+  local note_fields: {value} = note_meta["record"]
+  local nf1: {value} = note_fields[1]
+  if nf1[1] ~= "tag" or nf1[2] ~= "text" then return 6 end
+
+  -- 2. Native roundtrip preserves >2^53 integer, NUL/non-UTF-8 payload, dynamic Note, and runs Reading.new
+  local big_sample = 9007199254740993
+  local orig = c.Reading("roof", big_sample, "raw\x00\xff")
+  if orig:calibration_offset() ~= 10 then return 7 end
+
+  local r2, extra2 = c.roundtrip_native(orig, c.Note("live"))
+  if r2.sensor ~= "roof" or r2.sample ~= big_sample or r2.payload ~= "raw\x00\xff" then return 8 end
+  if r2:calibration_offset() ~= 10 then return 9 end
+  if not (extra2 is c.Note) then return 10 end
+  local n2 = extra2 as c.Note
+  if n2.tag ~= "live" then return 11 end
+
+  -- 3. Unlisted nominal inside value slot must be rejected upfront (no demand loading)
+  local err_msg = ""
+  do
+    pcodec:encode(orig, c.Unlisted(99))
+    return 12
+  catch
+    if error is string then
+      err_msg = error as string
+    end
+  end
+  local found? = strings.find(err_msg, "is not in this portable codec")
+  if found == nil then return 13 end
+
+  return 0
+end

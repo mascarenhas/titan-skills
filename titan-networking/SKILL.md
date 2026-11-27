@@ -1,1746 +1,221 @@
 ---
 name: titan-networking
-description: Write, review, and test Titan TCP, TLS, HTTP/1.1, and URL code with the exact net, ssl, http, url, io, async, and timer contracts, including http.RequestOptions, redirect modes, and the browser fetch client. Use for clients, servers, byte streams, certificate verification, HTTP framing, URL normalization, network cancellation, or network-resource cleanup. API-provided network timeouts are covered here; add titan-async for asynchronous networking behavior tests or when directly designing Task, timer, cancellation, or Runtime mechanics.
+description: Use when writing Titan URL, TCP, TLS, or HTTP clients and servers (url, net, ssl, http, browser fetch). Covers DNS, sockets, HTTPS/TLS certificates, HTTP/1.1 framing, RequestOptions, redirects, pools, Exchange handoff, and deadlines; use titan-websocket for WebSocket framing/upgrades, titan-async for Tasks/timers/uv, titan-stdlib for fs/io/os.
 ---
 
 # Titan networking
 
-Use this skill for application code and reviews involving `net`, `ssl`, `http`,
-`url`, or a network value viewed through an `io` Interface. Titan networking is
-**direct-style asynchronous Titan code**: an operation looks like a blocking
-method call, but it suspends only its current `async.Task` and resumes from a
-libuv callback. It is not LuaSocket, Go's `net/http`, Node promises, or a
-thread-per-connection API.
+Covers `url`, `net`, `ssl`, and `http` (native HTTP/1.1 client/server and browser `fetch` client). Pair with `skill://titan-programmer` (syntax/`T?`/`defer`/`raise`), `skill://titan-websocket` (WS/WSS framing & upgrades), `skill://titan-async` (Tasks/timers/cancellation/libuv), `skill://titan-stdlib` (`io`/`string.writer()`/`fs`), `skill://titan-thread` (cross-state `transfer`), and `skill://titan-tester` (tests).
 
-This cartridge is self-contained for the public networking surface, including
-an API's own timeout/deadline contract. Read `titan-programmer` first for every
-`.titan` change, and load every applicable peer: `titan-async` for asynchronous networking behavior tests or when directly
-designing Task/timer/cancellation or Runtime ownership, `titan-tester` for native
-behavior tests, `titan-pegs` when changing the URL grammar, and `titan-ffi` when
-changing the standard library's native boundary. Normal applications use these high-level APIs. Low-level adapters may import
-public `uv`; only `titan.uv` may import libuv headers/types/helpers. Keep
-OpenSSL and llhttp FFI inside their established library boundaries. On
-`--target browser` only `url` and the `http` client exist; read
-[HTTP on the browser target](#http-on-the-browser-target) before writing
-browser network code.
+## Non-negotiable invariants
 
-## Evidence labels used here
+1. **Direct-style async Tasks & target split:** Import `"url"`, `"net"`, `"ssl"`, `"http"` (Lua: `require "titan.<m>"`). Network calls suspend only the current `async.Task` (Go-style direct async over libuv/Fetch—not LuaSocket or promises); `main` auto-bootstraps, Lua needs `async.run`+`async.loop`. On `--target browser`, **only `url` (full) and `http` client (subset)** exist; `net` and `ssl` fail at compile time.
+2. **Nonthrowing `url.parse` vs throwing `http`:** `url.parse`/`url.parse_request` synchronously return mutually exclusive `(Url?, Error?)` (bind `local u?, err? = ...`; never split URLs with strings). Rejects userinfo (`user@`) and `#fragment`; keeps `ws`/`wss`; `Url.host` is unbracketed for dialing/TLS while `Url.authority`/`Url:host_header()` keeps brackets and explicit ports. `http` raises `url.Error` pre-dial.
+3. **`net` ownership, `TCP_NODELAY`, & deadlines:** Immediately `defer conn:close()` / `defer server:close()`. `Connection` satisfies all 7 `io` Interfaces; `Server` satisfies `io.Closer`. Dialed/accepted sockets default to `TCP_NODELAY = true` (`set_no_delay(enabled)` toggles); `listen(host, 0)` + `Server:local_address()` gets ephemeral OS ports. `net` has no built-in timeouts—race with `timer.sleep`, cancel and join losers, and abort blocked TLS/accepted ops before draining.
+4. **`ssl` TLS 1.2+ strict limits:** Always TLS 1.2+ with strict chain + DNS/IP verification. **Absent by design:** insecure mode, CA-directory param, OS-native trust store, encrypted keys/passwords, ALPN, mTLS, cipher/session/key-log controls, raw `net.Connection` getter. Explicit `ca_file` **replaces** defaults (required on Windows, which ships no CA bundle). `ssl.Server:accept()` is TCP-only (lazy handshake—spawn a Task per client). One reader + one writer concurrently; cancellation terminalizes the engine; bare TCP EOF/RST without `close_notify` raises `ssl.Error` `TLS_TRUNCATED_EOF`.
+5. **`http` client (`RequestOptions`, browser `fetch` vs native pools/redirects):** `RequestOptions` is an immutable copied snapshot; mode unions (`CacheMode`, `CredentialsMode`, `RequestMode`, `RedirectMode`) compare by identity—inspect with **`case`**, never `==`. `redirect` defaults to **`manual()` natively** and **`follow()` on browser**. `http.get` rejects any `body` (even `""`). Always `defer response:close()`; stream via `for chunk in response:read do` + `strings.writer()` (no `.body` field). Browser rejects `ca_file`, custom `Host`, and Fetch forbidden headers pre-network and decodes `Content-Encoding` automatically.
+6. **HTTP/1.1 server (`Server`, `Request`, `Response`, `Exchange`):** Serial keep-alive per connection Task; no built-in Router or HTTP/2. Watch arg order: `http.listen(host, handler, port?, ...)` puts `handler` 2nd (`net`/`ssl.listen` put `port` 2nd). `Server:idle_timeout(ms)` is an **absolute** per-request header-acquisition deadline only (no partial-header reset; excludes handler/body/write; HTTPS expiry yields `TLS_TRUNCATED_EOF` at peer). Cross-state handoff bundles `http.Exchange(request, response)` (`server:read_ahead(false)` + `async.yield()` on Windows).
+7. **Conditional reference read:** **MUST read `skill://titan-networking/references/http-and-tls-details.md`** before implementing: HTTP redirect chains/pools/abandoned-body drains, browser `fetch` forbidden headers/cache/CORS/opaque responses, HTTP `Response` framing/coalescing/`100-continue`/`upgrade`, `ssl.client` adoption/deadlines/state-close/static OpenSSL linking, or cross-state `net`/`ssl`/`http.Exchange`/`UpgradedStream` handoff.
 
-Examples are deliberately labeled so an attractive sketch is not mistaken for
-a checked-in contract:
+## Module, target & error matrix
 
-- **REPOSITORY-VERIFIED** means the pattern or complete example is present in a
-  current manual, source module, or native Titan behavior test named beside it.
-  A quoted manual example is reproduced as written. A shortened test pattern
-  keeps the same public calls but is not claimed to be a byte-for-byte fixture.
-- **COMPOSITION SKETCH** means every named API and semantic rule is current, but
-  the whole snippet is newly composed for this skill and was not separately
-  built as a repository fixture. Compile it in the target source tree and add a
-  focused test before shipping it.
-
-Do not infer an API from a sketch. The API inventories below are the boundary.
-
-## Route to the narrow authority
-
-| Work | Read first | Then inspect |
+| Module | Targets | Primary surface |
 | --- | --- | --- |
-| TCP/DNS/byte streams | [`doc/language/standard-library-net.md`](../../../doc/language/standard-library-net.md) | [`titan/net.native.titan`](../../../titan/net.native.titan), [`spec/stdlib/titan/net/tests.titan`](../../../spec/stdlib/titan/net/tests.titan), [`doc/implementation/libuv-networking.md`](../../../doc/implementation/libuv-networking.md) |
-| TLS/trust/certificates | [`doc/language/standard-library-ssl.md`](../../../doc/language/standard-library-ssl.md) | [`titan/ssl.native.titan`](../../../titan/ssl.native.titan), [`spec/stdlib/titan/ssl/tests/tests.titan`](../../../spec/stdlib/titan/ssl/tests/tests.titan), [`doc/implementation/ssl-library.md`](../../../doc/implementation/ssl-library.md) |
-| HTTP client/server | [`doc/language/standard-library-http.md`](../../../doc/language/standard-library-http.md) | [`titan/http/`](../../../titan/http), [`spec/stdlib/titan/http/tests/`](../../../spec/stdlib/titan/http/tests), [`doc/implementation/http-library.md`](../../../doc/implementation/http-library.md) |
-| URL validation/normalization | [`doc/language/standard-library-url.md`](../../../doc/language/standard-library-url.md) | [`titan/url.titan`](../../../titan/url.titan), [`spec/stdlib/titan/url/tests.titan`](../../../spec/stdlib/titan/url/tests.titan), [`doc/implementation/url-library.md`](../../../doc/implementation/url-library.md) |
-| WebSocket sessions | [`titan-websocket/SKILL.md`](../titan-websocket/SKILL.md) | [`doc/language/standard-library-websocket.md`](../../../doc/language/standard-library-websocket.md), [`titan/websocket/`](../../../titan/websocket) |
-| Stream abstraction | [`doc/language/standard-library-io.md`](../../../doc/language/standard-library-io.md) | [`titan/io.titan`](../../../titan/io.titan), [`doc/language/interfaces.md`](../../../doc/language/interfaces.md) |
-| Tasks, deadlines, cancellation | [`doc/language/async-io.md`](../../../doc/language/async-io.md) | [`doc/implementation/libuv-runtime.md`](../../../doc/implementation/libuv-runtime.md), [`titan/async/`](../../../titan/async) |
-| Cleanup/error/option spelling | [`doc/style-guide.md`](../../../doc/style-guide.md), [`doc/language/error-handling.md`](../../../doc/language/error-handling.md), [`doc/language/types.md#option-types-t`](../../../doc/language/types.md#option-types-t) | Adjacent code and tests |
-| Native tests | [`doc/language/standard-library-test.md`](../../../doc/language/standard-library-test.md) | Existing owner under [`spec/stdlib/titan/`](../../../spec/stdlib/titan), repository commands in [`AGENTS.md`](../../../AGENTS.md) |
+| `url` | Native & Browser | `parse`, `parse_request`, `Url` (`scheme`/`host`/`port`/`path`/`query`/`target`/`authority`, `:host_header()`), `Error` (`position`/`kind`/`message`) |
+| `net` | Native only | `resolve`, `connect`, `Connection()`+`connect_address`, `listen`, `Address`, `local_address`/`peer_address`, `read`/`read_until`/`write`/`set_no_delay`/`shutdown`/`close` |
+| `ssl` | Native only | `connect`, `client`, `listen`, `accept`, `handshake`, `local_address`/`peer_address`, `read`/`read_until`/`write`/`set_no_delay`/`shutdown`/`abort`/`close`, `Error` |
+| `http` client | Native & Browser | `headers`/`Headers`, `RequestOptions` + 4 mode unions, `Client`/`get`/`request`, `ClientResponse` (`status`/`reason`/`headers`/`url`/`redirected`, `io.ReaderCloser`) |
+| `http` server | Native only | `listen`/`listen_tls`, `Handler`, `Request`/`Response`, `request_upgrade_on`/`take_upgrade`, `Exchange`, `UpgradedStream` |
+| `websocket`/`uv` | See peers | WS/WSS framing & upgrades → `skill://titan-websocket`; UDP/pipes/raw sockets → `skill://titan-async` |
 
-The public language chapters define behavior. Source confirms declarations and
-layering; the mechanically extracted current provider schema in
-[`spec/fixtures/stdlib/titan_stdlib_types.lua`](../../../spec/fixtures/stdlib/titan_stdlib_types.lua)
-(and, for `--target browser`,
-[`titan_stdlib_browser_types.lua`](../../../spec/fixtures/stdlib/titan_stdlib_browser_types.lua))
-confirms which fields, generated constructors, methods, functions, and aliases
-are actually public. Tests show supported use and ownership. Implementation
-chapters are authority for private callback/lifetime invariants, not permission
-to use private names in application code.
+| Boundary | Normal EOF / absence | Raised failure (branch on exact type & stable field) |
+| --- | --- | --- |
+| `url.parse` / `parse_request` | `(nil, url.Error)` | Never raises on malformed URL (`Error.kind`, 1-based byte `position`) |
+| `net` | `read*` → `nil` | `async.OperationError` (`name` e.g. `EADDRINUSE`/`EAI_*`, `operation`); arg/state `string` |
+| `ssl` | Authenticated `close_notify` → `nil` | `ssl.Error` (`name`: `CERTIFICATE_VERIFY_FAILED`, `TLS_TRUNCATED_EOF`, `TLS_INTERRUPTED`, `SSL_ERROR_*`); wrapped `net`/`fs` keep `OperationError` |
+| `http` (native) | Body `read*` → `nil` | Bad URL/Host → `url.Error`; policy (`only_if_cached`, redirect error/loop) → `OperationError("EIO", "http.request")`; net/TLS keep types; framing/arg → `string` (no `http.Error`) |
+| `http` (browser) | Body `read*` → `nil` | Bad URL/Host → `url.Error`; forbidden header/`ca_file`/arg → `string`; all host/TLS/CORS/policy failures → `OperationError("EIO", "http.request" \| "http.read")` |
 
-## The runtime model that makes the APIs make sense
+## URLs (`url`)
 
-1. Async owns one non-reentrant libuv loop on the Lua main thread. Top-level
-   `async.loop()` or the generated standalone bootstrap drives that loop.
-   Callback-only public UV clients may drive their own explicit loops with
-   `uv.run`, following the same main-thread and non-reentry restrictions.
-2. A Task runs synchronously until it returns, raises, or invokes an operation
-   that yields to the runtime. Libuv does not preempt ordinary Titan statements.
-   Explicit low-level calls that invoke synchronous callbacks (such as
-   `uv.walk`, or Windows TTY read startup) follow their documented contract;
-   do not confuse that direct call with unrelated event-loop preemption.
-3. `async.run` schedules a new Task and returns before its function starts. It
-   does not run the function inline.
-4. Operation callbacks resume the Task waiting for that exact operation through
-   its public generic await settlement or subscription delivery. Public `Task:resume(token)` is only
-   for the exact explicit `async.suspend(token, ...)` that stored the same
-   nominal token; it is never a general native-wait wake and is not how
-   application code completes reads, accepts, writes, DNS, TLS, or HTTP.
-5. An accepted native request and everything libuv borrows remain owned until
-   its terminal callback. Task cancellation is logical before it is physical;
-   it never makes the callback owner or write bytes disposable early.
-6. A standalone program that imports this async constellation gets the automatic
-   bootstrap: generated `main` already runs as a Task and the entrypoint drives
-   the loop until all Tasks finish. Do not wrap `async.loop()` inside `main`, a
-   handler, a callback, or another Task.
-7. A Lua host schedules work with `async.run` and drives it with one top-level
-   `async.loop`. A program or test compiled with `--no-uv-bootstrap` must do the
-   same explicitly and finish Runtime-bound Tasks/handles inside that session.
-8. CPU-heavy Titan code blocks all I/O until it returns or explicitly calls
-   `async.yield()`/`timer.yield()`.
+- **Normalization:** Lowercases `scheme`, registered `host`, IPv6 hex, and IPvFuture version; supplies default `port` (`80` `http`/`ws`, `443` `https`/`wss`); maps empty `path` to `"/"`; distinguishes absent `query` (`nil`) from empty `""`; builds `target` = `path` + optional `"?" .. query`; decodes unreserved `%XX` (`%5f` → `_`) and uppercases retained escapes (`%2F`). IPv6 `%25zone` decodes to `%zone` in `host` while staying `%25zone` in `authority`. No IDNA/DNS/redirects.
+- **`parse_request(scheme, authority, target)`:** Validates separate server parts (rejects `/`, `?`, `#` in `authority` with `authority_tail`, requires origin-form `/` `target` else `origin_form`, indexes `Error.position` into `scheme .. "://" .. authority .. target`). Connect with `Url.host`/`Url.port`; send `Url.target` and `Url:host_header()`.
 
-These are verified by
-[`doc/language/async-io.md`](../../../doc/language/async-io.md) and
-[`doc/implementation/libuv-runtime.md`](../../../doc/implementation/libuv-runtime.md).
-Reject designs that add locks, generations, callback fences, ready queues, or
-snapshot rollback to defend against imagined same-thread callback preemption.
-Tasks can interleave only at real suspension boundaries; ownership still must
-be correct across those boundaries.
+## TCP & DNS (`net`)
 
-## Exact public API inventory
+- **Dialing & listening:** `resolve(host, port)` returns owned IPv4/IPv6 `{uv.sockaddr_t}` (`port` `1..65535`; cancel still awaits callback). `connect(host, port)` tries candidates in resolver order. `Connection()` + `connect_address(addr)` exposes a pre-dial abortable handle (`set_no_delay`, `close`, `has_pending_input` valid pre-dial; `set_no_delay` rejected while connecting). `listen(host, port, backlog?, reuse_port?)` accepts `port = 0` (ephemeral), `backlog` default `128`, `reuse_port` Linux-only (`ENOTSUP` on macOS/Windows).
+- **Addresses:** `Server:local_address()`, `Connection:local_address()`, `Connection:peer_address()` return cached immutable `net.Address { const ip, const port, const ipv6, const scope_id }` snapshots (readable after close; require live endpoint + active Task on owning Runtime; reset peer may raise `OperationError` `"net.peer_address"`).
+- **Streams:** Lazy read watcher starts on first `read`/`read_until`. Single reader at a time (cancelling waiter leaves `Connection` usable). `read_until(delim, chop?)` requires nonempty `delim`, matches across chunks, keeps excess, returns `""` for empty chopped match (distinct from `nil` EOF) and unterminated tail once before sticky `nil`. `read_ahead(false)` (only before first read) stops watcher per callback for transfer; `has_pending_input()` is a pure snapshot; `add_input_listener(fn)` runs non-yielding outside Tasks. Overlapping `write(data)` calls stay ordered and retain strings across cancellation. `shutdown()` half-closes writes; `close()` wakes waiting reader with `nil`.
 
-### TCP: `net`
-
-```text
+```titan
+local async = import "async"
 local net = import "net"
 
-record Connection       -- opaque; public fresh-endpoint constructor
-record Server           -- opaque; no public constructor or handle
-
-function resolve(host: string, port: integer): {uv.sockaddr_t}
-function Connection.new(): Connection
-function Connection:connect_address(address: uv.sockaddr_t)
-function connect(host: string, port: integer): Connection
-function listen(host: string, port: integer,
-                backlog: integer?, reuse_port: boolean?): Server
-
-function Connection:read(): string?
-function Connection:read_ahead(enabled: boolean?): boolean
-function Connection:has_pending_input(): boolean
-function Connection:add_input_listener(listener: function (): ()): function (): ()
-function Connection:read_until(delimiter: string,
-                               chop: boolean?): string?
-function Connection:write(data: string)
-function Connection:shutdown()
-function Connection:close()
-
-function Server:accept(): Connection
-function Server:close()
-```
-
-`resolve` returns owned IPv4/IPv6 TCP addresses in resolver order, retaining
-no native addrinfo. Use one returned address with a fresh `net.Connection()`,
-immediately defer `close`, then `connect_address(address)`. This performs no
-second DNS query and makes the TCP abort owner available while dialing. Before
-connect succeeds, only dialing and close are valid. Repeat/concurrent attempts
-fail; after a failed attempt close the endpoint. DNS cancellation requests
-native cancellation and drains its real callback, which can outlast a deadline.
-
-This is the complete current TCP surface in `net`. There is no UDP, Unix-domain
-socket, listener-adoption (`LISTEN_FDS` / `launch_activate_socket`),
-socket-option, local/peer-address, selected-ephemeral-port, read-size,
-`read_all`, per-operation timeout, or connection-pool API. A connected socket
-that inetd, systemd `Accept=yes` with `StandardInput=socket`, or launchd
-`inetdCompatibility` `Wait=false` supplies on descriptors 0–2 is not a
-`net.Connection`. On Linux and macOS it is `os.stdin`/`os.stdout`/`os.stderr`
-with `kind() == "tcp"`. Use `os.stdout:shutdown()` to half-close: it waits for
-accepted writes, ends output for every alias of the connection, leaves stdin
-readable, and returns at once when repeated. Parent `close()` never sends FIN.
-Windows rejects socket stdio with `stdio.parent.kind` `ENOTSUP`. See the
-[OS manual](../../../doc/language/standard-library-os.md#tcp-backed-parent-streams).
-
-### TLS: `ssl`
-
-```text
-local ssl = import "ssl"
-
-record Error
-  code: integer
-  name: string
-  message: string
-  operation: string
-end
-function Error.new(code: integer, name: string,
-                   message: string, operation: string): Error
-
-record Connection       -- opaque
-record Server           -- opaque
-
-function client(transport: net.Connection, host: string,
-                ca_file: string?): Connection
-function connect(host: string, port: integer,
-                 ca_file: string?): Connection
-function listen(host: string, port: integer,
-                certificate_file: string,
-                private_key_file: string?,
-                backlog: integer?, reuse_port: boolean?): Server
-
-function Connection:abort()
-function Connection:handshake()
-function Connection:read(): string?
-function Connection:read_ahead(enabled: boolean?): boolean
-function Connection:has_pending_input(): boolean
-function Connection:add_input_listener(listener: function (): ()): function (): ()
-function Connection:read_until(delimiter: string,
-                               chop: boolean?): string?
-function Connection:write(data: string)
-function Connection:shutdown()
-function Connection:close()
-
-function Server:accept(): Connection
-function Server:close()
-```
-
-`ssl.Error(...)` calls the ordinary generated `ssl.Error.new` constructor for
-this public-field record; applications normally receive an Error from a failed TLS operation
-rather than manufacturing one.
-
-There is no insecure flag, CA-directory argument, client-certificate/mTLS
-surface, ALPN selector, cipher/session/key-log control, raw `net.Connection`
-accessor. One reader and one writer may progress concurrently after shared
-lazy-handshake admission. Duplicate operations in one direction fail; explicit
-handshake/shutdown/graceful close remain exclusive. Use `abort()` to interrupt
-active operations without waiting for peer TLS progress.
-
-### URLs: `url`
-
-```text
-local url = import "url"
-
-record Url
-  scheme: string
-  host: string
-  port: integer
-  path: string
-  query: string?
-  target: string
-  authority: string
-end
-
-record Error
-  position: integer
-  kind: string
-  message: string
-end
-
--- Public-field records receive their ordinary generated constructors.
-function Url.new(scheme: string, host: string, port: integer,
-                 path: string, query: string?, target: string,
-                 authority: string): Url
-function Error.new(position: integer, kind: string,
-                   message: string): Error
-
-function parse(source: string): (Url?, Error?)
-function parse_request(scheme: string, authority: string,
-                       target: string): (Url?, Error?)
-function Url:host_header(): string
-```
-
-Both parse functions are synchronous and nonthrowing for malformed input. They
-return exactly one populated tuple position. The generated `Url.new` and
-`Error.new` constructors exist because every field is public, but application
-input should go through `parse`/`parse_request` so its normalization and policy
-are enforced. The `http` layer deliberately turns the returned `url.Error` into
-a raised value when a request cannot proceed.
-
-### HTTP/1.1: `http`
-
-```text
-local http = import "http"
-
-record Header
-  name: string
-  contents: string
-end
-function Header.new(name: string, contents: string): Header
-
-record Headers
-
-function headers(initial: {Header}?): Headers
-function Headers:add(name: string, contents: string)
-function Headers:set(name: string, contents: string)
-function Headers:get(name: string): string?
-function Headers:values(name: string): {string}
-function Headers:remove(name: string)
-function Headers:all(): {Header}
-
-union CacheMode
-  default()  no_store()  reload()  no_cache()  force_cache()  only_if_cached()
-end
-union CredentialsMode: omit(), same_origin(), include()
-union RequestMode:     cors(), no_cors(), same_origin()
-union RedirectMode:    follow(), error(), manual()
-
-record RequestOptions   -- opaque validated snapshot; all fields private
-function RequestOptions.new(headers: Headers?, body: string?, ca_file: string?,
-                            cache: CacheMode?, credentials: CredentialsMode?,
-                            mode: RequestMode?,
-                            redirect: RedirectMode?): RequestOptions
-
-record ClientResponse
-  status: integer
-  reason: string
-  headers: Headers
-  url: string?
-  redirected: boolean
-end
-
-record Client
-function Client.new(): Client
-function Client:request(method: string, source_url: string,
-                        options: RequestOptions?): ClientResponse
-function Client:get(source_url: string,
-                    options: RequestOptions?): ClientResponse
-function Client:close_idle_connections()
-function Client:close()
-function close_idle_connections()
-
-function request(method: string, source_url: string,
-                 options: RequestOptions?): ClientResponse
-function get(source_url: string, options: RequestOptions?): ClientResponse
-function request_upgrade_on(connection: io.ReaderWriterCloser,
-                            abort: function(): (), source_url: string,
-                            protocol: string, supplied_headers: Headers?): ClientResponse
-function ClientResponse:take_upgrade(): io.ReaderWriterCloser
-function ClientResponse:read(): string?
-function ClientResponse:read_until(delimiter: string,
-                                   chop: boolean?): string?
-function ClientResponse:close()
-
-type Handler = function(Request, Response): ()
-
-record Request
-  method: string
-  target: string
-  url: url.Url
-  version: string
-  headers: Headers
-end
-
-function Request:read(): string?
-function Request:read_until(delimiter: string,
-                            chop: boolean?): string?
-
-record Response
-function Response:set_status(status: integer, reason: string?)
-function Response:add_header(name: string, contents: string)
-function Response:set_header(name: string, contents: string)
-function Response:headers(): Headers
-function Response:send_headers()
-function Response:write(data: string)
-function Response:close()
-function Response:abort()
-function Response:upgrade(request_value: Request, protocol: string,
-                          supplied_headers: Headers?): io.ReaderWriterCloser
-function Response:reject_upgrade(request_value: Request, status: integer,
-                                 supplied_headers: Headers?)
-
-record Server
-function listen(host: string, handler: Handler,
-                port: integer?, backlog: integer?,
-                idle_timeout: integer?, reuse_port: boolean?): Server
-function listen_tls(host: string, certificate_file: string,
-                    handler: Handler, private_key_file: string?,
-                    port: integer?, backlog: integer?,
-                    idle_timeout: integer?, reuse_port: boolean?): Server
-function Server:idle_timeout(timeout: integer?): integer
-function Server:header_limit(limit: integer?): integer
-function Server:read_ahead(enabled: boolean?): boolean
-function Server:serve()
-function Server:close()
-
-record Exchange
-  const request: Request
-  const response: Response
-end
-function Exchange.new(request_value: Request, response: Response): Exchange
-function Exchange:to_transfer_payload(): string
-function Exchange.from_transfer_payload(payload: string): Exchange
-function Exchange.discard_transfer_payload(payload: string): integer
-function Exchange:serve(handler: Handler, idle_timeout: integer?)
-function Exchange:close()
-
-record UpgradedStream
-function UpgradedStream:read(): string?
-function UpgradedStream:read_until(delimiter: string, chop: boolean?): string?
-function UpgradedStream:write(data: string)
-function UpgradedStream:close()
-function UpgradedStream:to_transfer_payload(): string
-function UpgradedStream.from_transfer_payload(payload: string): UpgradedStream
-function UpgradedStream.discard_transfer_payload(payload: string): integer
-```
-
-`Header(...)` calls the public generated constructor because Header has only
-public fields; passing an Array
-through `headers(initial)` validates and copies those records. `Headers`,
-`Response`, and `Server` are opaque. `ClientResponse` and `Request` expose the
-listed public fields but also own private transport/parser state, so neither has
-a public generated constructor. Use `headers`, `request`/`get` (or an explicit Client), and
-`listen`/`listen_tls`.
-
-Natively this is an HTTP/1.1-only pooled client and serial keep-alive server.
-There is no `Router`, request builder, streaming request-body Writer, response
-`body` field, native decompressor, cookie jar or HTTP cache, proxy mode,
-HTTP/2, endpoint getter, or generic middleware API. `RequestOptions` is the
-one request option record, and redirect policy is its `redirect` mode.
-Validated HTTP upgrades
-transfer a prefix-preserving stream exactly once. Use the dedicated
-[`titan-websocket`](../titan-websocket/SKILL.md) cartridge for the WebSocket
-protocol built on those upgrade seams. Raw incoming headers default to 64 KiB;
-`header_limit` reads/updates the positive limit for subsequent exchanges.
-
-### The stream Interfaces used by networking
-
-`net.Connection` and `ssl.Connection` satisfy all seven exact method-shape
-Interfaces. `http.ClientResponse` satisfies `io.ReaderCloser`, `http.Request`
-satisfies `io.Reader`, and `http.Response` satisfies `io.WriterCloser`.
-Servers satisfy `io.Closer` incidentally.
-
-```text
-local io = import "io"
-
-interface Reader
-  function read(): string?
-  function read_until(delimiter: string, chop: boolean?): string?
-end
-interface Writer
-  function write(data: string)
-end
-interface Closer
-  function close()
-end
-interface ReaderWriter
-  function read(): string?
-  function read_until(delimiter: string, chop: boolean?): string?
-  function write(data: string)
-end
-interface ReaderCloser
-  function read(): string?
-  function read_until(delimiter: string, chop: boolean?): string?
-  function close()
-end
-interface WriterCloser
-  function write(data: string)
-  function close()
-end
-interface ReaderWriterCloser
-  function read(): string?
-  function read_until(delimiter: string, chop: boolean?): string?
-  function write(data: string)
-  function close()
-end
-
-function lines(reader: ReaderCloser):
-    (function (ReaderCloser): (string?), ReaderCloser, nil,
-     function (ReaderCloser): ())
-```
-
-Interface satisfaction is structural at an explicit conversion site. It is not
-inheritance, does not duplicate a resource, and does not recursively convert a
-method result, Array, Map, or function type. Several Interface wrappers still
-own the same one socket/parser. Concrete concurrency, cancellation, and close
-rules do not become uniform merely because method shapes match.
-
-### Networking-relevant Task/timer subset
-
-This is not the complete `async` API; it is the subset needed to understand the
-patterns in this skill. The `async` module owns these public data shapes:
-
-```text
-record ResumeToken
-  const source: string?
-end
-
-record Error
-  error: value
-  traceback: string
-end
-record OperationError
-  code: integer
-  name: string
-  message: string
-  operation: string
-end
-union CancellationReason<|B|>
-  simple(string)
-  complex(B)
-end
-union TaskStatus<|A, B|>
-  ready()
-  running()
-  waiting()
-  succeeded(A)
-  failed(Error)
-  cancelled(CancellationReason<|B|>)
-end
-record Task<|A, B|>  -- opaque
-```
-
-These nominal types and their constructors are declared by `async` itself.
-Its networking-relevant functions form this surface:
-
-```text
-local async = import "async"
-local timer = import "timer"
-
--- Shown unqualified as inside async; callers use async.*.
-type SuspendCancelAction = function(): ()
-
-function run<|A, B|>(func: function (): (A)): Task<|A, B|>
-function loop()
-function yield()
-function running(): Task<|value, value|>
-function suspend(token: ResumeToken,
-                 cancel_action: SuspendCancelAction?)
-function join<|A, B|>(task: Task<|A, B|>): TaskStatus<|A, B|>
-function join_two<|A1, B1, A2, B2|>(
-    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
-    (TaskStatus<|A1, B1|>, TaskStatus<|A2, B2|>)
-function any_two<|A1, B1, A2, B2|>(
-    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
-    AnyTwoResult<|A1, A2|>
-function race_two<|A1, B1, A2, B2|>(
-    first: Task<|A1, B1|>, second: Task<|A2, B2|>):
-    RaceTwoResult<|A1, B1, A2, B2|>
-
-function Task:cancel(reason: CancellationReason<|B|>?)
-function Task:status(): TaskStatus<|A, B|>
-function Task:add_terminal_listener(
-    listener: function (TaskStatus<|A, B|>): ()): function (): ()
-function Task:resume(token: ResumeToken)
-function TaskStatus:as_string(): string
-function TaskStatus:has_finished(): boolean
-function TaskStatus:has_succeeded(): (boolean, A?)
-function TaskStatus:has_failed(): (boolean, Error?)
-function TaskStatus:has_cancelled(): (boolean, CancellationReason<|B|>?)
-
--- These declarations are inside timer; callers use timer.sleep/yield.
-function sleep(milliseconds: integer)
-function yield()
-```
-
-`ResumeToken` compares by nominal record identity; its optional source is only
-diagnostic. A wrong token raises synchronously in the caller with this exact
-message: `Task resume token mismatch (expected source: <source>)`, using
-`unknown source` when the Task has no stored source. That includes wrong-time
-calls on a ready, natively waiting or finished Task, which expects no token. A
-running Task, including one about to suspend, latches the token for its next
-`suspend` instead (see the async skill). Correct-token calls coalesce and wake
-on a deferred Task-owned timer.
-Cancellation first runs the optional detach action, then wakes with the token
-captured by `suspend`.
-
-The facade's aliases preserve the underlying public constructors and union
-variants, including `CancellationReason.simple/complex`, every `TaskStatus`
-variant, and `Error.new`/`OperationError.new`; applications normally receive the
-error/status records rather than manufacturing them. The fixed-arity `any_*`,
-`race_*`, `all_*`, and `join_*` families extend from two through five operands;
-only `join` has a unary form. They never cancel losers. Consult the async
-skill/manual for exact result unions and arities.
-
-## Titan spelling rules that matter in network code
-
-### Omit trailing optional arguments; use only the real option records
-
-Titan fixed calls nil-fill omitted positions, and every optional position here
-accepts nil. These are valid public calls:
-
-```text
-net.listen("127.0.0.1", 8080)          -- backlog 128
-ssl.connect("example.com", 443)         -- default OpenSSL trust paths
-ssl.listen("127.0.0.1", 8443, "server.pem") -- combined cert/key PEM
-http.get("https://example.com/")        -- default options and trust
-http.listen("127.0.0.1", handler)       -- port 80, backlog 128, no deadline
-response:set_status(404)                 -- default reason phrase
-connection:read_until("\n")             -- delimiter retained
-```
-
-The HTTP client's only options are one `http.RequestOptions`, built with a
-named call: `http.get(url, http.RequestOptions { headers = h, ca_file = path })`.
-Never pass headers, a body, or `ca_file` positionally to `request`/`get`.
-`websocket.DialOptions`/`AcceptOptions` are the other option records. Do not
-invent further option tables, named `Config` records, or Go-style functional
-options.
-
-### Options auto-unwrap at their use; `value` does not
-
-Preserve normal absence with `local item?`. After a presence check, use the
-option directly where the bare value is required. Field access, method calls,
-arguments, indexing, operators, and ordinary inferred initializers perform the
-checked unwrap. A guard makes that check known-safe; it does not flow-change the
-variable's static type.
-
-```text
-local parsed?, problem? = url.parse(source)
-if problem then
+local function serve_one(server: net.Server): nil
+  local peer = server:accept()
+  defer peer:close()
+  local line? = peer:read_until("\n", true)
+  if line ~= nil then peer:write("echo:" .. line .. "\n") end
+  peer:shutdown()
   return nil
 end
-return parsed:host_header()  -- correct: method receiver unwraps Url?
-```
-
-Do **not** write `(parsed as url.Url):host_header()` merely because `parsed` is
-an option. A few older implementation/test spellings still contain such casts;
-the normative option chapter and current style guide require the direct form.
-
-By contrast, catch-local `error` has type `value`. After an `is` test, an
-explicit cast is appropriate because this is a dynamic-value projection, not
-an option unwrap:
-
-```text
-do
-  risky_network_call()
-catch
-  if error is async.OperationError then
-    local failure = error as async.OperationError
-    log(failure.operation .. ": " .. failure.name)
-  else
-    raise       -- preserve the original error and traceback
-  end
-end
-```
-
-### Acquire, then defer immediately
-
-```text
-local connection = net.connect(host, port)
-defer connection:close()
-```
-
-One statement after `defer` is enough. Its scope is the current function, loop,
-`if`/`case` arm, or explicit `do` block, and same-block defers run LIFO on
-fallthrough, return, break, or error. Use `defer do ... end` only for several
-cleanup statements. Do not add a `do/end` solely because cleanup exists.
-
-Titan has no `try`. `catch` attaches directly to any block, including a function
-body. Use `do ... catch ... end` only when a deliberately narrower region must
-be protected. A deferred cleanup error can replace the pending result/error; if
-best-effort cleanup must preserve a caught primary failure, catch the cleanup
-and use bare `raise` from the original catch.
-
-## Byte-stream behavior shared across TCP, TLS, and HTTP bodies
-
-- Payloads and delimiters are binary Titan strings. Embedded NUL is valid.
-  Hosts, PEM paths, and other C text inputs reject embedded NUL.
-- `read()` returns one timing-dependent chunk or `nil` EOF. Never treat a chunk
-  as a message boundary, a TLS record, or a complete HTTP body.
-- `read_until(delimiter, chop)` requires a nonempty delimiter and matches it
-  across underlying chunks, and retains bytes after the first match. Omitted or
-  false `chop` includes the delimiter; true removes it. A delimiter at the
-  beginning with `chop == true` returns `""`, which is not EOF.
-- EOF after a nonempty unterminated tail returns that tail once, then nil.
-- The generic `io.Reader` contract permits an empty chunk. Concrete `net` and
-  `ssl` reads deliver nonempty data chunks; only nil is EOF.
-- `io.lines(reader)` repeatedly calls `read_until("\n", true)` and transfers
-  responsibility for closing a `ReaderCloser` to the generic-for iterator. Do
-  not separately consume or close it while the iterator owns it.
-- A successful/terminal `close()` is safe to repeat. That shared Interface rule
-  does not imply shared post-close writes, concurrent-operation behavior, or
-  cancellation policy.
-
-**COMPOSITION SKETCH — generic body drain through the real Interface:**
-
-```titan
-local stream = import "io"
-local str = import "string"
-
-function read_all(reader: stream.Reader): string
-  local output = str.writer()
-  while true do
-    local chunk? = reader:read()
-    if not chunk then return output:drain() end
-    output:write(chunk) -- argument context unwraps string?
-  end
-  return ""
-end
-```
-
-`read_all` is an application helper, not a missing method on `net.Connection`
-or `http.ClientResponse`. Bound memory remains application-owned; impose a
-size limit for untrusted input rather than collecting without bound.
-
-## TCP clients and servers
-
-### Endpoint and buffering contract
-
-- `connect` accepts ports `1..65535`. It resolves asynchronously, tries IPv4
-  and IPv6 candidates in resolver order, and closes a failed candidate before
-  moving on without waiting for that close callback.
-- `listen` accepts ports `0..65535`; zero asks the OS for an ephemeral port, but
-  the current `Server` exposes no way to retrieve it. Backlog defaults to 128
-  and, when supplied, must be `1..2147483647`.
-- `reuse_port` defaults to false. True passes public `uv.TCP_REUSEPORT` at bind
-  time so independent listeners can share the same local address and port;
-  every listener must opt in. Kernel connection distribution has no promised
-  fairness. Unsupported platforms (including macOS/Windows) raise the native
-  `async.OperationError` named `ENOTSUP`; never silently disable the flag.
-- By default a read watcher starts lazily at the first read and keeps buffering chunks even
-  with no waiter. There is no high-water mark. Do not leave a peer producing
-  indefinitely while the application does not drain. Buffered chunks are
-  returned before a stored read error; after they drain, that error remains
-  sticky until close. Returned chunks are immutable copies. Private TCP receive
-  scratch retains at most 64 KiB per active reader; this bound does not limit
-  queued application bytes. A Connection retained after raw Runtime teardown
-  can retain that scratch until explicit close, a closed read, or collection.
-- `read_ahead(enabled?)` returns the previous policy (default true); omission
-  only queries it. Set false before the first native read starts. Later setters
-  raise. In demand mode, a positive or terminal callback stops the watcher;
-  another read rearms it only after buffered input is exhausted. Transfer
-  preserves the policy. This controls prefetch, not message boundaries or the
-  kernel socket buffer.
-- A listener likewise retains already accepted clients when no Task is waiting;
-  there is no application buffer cap beyond the native listen backlog.
-- There may be at most one suspended reader on a Connection and one suspended
-  acceptor on a Server. A second waiter raises; no queue is created.
-- Cancelling a reader detaches only that waiter and leaves the connection/read
-  watcher reusable. Cancelling an accept waiter leaves the server listening.
-- Every nonempty write uses one `uv_write_t`; libuv orders them. Do not add
-  another write queue. The call returns after its callback and keeps the exact
-  immutable input rooted for the entire native borrow. An empty write validates
-  state and returns without submitting a request.
-- `shutdown()` is idempotent, waits behind earlier writes, closes the write side,
-  and leaves reads open. `close()` is idempotent and closes both directions.
-- Closing a Connection discards buffered/excess input, wakes a blocked reader
-  with nil on a later turn, makes later reads EOF, and rejects new output.
-  Closing a Server closes buffered unaccepted clients and wakes a blocked
-  accept with an error.
-- Runtime shutdown eventually finds leaked handles through `uv_walk`, but
-  explicit close is still the application contract and reports errors at the
-  right site.
-
-**REPOSITORY-VERIFIED — manual TCP client**
-([`doc/language/standard-library-net.md`](../../../doc/language/standard-library-net.md)):
-
-```titan
-local net = import "net"
-local async = import "async"
-
-function client(): value
-  local connection = net.connect("127.0.0.1", 8080)
-  defer connection:close()
-  connection:write("hello\0world\n")
-  connection:shutdown()
-  return connection:read_until("\n", false)
-end
 
 function main(args: {string}): integer
-  async.run<|value, value|>(client)
+  local server = net.listen("127.0.0.1", 0)
+  defer server:close()
+  local port = server:local_address().port
+  local worker = async.run(function (): nil return serve_one(server) end)
+  defer do
+    if not worker:status():has_finished() then worker:cancel() end
+    async.join(worker)
+  end
+  local conn = net.connect("127.0.0.1", port)
+  defer conn:close()
+  conn:write("ping\n")
+  conn:shutdown()
+  local reply? = conn:read_until("\n", true)
+  if reply ~= "echo:ping" then raise "unexpected reply" end
+  async.join(worker)
   return 0
 end
 ```
 
-The generated standalone runtime waits for the scheduled client Task after
-`main` returns. In a main that performs the network calls directly, do not add
-`async.run` merely to make them legal: `main` is already the bootstrap Task.
-Use `async.run` for actual concurrency or a separately observable operation.
+## Verified TLS (`ssl`)
 
-**COMPOSITION SKETCH — accept concurrently, handle each client serially:**
-
-```titan
-local async = import "async"
-local net = import "net"
-
-local function start_client(connection: net.Connection): async.Task<|nil, value|>
-  return async.run<|nil, value|>(function (): nil
-    defer connection:close()
-    local line? = connection:read_until("\n", true)
-    if line then connection:write(line .. "\n") end
-    connection:shutdown()
-    return nil
-  end)
-end
-
-function serve(host: string, port: integer)
-  local server = net.listen(host, port)
-  defer server:close()
-  while true do
-    local connection = server:accept()
-    start_client(connection)
-  end
-end
-```
-
-The Runtime roots spawned Tasks, and an uncaught client error ends/logs only
-that Task. A production server still needs an intentional stop policy and, if
-shutdown must await handlers, its own bounded registry of application Tasks.
-Do not confuse such application ownership with a private Runtime scheduler or
-make `net.Server:close()` promise to join clients—it does not.
-
-## TLS without weakening verification or ownership
-
-### Trust and endpoint identity
-
-- `ssl.connect` establishes TCP, performs the client handshake, requires TLS
-  1.2+, verifies the certificate chain, and verifies the requested `host` as
-  the identity before returning. There is no insecure mode.
-- DNS hosts are checked as DNS identities and sent as SNI. Textual IPv4/IPv6
-  hosts are checked as IP identities and do not send SNI. An IPv6 `%zone`
-  remains in the TCP destination but is removed only for X.509 matching.
-- Omitted `ca_file` uses one module-wide OpenSSL context configured from
-  OpenSSL's compiled default verify paths and recognized environment
-  overrides. That is not a portable abstraction over the operating system's
-  native trust store; bundled OpenSSL may synchronously consult its default CA
-  file/directory. Pass an explicit CA file for deployment-independent trust.
-- An explicit PEM `ca_file` **replaces**, rather than augments, default roots.
-  The high-level async `fs` module reads it before TCP is opened. Empty,
-  certificate-free, or malformed PEM is rejected. There is no CA-directory
-  parameter.
-
-### TLS servers and duplex connections
-
-- `ssl.listen` reads one PEM chain and an unencrypted key through high-level
-  `fs`. The first certificate is the leaf and later certificates are sent as
-  its chain. Omit `private_key_file` to use one combined cert/key PEM.
-- `Server:accept()` accepts TCP and creates TLS state, but deliberately does
-  **not** wait for ClientHello. Start a Task per accepted connection and call
-  `handshake()` there when handshake failure should be explicit. Otherwise the
-  first read/write drives it. Never perform the handshake serially in the main
-  accept loop if a stalled peer must not block later accepts.
-- One `ssl.Connection` admits one reader and one writer concurrently. A shared
-  handshake gates both, one feeder owns encrypted input, and synchronous
-  engine attempts submit ciphertext in order before yielding. Same-direction
-  duplicates fail without terminalizing the incumbent. Handshake, shutdown,
-  and graceful close are exclusive.
-- `ssl.client(transport, host, ca_file?)` validates nonempty/NUL-free identity
-  before adopting TCP. After adoption, trust/configuration failure retires TCP.
-  Trust loading may suspend; returning the lazy engine does not handshake.
-  Preserve the original hostname when adopting a numerically dialed transport.
-- Cancelling a TLS operation terminalizes the TLS engine and best-effort closes
-  its TCP transport. The Connection is not reusable afterward.
-- `shutdown()` emits `close_notify`, drains it, and half-closes TCP output while
-  leaving the read side available. Authenticated peer `close_notify` becomes
-  nil EOF. FIN/RST without it becomes `ssl.Error` named
-  `TLS_TRUNCATED_EOF`.
-- `close()` best-effort performs exclusive TLS shutdown and closes TCP. It is
-  idempotent after retirement. `abort()` works independently during pending
-  read/write/handshake: stop admission, initiate TCP close before child-scope
-  drains, then free the engine once. It is cancellation-insensitive and never
-  joins application Tasks. Concurrent abort calls share retirement.
-- Closing an `ssl.Server` stops only the listener/context reference. Already
-  accepted Connections retain their TLS state and remain independently owned.
-
-**REPOSITORY-VERIFIED — manual verified TLS client**
-([`doc/language/standard-library-ssl.md`](../../../doc/language/standard-library-ssl.md)):
+- **Clients & trust:** `ssl.connect(host, port, ca_file?)` dials TCP (`TCP_NODELAY = true`) and finishes verified TLS 1.2+. `ssl.client(transport, host, ca_file?)` adopts a connected `net.Connection` lazily (keeps `TCP_NODELAY`, preserves SNI/cert `host` separately from numeric TCP IP; strips IPv6 `%zone` only for X.509 IP match). Explicit `ca_file` reads PEM via async `fs` and replaces defaults; omitted `ca_file` shares one OpenSSL context from compiled defaults + `SSL_CERT_FILE`/`SSL_CERT_DIR`.
+- **Servers & duplex:** `ssl.listen(host, port, cert_file, key_file?, backlog?, reuse_port?)` loads leaf-first PEM chain + unencrypted key (omitted `key_file` reads `cert_file`). `Server:accept()` accepts TCP only—spawn a Task per client and drive `handshake()`/I/O there. `local_address()`/`peer_address()`/`set_no_delay()` delegate to `net` without touching the TLS engine.
+- **Shutdown vs abort:** One reader + one writer run concurrently (duplicate same-direction raises safely); `handshake()`/`shutdown()`/`close()` are exclusive. `shutdown()` sends `close_notify` + TCP write half-close; `close()` best-effort shuts down and closes TCP; `abort()` immediately closes TCP without `close_notify` and interrupts siblings with `ssl.Error` `TLS_INTERRUPTED` (safe during active I/O/cancellation). See `skill://titan-networking/references/http-and-tls-details.md` for deadlines, state close, static OpenSSL linking, and transfer.
 
 ```titan
 local async = import "async"
 local ssl = import "ssl"
 
-function fetch_head(): value
-  local connection = ssl.connect("example.com", 443, nil)
-  defer connection:close()
-  connection:write(
-    "HEAD / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
-  return connection:read_until("\r\n\r\n", false)
-end
-
-function main(args: {string}): integer
-  async.run<|value, value|>(fetch_head)
-  return 0
-end
-```
-
-For local TLS tests, the repository's supported pattern is a checked-in CA,
-leaf certificate, and unencrypted key, an explicit `ca_file` on the client, and
-loopback connections. It does not disable verification; see
-[`spec/stdlib/titan/ssl/tests/tests.titan`](../../../spec/stdlib/titan/ssl/tests/tests.titan).
-
-## URLs: validate once and use the right field
-
-The URL module accepts absolute HTTP/HTTPS/WS/WSS URLs with a nonempty authority.
-It deliberately rejects user information and fragments. It accepts registered
-names, IPv4, bracketed IPv6, and bracketed IPvFuture; explicit ports are
-`1..65535`. It performs no DNS or I/O. Ordinary HTTP clients admit only HTTP/HTTPS after
-parsing. The WebSocket client preserves the original hostname/authority and
-translates only its normalized scheme for the HTTP opening.
-
-Normalization is byte-oriented:
-
-- `scheme` and registered-name hosts are lowercase;
-- `host` is the unbracketed connection/TLS-identity spelling;
-- `port` is explicit or the effective 80 for HTTP/WS and 443 for HTTPS/WSS;
-- empty path becomes `/`;
-- `query` distinguishes absent nil from present empty `""`;
-- `target` is normalized origin-form path plus optional query;
-- `authority`/`host_header()` is normalized Host spelling, including brackets
-  and an explicitly supplied canonical decimal port;
-- unreserved percent escapes decode, retained escapes use uppercase hex; and
-- IPv6 zone `%25` is decoded to `%` in `host` but retained URI-encoded in
-  `authority`.
-
-Use `Url.host` and `Url.port` to connect, `Url.target` in an HTTP request line,
-and `Url.authority`/`host_header()` for Host. Do not split URLs with string
-operations or send unbracketed IPv6 as Host.
-
-**COMPOSITION SKETCH — nonthrowing URL validation with idiomatic options:**
-
-```titan
-local url = import "url"
-
-function normalized_authority(source: string): string?
-  local parsed?, problem? = url.parse(source)
-  if problem then return nil end
-  return parsed:host_header()
-end
-```
-
-If callers need diagnostics, return both positions rather than converting the
-ordinary parse failure into a string:
-
-```titan
-local url = import "url"
-
-function inspect_url(source: string): (url.Url?, url.Error?)
-  return url.parse(source)
-end
-```
-
-`url.Error.position` is one-based in bytes. For `parse_request`, it refers to
-the virtual absolute string `scheme .. "://" .. authority .. target`.
-`kind` is the stable branch key; `message` is display text. The complete current
-kind set is `scheme`, `scheme_separator`, `authority_separator`, `userinfo`,
-`ipv6_brackets`, `ip_literal`, `ipv6_close`, `zone`, `host`, `port`,
-`percent_escape`, `authority_tail`, `origin_form`, `fragment`, `url_tail`, and
-the generic `url`. HTTP calls `url.parse`/`parse_request` internally and raises
-that same structured record before opening a network connection when validation
-fails.
-
-## HTTP clients
-
-### Request construction
-
-- `request(method, source_url, options?)` validates `method` as an HTTP
-  token. Method names are case-sensitive; exact `HEAD` selects no-body
-  response framing. `get(source_url, options?)` is `GET` and rejects options
-  carrying any body (string error); native `request("GET", ...)` may send one.
-- The source URL must be the `url` module's HTTP/HTTPS subset (else
-  `url.Error`). Native HTTPS forwards the options' `ca_file` exactly to
-  `ssl.connect` on every hop; plain HTTP ignores it.
-- Option headers are copied into the `RequestOptions` snapshot. Header names
-  compare with ASCII case folding, but original spelling, duplicates, and
-  insertion order are retained. `get` returns the first; `values` returns all;
-  `set` removes all matches and appends one replacement; `all` returns copied
-  records.
-- Header names must be nonempty HTTP tokens. Values reject forbidden controls
-  and DEL, including NUL/CR/LF; this prevents injection.
-- There may be at most one Host. An absent Host is generated from
-  `Url.authority`; a supplied Host is separately validated as one complete
-  authority and is preserved on the wire (native only).
-- The optional request body is one in-memory binary string. The client creates
-  or checks exact Content-Length, rejects request Transfer-Encoding, and
-  rejects Expect because it has no staged `100-continue` client state.
-- HTTP/1.1 persistence is the default. A supplied `Connection: close` disables
-  reuse for that exchange. Module helpers share one pool per async Runtime;
-  `http.Client()` creates a separate pool that binds on its first request, not
-  construction. Its `get` and `request`
-  methods have the same arguments as the module helpers.
-
-### Request options and redirects
-
-Build options once with a named call and reuse them; the snapshot is
-immutable, copies its headers, and no request or redirect changes it. The
-constructor raises unless `only_if_cached()` comes with an explicit
-`mode = http.RequestMode.same_origin()`. A `nil` mode means the target default:
-
-| Option | `nil` on native | `nil` on browser |
-| --- | --- | --- |
-| `cache` | `default()` | `default()` |
-| `credentials` | `same_origin()` | `same_origin()` |
-| `mode` | `cors()` | `cors()` |
-| `redirect` | **`manual()`** | **`follow()`** |
-
-- **Match modes with `case`, never `==`.** Each constructor call makes a new
-  value and union equality is identity: `CacheMode.reload() ==
-  CacheMode.reload()` is false.
-- **Native targets behave like a browser with an empty cache, no cookie jar,
-  and no CORS.** Every cache mode exchanges normally except `only_if_cached()`,
-  which always misses; `credentials` adds nothing; `no_cors()` only restricts
-  methods to GET/HEAD/POST (both targets).
-- **Redirect statuses are 301, 302, 303, 307, 308, with or without
-  `Location`.** `manual()` returns that response (native: the raw 3xx, with
-  `redirected = false`); `error()` closes it and raises. `follow()` follows
-  Fetch rules natively: no `Location` returns the 3xx; at most 20 hops;
-  fragments dropped and relative/dot-segment references resolved; 301/302
-  `POST` and 303 non-GET/HEAD become bodyless `GET`; a cross-origin hop
-  (scheme, host, effective port; `https` to `http` included) strips
-  `Authorization`, `Proxy-Authorization`, `Cookie`, `Cookie2`, and `Host` for
-  the rest of the chain. `url` is the final URL and `redirected` is true.
-- **Request-option policy failures** (`only_if_cached()` miss, `error()` on a
-  redirect, a hop limit or unusable `Location`) raise `async.OperationError`
-  with `name == "EIO"` and `operation == "http.request"` on both targets.
-  Branch on `name`/`operation`, never on the target-specific `code`. Argument
-  and option violations stay strings.
-
-### Response ownership
-
-`request`/`get` returns after final response headers, after consuming any 1xx
-responses. The body remains streaming. Content-Length, chunked, no-body, and
-connection-close framing are decoded; chunk framing is not returned.
-Trailers are appended to `response.headers` only as parsing reaches them.
-
-Always register `response:close()` immediately. Reading EOF closes it for you
-and returns a healthy persistent connection to its pool. Early close marks the
-response closed and schedules a background drain, bounded by 50 ms and 256 KiB
-of unread decoded body bytes. It does not wait for draining. Another request
-can open its own connection while the first drains; only complete, valid
-messages can return a connection to the pool. Transport chunks may already
-contain more than the byte allowance; a background drain over the allowance
-cannot reuse its connection. An already complete, validated message can discard
-retained body bytes and release immediately without a drain.
-Close is idempotent and later reads return nil. A response permits one reader;
-closing during an active read retires transport and lets that reader unwind,
-without starting a competing drain.
-
-`Connection: close`, EOF framing, known oversized remainders, upgrades, parse
-failure, truncation, and drain timeout retire the connection. Native retirement
-still completes despite pending cancellation. Background failures are contained
-and cannot change the closed response. Its header collection can acquire
-trailers during successful draining.
-
-Pool keys separate scheme, normalized URL host/port, effective Host, and exact
-HTTPS CA path selection. Clear/close the pool before changing a trust file's
-contents or default trust configuration. Idle retention is bounded to two per
-key and 100 per Client; the 90-second age is checked lazily on pool use. No idle
-Task keeps the Runtime alive. Runtime-close notification retires retained idle
-TLS engines after native handle cleanup and clears the default Client. A later
-Runtime gets a new default pool.
-`http.close_idle_connections()` clears the default pool; the Client method
-clears its own idle connections. `Client:close()` additionally prevents new
-requests and retires drains. Live caller-owned responses still need closing
-and never return connections to a closed Client. Defer an explicit Client's
-close for component-level ownership. Healthy TLS idle eviction and fully read
-nonpersistent responses attempt close_notify with a separate 50 ms timeout;
-timeout/interruption aborts and drains accepted cleanup. Dirty/unread input and
-Runtime-close notification use abort directly. Event-triggered idle retirement
-Tasks remain Client-owned until terminal cleanup, including cancellation before
-first execution. There is no request pipelining.
-
-Idle connections with observed input/EOF/error are discarded. `net.Connection`
-and `ssl.Connection` expose synchronous `has_pending_input()` snapshots without
-consuming or polling. TCP includes retained delimiter bytes, buffered events,
-terminal state, and unconnected state. TLS additionally includes buffered
-plaintext/records/BIO bytes and non-open state; true may describe partial/control
-records rather than readable plaintext. False does not guarantee future health.
-`add_input_listener(callback)` requires a connected/open endpoint and Task,
-returns an idempotent remover, and reports new TCP bytes/EOF/error after buffering.
-It does not start the watcher or replay old input. Callbacks run outside Tasks,
-must not yield, may remove observers or schedule cleanup, and errors fail the
-Runtime after other listeners run. TLS forwards encrypted receive events without
-driving its engine. Remove listeners before transferring/reusing a connection.
-HTTP pools observe idle input and retire on its first arrival even without a
-later request, avoiding indefinite queue growth or a permanently waiting Task.
-
-A stale reused connection gets at most one fresh retry only for exact GET/HEAD,
-nil body, zero received response bytes (including interim responses), and a
-recognized closure error. Partial responses, parse errors, cancellation, bodies,
-and other methods are never replayed. Dirty input detected before output causes
-fresh dialing without replay. Public header edits cannot change wire-derived
-reuse or drain policy.
-
-A native client returns redirect responses under the default `manual()` and
-returns content codings unchanged; pass `redirect = http.RedirectMode.follow()`
-to follow, and decompress yourself. The browser follows and decodes.
-
-**COMPOSITION SKETCH — streaming client with a bounded body policy:**
-
-```titan
-local http = import "http"
-local str = import "string"
-
-function fetch_small(source: string, maximum: integer): string
-  local supplied = http.headers(nil)
-  supplied:add("Accept", "text/plain")
-  local response = http.get(source, http.RequestOptions { headers = supplied })
-  defer response:close()
-  if response.status < 200 or response.status >= 300 then
-    raise "HTTP request returned status " .. str.tostring(response.status)
+function fetch_head(host: string, port: integer, ca_file: string?): string?
+  local conn = ssl.connect(host, port, ca_file)
+  defer conn:close()
+  conn:write("HEAD / HTTP/1.1\r\nHost: " .. host .. "\r\nConnection: close\r\n\r\n")
+  return conn:read_until("\r\n\r\n", false)
+catch
+  if error is ssl.Error then
+    local err: ssl.Error = error
+    if err.name == "TLS_TRUNCATED_EOF" then return nil end
   end
+  raise
+end
 
-  local body = str.writer()
-  local size = 0
-  for chunk in response:read do
-    size = size + #chunk
-    if size > maximum then raise "HTTP response body is too large" end
-    body:write(chunk)
+function accept_tls(server: ssl.Server, on_conn: function (ssl.Connection): ())
+  while true do
+    local conn = server:accept()
+    async.run(function (): nil
+      defer conn:close()
+      conn:handshake()
+      on_conn(conn)
+      return nil
+    end)
   end
-  return body:drain()
 end
 ```
 
-For HTTPS with a pinned/test trust bundle, pass it in the options:
-`http.get(source, http.RequestOptions { ca_file = "ca.pem" })`. There is no
-insecure boolean.
+## HTTP/1.1 client, server & browser `fetch` (`http`)
 
-### HTTP on the browser target
-
-On `--target browser`, `http` is a client over the host `fetch` with the
-native signatures: headers, `RequestOptions` and its unions, `Client`,
-`ClientResponse` (`read`, `read_until`, `close`), `request`, `get`, and
-`close_idle_connections`. Servers, `Request`, `Response`, `Handler`,
-`request_upgrade_on`, `take_upgrade`, `UpgradedStream`, and `Exchange` do not
-exist there. A shared interface is not shared behavior: the browser owns
-CORS, cookies, its HTTP cache, certificate trust, and connection pooling.
-
-- Requests need the instance's owner Runtime; in a `lua.new()` state they raise
-  `"async Runtime is not active"` (headers and options still work). A `Client`
-  closes with its Runtime; later requests raise `"HTTP Client is closed"`.
-- `redirect` defaults to `follow()`. `manual()` gives an opaque-redirect
-  response (`status == 0`, empty headers, `url` = requested URL, `read()`
-  returns nil). Cross-origin `no_cors()` gives an opaque response with
-  `url == nil` only under `follow()`; with `manual()`/`error()` it raises
-  `OperationError` `EIO`, as Fetch requires.
-- Rejected with strings before any request: a `ca_file`; `CONNECT`, `TRACE`,
-  `TRACK`; any `GET`/`HEAD` body; and Fetch's forbidden request headers
-  (`Cookie`, `Origin`, `Referer`, `Accept-Encoding`, `Connection`, `Date`,
-  `Proxy-*`, `Sec-*`, method-override headers naming a forbidden method, and
-  the rest of the standard's list). A `Host` matching the URL's host and port
-  (default ports normalized) and a `Content-Length` equal to the body length
-  are removed instead; any other valid `Host` raises a string, and a malformed
-  one `url.Error`, as natively.
-- `read` returns decoded bytes while `Content-Encoding`/`Content-Length`
-  describe the wire: never decompress again or bound reads by
-  `Content-Length`. Request bodies are sent byte for byte (NUL and invalid
-  UTF-8 included).
-- `headers` arrive lowercase, sorted, comma-joined, without `Set-Cookie` or
-  trailers; CORS hides headers the server does not expose.
-- `close()` aborts the fetch synchronously, with no drain; cancellation aborts
-  too. `close_idle_connections` does nothing.
-- Every host failure (DNS, refusal, TLS, CORS, mixed content) is
-  `async.OperationError` named `"EIO"` with operation `"http.request"`
-  (`"http.read"` mid-body); `ssl.Error` never appears. Under Node, which has no
-  HTTP cache, `only_if_cached()` misses without a request.
-- Host limitations, not Titan policy: WebKit sends an `only_if_cached()` miss
-  to the network and returns that response; Node aborts the body of a
-  `follow()` redirect without `Location` (an `"http.read"` failure); Firefox and
-  WebKit drop a quoted-list override value such as `"foo,TRACE,bar"`.
-  WebKit can expose a body on a manual redirect without `Location`; Titan
-  closes that session and returns the required empty opaque-redirect body.
-
-See [HTTP on the browser](../../../doc/language/standard-library-http.md#on-the-browser).
-
-## HTTP servers
-
-### Listener and Task ownership
-
-- `http.listen` defaults to port 80; `listen_tls` defaults to 443. Both default
-  backlog to 128 and idle timeout to zero. Their trailing `reuse_port` option
-  defaults to false and is forwarded to `net.listen`, through `ssl.listen` for
-  HTTPS, with the same native support/errors. It supports independent servers
-  per Lua state or process without changing one Runtime's Task scheduling.
-  Port zero is allowed but still has no
-  selected-port getter.
-- Listener construction does not accept. `Server:serve()` owns the accept loop
-  and runs until close/error. It starts one independent Task per connection.
-- Requests on one keep-alive connection are strictly serial: handler returns,
-  response finishes, unread request body drains, then the next request parses.
-  Buffered suffix bytes survive. There is no concurrent pipelining scheduler.
-- `Server:close()` marks/then closes the listener and releases a blocked
-  `serve()`. It is cancellation-insensitive and idempotent. It does **not** keep
-  or join a registry of accepted connection Tasks. Handlers finish/fail through
-  their own parser/transport lifecycle.
-- A handler or parse/framing error ends only that connection Task; the listener
-  and other connections remain live.
-- An idle peer that closes before any byte of its next request is a normal
-  disconnect, including a plain-TCP peer reset (`ECONNRESET` from `net.read`)
-  and an HTTPS drop without `close_notify` (`TLS_TRUNCATED_EOF` from
-  `ssl.read`); a reset or truncation after any request byte still fails.
-
-### Request and response rules
-
-- The handler starts once request line and headers are complete; body remains a
-  streaming `Request` Reader. If the handler leaves bytes unread, the server
-  drains them before possible keep-alive reuse. Enforce application body limits
-  while reading.
-- Requests require exactly one Host and origin-form target beginning `/`.
-  `Request.target` preserves received target; `Request.url` is normalized for
-  routing. Only HTTP/1.1 is supported.
-- Each Response begins `200 OK`. Header/status mutation is allowed only before
-  headers are sent. `set_status` accepts final statuses `200..999`; an explicit
-  reason obeys the header-value byte repertoire. `headers()` returns a copy, not
-  a mutable view. Content-Length and Transfer-Encoding cannot be combined, and
-  the only accepted response transfer coding is `chunked`.
-- `write()` implicitly sends headers. With explicit Content-Length, writes may
-  not exceed it and close requires an exact match. With no framing field, a
-  body-capable response becomes chunked. `close()` emits the terminal chunk and
-  is idempotent. Normal handler return invokes close again, so explicit close is
-  safe but not required for an ordinary completed response.
-- `abort()` ends the live exchange and retires its captured TCP/TLS transport
-  without finishing framing or draining the request. Use it for a failed
-  committed stream or to interrupt accepted body/output I/O; catch the pending
-  operation's failure before joining its owner. It is cancellation-insensitive
-  and idempotent. Completed exchanges and transferred upgrades are no-ops, so a
-  retained response cannot close a later keep-alive exchange. Final headers
-  become immutable when their write starts, including when that write fails.
-- HEAD and status 204/205/304 suppress bodies with the documented
-  Content-Length restrictions. Do not write a body merely because the handler
-  received a Writer-shaped object.
-- For ordinary requests, singleton `Expect: 100-continue` is acknowledged
-  before handler entry; unsupported/repeated expectations receive 417.
-  Upgrade-indicated requests with Expect receive bounded bodyless 400 before
-  the handler, with no interim output or body drain. Completely parsed upgrade
-  attempts with invalid Host, request URL, or unsupported HTTP version also receive 400.
-
-**REPOSITORY-VERIFIED — manual HTTP server**
-([`doc/language/standard-library-http.md`](../../../doc/language/standard-library-http.md)):
+- **Headers & options:** `http.headers(initial?)` is an insertion-ordered, ASCII case-folded list (`add`/`set`/`get`/`values`/`remove`/`all`; rejects CR/LF/NUL/controls). Build reusable `http.RequestOptions { headers, body, ca_file, cache, credentials, mode, redirect }`. `CacheMode.only_if_cached()` requires explicit `RequestMode.same_origin()`. Inspect mode unions with `case`, never `==`.
+- **Client:** `http.get`/`http.request` share a per-Runtime default pool; `http.Client()` isolates its pool (`defer client:close()`). `ClientResponse` exposes `status`, `reason`, `headers`, `url` (`string?`), `redirected` and streams via `read()`/`read_until()` (`defer response:close()`). Request `Transfer-Encoding`/`Expect` and `ws`/`wss` URLs are rejected (`skill://titan-websocket`).
+- **Server:** `http.listen(host, handler, port?, backlog?, idle_timeout?, reuse_port?)` (default `80`) and `http.listen_tls(host, cert, handler, key?, port?, backlog?, idle_timeout?, reuse_port?)` (default `443`). `Handler = function (Request, Response): ()`. `Request` has `method`, raw `target`, normalized `url`, `version`, `headers`, `read`/`read_until`, `local_address()`/`peer_address()`. `Response` starts at `200 OK`; mutate status/headers before commitment (`is_committed()`, `send_headers()`, `write()`, `close()`, `abort()`). `Server:header_limit` defaults to **64 KiB**; `Server:idle_timeout` defaults to `0` (header acquisition only); `Server:close()` stops accepts without cancelling active handlers.
+- **Browser & deep-dive:** `--target browser` provides `url` + `http` client over `fetch` (`follow()` default; no `ca_file`, custom `Host`, forbidden headers, servers, upgrades, or handoff). Read `skill://titan-networking/references/http-and-tls-details.md` for redirects, pools/drains, full browser quirks, server framing/upgrades, and `Exchange`/`UpgradedStream` handoff.
 
 ```titan
 local async = import "async"
 local http = import "http"
+local strings = import "string"
+local url = import "url"
 
-local function handler(request: http.Request, response: http.Response)
-  response:set_header("Content-Type", "text/plain")
-  response:write(request.method .. " " .. request.url.path .. "\n")
-  response:close()
+local function read_all(res: http.ClientResponse): string
+  local out = strings.writer()
+  for chunk in res:read do out:write(chunk) end
+  return out:drain()
 end
 
-local function run_server(): nil
-  local server = http.listen("127.0.0.1", handler, 8080)
+local function handle(req: http.Request, res: http.Response)
+  local body = strings.writer()
+  for chunk in req:read do body:write(chunk) end
+  local payload = req.method .. " " .. req.url.path .. ":" .. body:drain()
+  res:set_status(200)
+  res:set_header("Content-Type", "text/plain")
+  res:set_header("Content-Length", "" .. #payload)
+  res:set_header("Connection", "close")
+  if req.method ~= "HEAD" then res:write(payload) end
+end
+
+function main(args: {string}): integer
+  local server = http.listen("127.0.0.1", handle, 0)
   defer server:close()
-  server:serve()
-end
+  local port = server:local_address().port
+  local serving = async.run(function (): nil server:serve(); return nil end)
+  defer do
+    server:close()
+    if not serving:status():has_finished() then serving:cancel() end
+    async.join(serving)
+  end
 
-function main(args: {string}): integer
-  async.run(run_server)
+  local parsed?, err? = url.parse("http://127.0.0.1:" .. port .. "/items?v=1")
+  if err then raise err.message end
+  local target = parsed.scheme .. "://" .. parsed:host_header() .. parsed.target
+
+  local client = http.Client()
+  defer client:close()
+  local h = http.headers()
+  h:set("Content-Type", "text/plain")
+  local res = client:request("POST", target, http.RequestOptions {
+    headers = h, body = "ok", redirect = http.RedirectMode.manual(),
+  })
+  defer res:close()
+  if res.status ~= 200 or read_all(res) ~= "POST /items:ok" then raise "mismatch" end
   return 0
 end
 ```
 
-### Idle timeout is deliberately narrow
-
-`idle_timeout` is milliseconds to acquire the **next request line and headers**.
-Zero disables it. A positive deadline is absolute from the start of that serial
-iteration; partial bytes do not reset it. It does not cover handler work,
-request-body reads, automatic drain, or response writes.
-
-`server:idle_timeout(new?)` returns the previous value. Nil/omission reads
-without changing it. A change affects the next request on an existing
-connection, not an in-flight header read.
-
-When headers win, the timer-only Task can be cancelled and finish in the
-background. When the deadline wins, the reader Task must be cancelled **and
-joined before parser/connection/TLS state is released**. On HTTPS this
-cancellation terminalizes the SSL read and any sibling write, so the peer sees
-`TLS_TRUNCATED_EOF`, not graceful `close_notify`. Use `ssl.abort()` when interruption must initiate transport retirement before
-waiting for an accepted native write; interruption does not emit graceful TLS
-shutdown. Do not reach into private transport fields.
-
-## Native connection and HTTP handoff
-
-Load `titan-thread` for OS workers and cross-thread channels. For portable
-handoff after HTTP classification, call `listener:read_ahead(false)` before
-`serve()`. It configures newly accepted TCP/TLS connections before header reads
-or a TLS handshake; existing connections keep their policy. For direct TLS,
-configure the transport/`ssl.Connection` before its first handshake or I/O;
-`ssl.connect` has already handshaken when it returns.
-
-Yield with `async.yield()` after the last completed read/write and before
-synchronous transfer encoding so its native callback can retire on Windows.
-No application Task waiting does not prove a native overlapped read is idle.
-Pending operations, input observers and transport-specific handoff guards still
-apply; demand reads do not waive them.
-
-A handler's Request and Response move together as `http.Exchange(request,
-response)`. Successful encoding detaches before delivery and invalidates those
-source endpoints. Adopt the payload exactly once in the destination Runtime.
-`exchange:serve(handler, idle_timeout?)` dispatches the current exchange and
-subsequent serial keep-alive requests. The non-negative timeout defaults to
-zero and is **not inherited from the listener**. Pass the desired millisecond
-bound explicitly for later request-line/header acquisition; it never times out
-the already parsed current exchange, handlers (including SSE), bodies, drains
-or response writes. `exchange:close()` finishes the current response and retires
-the transport instead.
-
-Detached payload bytes carry manually owned native resources. A string in a
-channel or native transfer packet does not acquire a payload finalizer—native
-packet discard (`transfer.discard_message`, `thread.Receiver:close()`,
-`async.Receiver:close()`) only
-releases packet-registered `thread` endpoints and never invokes
-`from_transfer_payload` decoders on discard—so callers must own failed delivery
-and queued shutdown cleanup. `Exchange.discard_transfer_payload(payload)` and
-`UpgradedStream.discard_transfer_payload(payload)` close a known unadopted
-payload without a Runtime and return native close status. A close attempt
-consumes ownership even when it reports an error; never adopt, replay or discard
-those bytes again. See the [HTTP handoff contract](../../../doc/language/standard-library-http.md#resource-handoff)
-and the TCP/TLS transfer chapters for their exact idle and same-process rules.
-
-## Deadlines, cancellation, and cleanup
-
-The core ownership question is not "which Task won?" but "what state does each
-loser still own?"
-
-- `async.any_*`, `race_*`, `all_*`, and `join_*` observe Tasks; they do not
-  cancel unfinished operands.
-- A timer-only loser owns no parser/socket state. Cancel it; ordinary success
-  can proceed while its timer close callback finishes.
-- A read/request loser owns an operation on shared parser/connection/TLS state.
-  Cancel it and wait for terminal cleanup before releasing or reusing that
-  state. Ordinary `async.join` suffices while the caller is uncancelled;
-  canceled-parent cleanup needs `await_cleanup` plus a terminal listener and
-  an idempotent listener remover. See the async cartridge for that contract.
-- Every cancelled accepted request retains its request owner until the promised
-  callback. Retain only values the native API still borrows: a write keeps its
-  exact immutable bytes through `write_cb`, while libuv copies DNS text during
-  submission and a connect request borrows no string payload. Never clear the
-  last owner or mutate genuinely borrowed bytes early.
-- Cancelling a plain `net` read/accept waiter detaches the waiter but leaves the
-  shared handle live. Cancelling an SSL operation terminalizes that TLS
-  connection. Apply the concrete rule, not a universal "cancel closes" rule.
-- Ownership-retiring network/HTTP close is cancellation-insensitive: it still
-  submits and receives normal completion while cancellation remains pending.
-  Do not add an application "shield" wrapper or retry a terminal close.
-- `Task:status()` stays `ready`/`running`/`waiting` after a cancel request until
-  terminal cleanup finishes and `cancelled(reason)` is published. Do not treat
-  `cancel()` as join.
-- `async.join` must run from another Task. An uncaught child failure was already
-  reported when that child terminated; joining later does not suppress the
-  report.
-
-**REPOSITORY-VERIFIED — ownership pattern from the async manual:**
-
-This normal-winner sketch assumes the observing parent is not canceled. It
-shows loser ownership policy, not cleanup on every parent exit. A reusable
-resource-owning wrapper must install lexical cleanup with a shielded terminal
-drain before starting the race, as the HTTP implementation does.
-
-```text
-local reading = async.run<|string?, value|>(function (): string?
-  return connection:read()
-end)
-local deadline = async.run(function (): nil
-  timer.sleep(5000)
-end)
-
-local result = async.any_two(reading, deadline)
-case result
-when first(data) then
-  deadline:cancel(async.CancellationReason.simple("read completed"))
-  consume(data)
-when second() then
-  reading:cancel(async.CancellationReason.simple("read timed out"))
-  async.join(reading)
-when none() then
-  -- Both Tasks failed or were cancelled; inspect their final statuses.
-  local read_status, deadline_status = async.join_two(reading, deadline)
-  report(read_status, deadline_status)
-end
-```
-
-This is a lifecycle example, not a universal timeout helper. Tailor failure
-propagation and loser cleanup to the resource. Accepted writes may require
-transport abort before draining their callbacks; `ssl.abort()` provides that
-ordering. A pending read cancellation terminalizes its TLS connection.
-
-## Error taxonomy and catch discipline
-
-| Boundary | Normal absence/EOF | Raised failures |
-| --- | --- | --- |
-| `url.parse`, `url.parse_request` | `(Url?, Error?)` result | Malformed input does not raise |
-| `net` and libuv-backed file/network operations | `read*` returns nil EOF | `async.OperationError {code,name,message,operation}` plus argument/state strings |
-| `ssl` | authenticated `close_notify` becomes nil EOF | `ssl.Error` for TLS/cert failures; wrapped `net`/`fs` errors remain `async.OperationError`; argument/state errors may be strings |
-| `http.request/get` | body `read*` returns nil EOF | invalid URL or malformed supplied `Host` raises `url.Error`; request-option policy failures raise `async.OperationError` `EIO`/`http.request` on both targets; native TLS/network errors retain their types; HTTP parse/framing/state and argument errors may be strings (there is no `http.Error`); browser host failures are all `OperationError` `EIO` |
-| HTTP server handler | request body nil EOF | uncaught handler/protocol error terminates only that connection Task |
-
-Use `error is T` only when policy genuinely distinguishes that record. Then
-cast the catch-local `value` once and inspect stable fields. For `OperationError`,
-`name` such as `EADDRINUSE` is the machine branch and `operation` identifies the
-layer (`net.accept`, `fs.open`, and so on). For `ssl.Error`, stable names include
-`CERTIFICATE_VERIFY_FAILED` and `TLS_TRUNCATED_EOF`. For `url.Error`, branch on
-`kind`; use `message` for display.
-
-Do not catch merely to turn every failure into nil, and do not lose traceback
-with `raise error` when bare `raise` from the same catch is available. EOF is not
-an exception. A TCP reset at plain net remains an operation error; while TLS is
-awaiting protected input, FIN/RST without authenticated shutdown is normalized
-to TLS truncation.
-
-## Testing network behavior natively in Titan
-
-Use `import "test"` and public top-level `test_* (context: test.Context)` cases.
-Prefer focused cases and `context:run` subtests over one ad hoc loop that hides
-which endpoint/framing case failed. Network library behavior belongs in Titan
-source, not a Lua/Busted wrapper; compiler/codegen behavior stays in the owning
-Busted layer.
-
-### Runtime ownership in tests
-
-- In an ordinary `titanc --test` executable using the automatic bootstrap, the
-  whole runner is already one Task. Test bodies, subtests, and cleanup may call
-  network operations directly. Never call `async.loop` recursively.
-- The repository aggregate deliberately uses `--no-uv-bootstrap`. Its
-  source-only [`spec/stdlib/titan/support/runtime.titan`](../../../spec/stdlib/titan/support/runtime.titan)
-  starts one supervisor Task and performs Runtime-bound LIFO cleanup before the
-  loop returns. That helper is repository test infrastructure, not a public
-  application API. Do not defer socket cleanup to later `Context:cleanup` after
-  that explicit Runtime has ended.
-- Register cleanup immediately after acquisition. Use language `defer` when the
-  resource must close as this body returns; use `Context:cleanup` only when a
-  fixture intentionally outlives registered descendants and its Runtime is
-  still live.
-- Every spawned peer/serve/watchdog Task needs terminal ownership. On cleanup,
-  cancel it if unfinished and join it before releasing shared state.
-
-### Loopback ports and TLS fixtures
-
-`listen(..., 0)` cannot support a same-process client test because the public
-Server does not reveal the selected port. Current repository tests scan a
-bounded loopback range and retry **only** `async.OperationError.name ==
-"EADDRINUSE"`; every other error is re-raised. Give concurrent workers disjoint
-ranges when possible.
-
-**REPOSITORY-VERIFIED pattern** from
-[`spec/stdlib/titan/net/test_support.titan`](../../../spec/stdlib/titan/net/test_support.titan),
-shown with the current preferred bare re-raise:
-
 ```titan
-local net = import "net"
+-- Cross-target (native & --target browser) HTTP client helper
 local async = import "async"
+local http = import "http"
+local strings = import "string"
 
-local function listen_available(first_port: integer): (net.Server, integer)
-  local port = first_port
-  for _ = 1, 100 do
-    do
-      local server = net.listen("127.0.0.1", port)
-      return server, port
-    catch
-      if error is async.OperationError then
-        local failure = error as async.OperationError
-        if failure.name == "EADDRINUSE" then
-          port = port + 1
-          if port > 60999 then port = 20000 end
-        else
-          raise
-        end
-      else
-        raise
-      end
+function redirect_name(mode: http.RedirectMode): string
+  case mode
+  when follow() then return "follow"
+  when error() then return "error"
+  when manual() then return "manual"
+  end
+end
+
+function fetch_api(endpoint: string): (integer, string)
+  local h = http.headers()
+  h:set("Accept", "application/json")
+  local res = http.get(endpoint, http.RequestOptions {
+    headers = h,
+    cache = http.CacheMode.no_store(),
+    credentials = http.CredentialsMode.same_origin(),
+    redirect = http.RedirectMode.follow(),
+  })
+  defer res:close()
+  local out = strings.writer()
+  for chunk in res:read do out:write(chunk) end
+  return res.status, out:drain()
+catch
+  if error is async.OperationError then
+    local op_err: async.OperationError = error
+    if op_err.name == "EIO" and op_err.operation == "http.request" then
+      return 0, op_err.message
     end
   end
-  raise "could not find an available loopback port"
+  raise
 end
 ```
 
-The `do` block is justified here: it narrows the catch to one retry attempt and
-lets the loop continue. The `as` is justified because catch-local `error` is
-`value`, not because an option was checked.
+## Pre-delivery verification checklist
 
-TLS/HTTPS tests must use a local CA and certificate whose DNS/IP identity
-matches the host. Pass the CA explicitly. Do not add an insecure client path
-for tests. Exercise clean `close_notify` separately from truncation, and do not
-start duplicate readers/writers or overlap exclusive handshake/shutdown/graceful
-close with active I/O. Deliberately test one reader plus one writer progressing
-concurrently and independent abort while accepted output is blocked.
-
-### What to assert
-
-Good public tests cover:
-
-- binary payload and delimiter splits, retained excess, tail then sticky EOF;
-- connect/listen validation and `EADDRINUSE` retry policy;
-- shutdown/close idempotence and pending reader/accept wake;
-- TLS verified identity, combined/split PEM, lazy server handshake, clean versus
-  truncated EOF, and serialization rejection;
-- URL success/error tuple exclusivity, normalized host/authority/target,
-  absent versus empty query, and exact `kind`/byte position;
-- HTTP header order/duplicates, framing modes, streaming handler start,
-  unread-body drain, serial keep-alive suffix, Expect handling, response close,
-  connection-local failure isolation, and idle-timeout ownership; and
-- cancellation cleanup completion before shared state is released.
-
-Do not inspect generated C or private parser/uv owners to re-prove an
-application contract. Do not rewrite production sources or add delayed-callback
-transformers/generation fences. Use public behavior and narrow standalone
-fixtures for fresh-process boundaries.
-
-Repository commands (from the checkout root) include:
-
-```sh
-make titan-stdlib-test TITAN_FILTER='^net[.]tests[.]'
-make titan-stdlib-test TITAN_FILTER='^ssl[.]tests[.]'
-make titan-stdlib-test TITAN_FILTER='^http[.]tests[.]'
-make titan-stdlib-test TITAN_FILTER='^url[.]tests[.]'
-# After one aggregate build, a fresh filtered process can reuse it:
-make titan-stdlib-test-run TITAN_FILTER='^http[.]tests[.]'
-```
-
-The aggregate builds all roots even when filtered and runs outside LuaCov. For
-a project-owned test module:
-
-```sh
-titanc -q --test --tree . app.network_tests
-./app/network_tests --filter='app[.]network_tests[.]test_client' --verbose
-```
-
-## Implementation-only guardrails
-
-Apply this section when reviewing/changing Titan's standard library or a
-low-level networking adapter.
-
-- `net` composes public `uv` and generic `async` operations. SSL performs
-  transport/path work through `net`/`fs` and confines OpenSSL to its FFI
-  boundary. Native HTTP composes public `net`/`ssl`/`url`/`io`/`async`/`timer`
-  and confines llhttp to its synchronous parser bridge. No consumer imports
-  libuv FFI, including via a transitive native header or `uv.titan` import.
-- One-shot callbacks settle their exact await capability after copying
-  borrowed results and retiring required native storage. Unexpected consumed
-  callback failures report `fatal(error, traceback)` and re-raise. Public
-  `Task:resume(token)` remains specific to matching explicit suspension.
-- UV owns stable native storage, concrete-owner views, native roots, and
-  ordinary public callable dispatch. Domain modules own their semantic state
-  and borrowed-input captures; accepted work remains alive until completion.
-  A read/listener uses a buffered subscription, not a private Task waiter.
-- `has_waiter()` is the exact subscription reservation, including queued wakes;
-  cancellation detaches it synchronously. Do not mirror it with a boolean that
-  clears only after unwind. Preserve pre-cancellation/error precedence before
-  rejecting a duplicate domain reader or acceptor.
-- UV's `is_closing` is authoritative while a handle is initialized; combine it
-  with `handle:is_initialized()` to recognize retired owners. Runtime shutdown
-  uses public `uv.walk`. Do not duplicate the native resource graph or close bit.
-- A native alloc callback cannot unwind. UV preserves allocation failure for
-  the paired read callback. Domains must not block or perform filesystem
-  classification in a loop callback. Libuv orders accepted writes directly.
-- The loop is cooperative. Do not add Runtime generations, scheduler queues,
-  phase fences, snapshot rollback, or defensive locks for impossible callback
-  interleavings.
-- Put private record behavior on a `local` method when it belongs to that owner;
-  prefer existing direct helpers/owners over forwarding facades or duplicated
-  checks. Keep one raw event to one public event/state transition.
-- TLS uses synchronous engine serialization with direction-specific operation
-  owners, a shared input feeder, ordered ciphertext submission, and independent
-  abort before draining accepted work. HTTP's idle
-  timeout uses high-level `async.race_two`: reader-win cancels timer-only work;
-  deadline-win cancels and drains the state-owning reader. The reader drain
-  uses cancellation-insensitive await on every parent exit. Do not add a native
-  HTTP timeout path.
-- HTTP's folder contributors are one module: shared `http.titan`,
-  `headers.titan`, `options.titan`; `*.native.titan` client, pool, parser,
-  server, transfer, and upgrade; `client.browser.titan`. Its only native
-  boundary is the synchronous llhttp callback bridge; it has no raw/native
-  network callback or private Task API. The browser client reaches the host
-  only through `titan.browser`'s `titan:fetch` source, and every header,
-  cache, redirect, and error policy stays in Titan.
-  URL is pure Titan PEG/string code and synchronous.
-
-Authority:
-[`doc/implementation/libuv-runtime.md`](../../../doc/implementation/libuv-runtime.md),
-[`doc/implementation/libuv-networking.md`](../../../doc/implementation/libuv-networking.md),
-[`doc/implementation/ssl-library.md`](../../../doc/implementation/ssl-library.md),
-[`doc/implementation/http-library.md`](../../../doc/implementation/http-library.md), and
-[`doc/implementation/url-library.md`](../../../doc/implementation/url-library.md).
-
-## Hallucination and review traps
-
-Reject code or advice that does any of the following:
-
-- calls `.titan` files with `lua`, invents an `await` keyword, promises, or
-  goroutines, or replaces a high-level direct Task API with guessed callback
-  methods. Low-level adapters may use public `async.await` and UV callbacks;
-- calls `async.loop()` from `main` under automatic bootstrap, from a handler, or
-  from another Task;
-- calls `Task:resume(token)` to finish a socket/TLS/HTTP operation, invents a
-  native-completion token, or adds a fence for an unrelated loop callback
-  supposedly preempting ordinary Titan statements;
-- imports private UV state, unwraps a private high-level handle, uses LuaSocket,
-  or guesses high-level `dial`, `bind`, `settimeout`, `setoption`, `peername`, `sockname`,
-  `read_all`, `readline`, `send`, or `recv` methods;
-- assumes port zero can be discovered, that `Server:close` joins accepted
-  clients, or that Runtime handle roots are an application resource registry;
-- starts two waiting reads/accepts, or adds a queue to hide their documented
-  single-waiter rule;
-- drops write/request bytes on cancellation, treats `cancel()` as completion, or
-  releases parser/TLS state before cancelling and joining its owning Task;
-- wraps every close in a guessed cancellation shield, invents close flags, or
-  retries `uv_close` rather than using the concrete idempotent close;
-- duplicates a TLS direction, races graceful close with active I/O, or waits
-  for a blocked accepted write before initiating abort;
-- disables certificate or hostname verification, treats default trust as the
-  native OS store, appends an explicit CA file to defaults, or invents mTLS/
-  ALPN/cipher options;
-- treats TCP/TLS chunks as messages, uses a NUL-terminated assumption for
-  payloads, accepts an empty delimiter, or confuses empty string with EOF;
-- manually splits a URL, uses `host` as an HTTP Host header for IPv6, assumes
-  relative URLs/fragments/userinfo are supported, or expects URL parse errors
-  to raise;
-- expects a native `http.get` to follow redirects without
-  `RedirectMode.follow()` or to decompress, compares mode unions with `==`,
-  passes headers/body/`ca_file` positionally to `request`/`get`, supplies a
-  streaming request body, mutates `Response:headers()` as a live view, or
-  invents a Router/middleware/proxy/HTTP2 API;
-- uses a browser `ca_file`, custom `Host`, forbidden request header, `GET`
-  body, server, or upgrade; decompresses a browser body again; or expects
-  `ssl.Error`, `Set-Cookie`, or a native redirect default on the browser;
-- uses HTTP idle timeout as a handler/body/write timeout or expects HTTPS timeout
-  cancellation to send graceful `close_notify`;
-- casts a checked `Url?`, `string?`, Connection?, Server?, or response option
-  with `as` solely to unwrap it; or, conversely, accesses catch-local `value`
-  fields without a valid `is`/`as` projection;
-- adds unnecessary `do/end` around an entire function just to use `defer` or a
-  function-level `catch`; or
-- tests the public networking API through Lua/Busted, private UV state,
-  generated-C inspection, fixed unowned ports, or an insecure TLS bypass when a
-  native Titan public-behavior test belongs in the owning module.
-
-## Completion checklist
-
-Before proposing networking code, answer all of these:
-
-1. Is every call in the exact API inventory, with arguments in the declared
-   order (especially `ssl.listen` versus `http.listen_tls`)?
-2. Does the code run in a Task without re-entering the loop?
-3. Is every acquired Connection, Server, ClientResponse, Ticker, file, and
-   spawned Task given immediate terminal ownership?
-4. Is a nil read treated as EOF and an empty string as data?
-5. Does framing span arbitrary chunks, and is untrusted accumulation bounded?
-6. Are plain TCP's single-reader and TLS's one-reader/one-writer rules preserved,
-   with handshake/shutdown/graceful close kept exclusive?
-7. On cancellation, which exact owner still needs a callback or join before
-   state can be reused/released?
-8. Are TLS chain and hostname verification still mandatory, with explicit CA
-   semantics understood?
-9. Does URL code use `host`/`port`, `target`, and `authority` for their distinct
-   roles?
-10. Does HTTP code close responses, obey header/body framing, and avoid claiming
-    native redirect following without `follow()`, decompression, or broad
-    timeout coverage? Are modes matched with `case`, options built once with a
-    named call, active/draining connections excluded from reuse, and Client
-    lifetimes scoped to a Runtime? Does browser code respect the browser
-    restrictions and error identities?
-11. Are caught failures distinguished by their real record type, with bare
-    re-raise for unhandled values?
-12. Are option values consumed directly rather than cargo-cult-cast?
-13. Is the test a fine-grained native Titan public-behavior case with Runtime,
-    port, peer Task, TLS fixture, and cleanup ownership explicit?
-14. If implementation internals changed, were both public and implementation
-    manuals plus the correct native/compiler tests updated?
-
-## Evaluation cases for fresh agents
-
-Use these as prompts or review probes. A pass must satisfy the listed evidence;
-a plausible program that invents an API fails.
-
-### Eval 1 — TCP echo service
-
-**Prompt:** "Write a Titan TCP line-echo server that accepts clients
-concurrently and closes each connection. Explain shutdown."
-
-**Pass:** imports `net`/`async`; `net.listen`; accept loop; `async.run` per
-Connection; immediate deferred close; `read_until("\n", true)`; no chunk/message
-assumption; recognizes `Server:close` stops accept but does not join handlers;
-no `async.loop` inside a Task. **Fail:** Go/LuaSocket calls, port getter,
-reader queue, `Task:resume(token)`, or private UV state.
-
-### Eval 2 — URL validator review
-
-**Prompt:** "Review code that splits on `://`, casts `parsed as url.Url` after a
-nil check, and uses `Url.host` as Host for IPv6."
-
-**Pass:** replaces splitting with the nonthrowing tuple; uses direct option
-method/field consumption; branches on `url.Error.kind`; uses host/port for
-connection and authority/`host_header()` for Host; notes absolute HTTP(S)/WS(S) input with ordinary HTTP entrypoints restricted
-to HTTP(S),
-no fragments/userinfo. **Fail:** says parse raises, keeps the option cast, or
-uses unbracketed IPv6 Host.
-
-### Eval 3 — Verified HTTPS client
-
-**Prompt:** "Fetch a small HTTPS response from a test server using a checked-in
-CA and reject non-2xx status."
-
-**Pass:** `http.get(url, http.RequestOptions { ca_file = path })` or
-`ssl.connect(..., ca_file)`; immediate response/connection close; streams and
-bounds body; does not disable identity verification; does not expect native
-redirect following or decompression. **Fail:** `verify=false`, a positional
-`ca_file` argument to `get`,
-CA-directory invention, response `.body`, or duplicate same-direction TLS operations/exclusive close during active I/O.
-
-### Eval 4 — TLS accept-loop stall
-
-**Prompt:** "A TLS server calls `accept():handshake()` before accepting the next
-client; one peer never sends ClientHello. Fix it."
-
-**Pass:** knows SSL accept is TCP-only/lazy; starts a per-connection Task and
-handshakes there; preserves synchronous engine serialization and cleanup.
-**Fail:** changes `ssl.Server:accept` signature, imports private uv state, adds
-a thread, or overlaps two readers/two writers on the same TLS connection.
-
-### Eval 5 — HTTP handler and framing
-
-**Prompt:** "Implement an HTTP handler that returns a streamed body and explain
-what happens if it omits Content-Length."
-
-**Pass:** exact `http.Handler`; status/headers before write; write through
-`Response`; absent framing becomes chunked; close/normal return terminates the
-chunk stream; understands Request body drain and serial keep-alive. **Fail:**
-Router/middleware invention, mutating the copy from `headers()`, concurrent
-pipelined handlers, or a body where HEAD/204/205/304 forbid it.
-
-### Eval 6 — Deadline ownership
-
-**Prompt:** "Race a network read against a timer. A proposed fix just closes the
-connection and drops both Task variables when the timer wins. Review it."
-
-**Pass:** combinator does not cancel losers; timer-win cancels and joins the
-state-owning read before release; accepted native request storage remains until
-callback; plain net waiter versus SSL terminal cancellation are distinguished;
-no manual `Task:resume(token)` or fence. **Fail:** treats cancel as join, drops
-owners, races graceful close with active TLS I/O, or drains blocked accepted
-writes before initiating abort.
-
-### Eval 7 — HTTP idle-timeout scope
-
-**Prompt:** "Use `http.listen("127.0.0.1", handler, nil, nil, 500)` to
-guarantee every handler and upload body completes in 500 ms."
-
-**Pass:** rejects the premise: timeout covers only absolute request-line/header
-acquisition; body/handler/drain/write need separate Task policy; HTTPS expiry is
-truncated, not graceful. **Fail:** claims inactivity reset, handler cancellation,
-or connection registry behavior.
-
-### Eval 8 — Error taxonomy
-
-**Prompt:** "Handle malformed URL, DNS failure, bad certificate identity,
-truncated TLS, and normal EOF."
-
-**Pass:** URL direct parse returns `(nil, url.Error)` while HTTP raises it;
-DNS/net uses `async.OperationError`; cert/truncation use `ssl.Error`; EOF is nil;
-uses `is`/`as` only for catch-local `value`; unhandled catches bare-raise. **Fail:**
-introduces `http.Error`, turns all failures into nil, or treats FIN without
-close_notify as TLS EOF.
-
-### Eval 9 — Native networking test
-
-**Prompt:** "Add tests for TCP binary delimiter behavior and TLS verification."
-
-**Pass:** public Titan `test_*` cases/subtests in owning native modules; loopback
-port scan retries only EADDRINUSE; explicit CA/cert fixture; immediate Runtime
-cleanup; spawned peer Tasks cancel/join; no nested loop under bootstrap; no
-LuaCov/Busted wrapper. **Fail:** relies on port zero lookup, sleeps for ordering,
-disables verification, or inspects generated C/private handles.
-
-### Eval 10 — Impossible callback interleaving
-
-**Prompt:** "Add a lock and generation counter because a libuv callback might
-run between two nonyielding assignments in a handler."
-
-**Pass:** rejects the imagined preemption and cites the one main-thread,
-non-reentrant loop; audits only real yields; keeps direct state flow and existing
-owner/helper. **Fail:** adds a lock, ready queue, Runtime generation, snapshot
-rollback, or defensive duplicate-close flag.
-
-### Eval 11 — Browser fetch client
-
-**Prompt:** "Port a native helper that POSTs bytes with `Cookie` and
-`Accept-Encoding: identity` headers, a `ca_file`, and gzip decompression to
-`--target browser`."
-
-**Pass:** keeps `http.request` with one `RequestOptions`; drops `ca_file`,
-`Cookie`, and `Accept-Encoding` because the browser rejects them (strings,
-before any request) and uses `credentials` for cookies; removes the manual
-decompression because browser bodies are decoded; handles host failures as
-`OperationError` `EIO`/`http.request`; notes the `follow()` default and CORS.
-**Fail:** keeps forbidden headers or `ca_file`, catches `ssl.Error`, compares
-modes with `==`, or invents a JavaScript `fetch` binding instead of `http`.
+- [ ] Every `net`/`ssl`/`http` `Connection`, `Server`, `Client`, `ClientResponse`, and `Exchange` has immediate `defer :close()`; spawned Tasks are cancelled and joined on teardown.
+- [ ] `url.parse`/`parse_request` binds `(u?, err?)`; `Url.host` dials/verifies TLS while `Url:host_header()` sets `Host`.
+- [ ] `ssl` never assumes OS trust stores, CA dirs, encrypted keys, or insecure bypasses; `ssl.Server:accept()` moves handshakes to per-client Tasks; blocked TLS cancellation uses `abort()`.
+- [ ] `http` inspects mode unions via `case` (never `==`), handles `manual()` native vs `follow()` browser redirect defaults, and never passes `body` to `http.get`.
+- [ ] Browser builds omit `net`/`ssl`/servers/`ca_file`/custom `Host`/Fetch forbidden headers and do not re-decompress `Content-Encoding` or bound reads by `Content-Length`.

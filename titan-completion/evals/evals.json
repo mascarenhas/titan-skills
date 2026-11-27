@@ -1,0 +1,139 @@
+{
+  "skill_name": "titan-completion",
+  "evals": [
+    {
+      "id": "completion-01-caret-transform-and-member-visibility",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": [
+        "titan-completion"
+      ],
+      "candidate_expected_skills": [
+        "titan-completion"
+      ],
+      "candidate_expected_references": [],
+      "optional_skills": [
+        "titan-programmer"
+      ],
+      "forbidden_skills": [
+        "titan-language-server",
+        "titan-package"
+      ],
+      "prompt": "Repair the seeded Lua completion-query helper `complete_query.lua` in the current directory so it runs cleanly against the installed Titan compiler Lua modules (`titan-compiler.completion`, `titan-compiler.driver`, `titan-compiler.types`) and the provided fixtures (`c_defs.h`, `lib_mod.titan`).\n\nKeep the existing exported Lua module contract in `complete_query.lua`:\n\n1. `M.prepare_caret(filename, source_text, caret_byte)`:\n   - Delegate to `completion.prepare(filename, source_text, caret_byte)` using a 0-based UTF-8 byte boundary.\n   - Must return `nil, reason` on invalid UTF-8 split bytes, comments, and unrelated strings.\n   - Must preserve `.`/`:` separators, receiver chains, and existing arguments; replace the complete identifier leaf around the caret; handle `kind = \"import\"` without modifying source text; and treat multiword C primitives as one replacement leaf after `foreign`/`owned`/`foreign type Name =` and inside `foreign function` after `:`/`as` (respecting reserved words written as member/argument names).\n\n2. `M.map_to_original_byte(request, analysis_byte)`:\n   - Delegate to `completion.original_byte(request, analysis_byte)` to map analysis offsets back to original source byte offsets (mapping positions inside the synthetic hole to `request.start_byte`).\n\n3. `M.extract_dependencies(files)`:\n   - Delegate to `completion.dependencies(files)` using the ordinary Titan parser so shorthand imports normalize canonically (e.g. `\"math\"` -> `\"titan.math\"`) and terminal `.titan` imports set `source_required = true`.\n\n4. `M.query_completion(opts)` where `opts = { modname, filename, source, caret, modules?, include_dirs? }`:\n   - Calls `M.prepare_caret(opts.filename, opts.source, opts.caret)`; returns `nil, reason` on exclusion/failure.\n   - When `prepared.kind == \"import\"`, returns `{ kind = \"import\", quality = \"complete\", prefix = prepared.prefix, replacement_start = prepared.replacement_start, replacement_end = prepared.replacement_end, text = prepared.text, request = prepared.request, candidates = {}, by_name = {}, scopes = {} }` without running the checker or altering source.\n   - Otherwise saves and restores `driver.imported` and `types.registry` (even on error), creates a resolver context via `driver.new_resolver_context({ completion = prepared.request, analysis_only = true, transient_caches = true, extra_ffi_include_dirs = opts.include_dirs })`, runs `driver.tableloader(inputs, entries, {}, { context = ctx, interface = \"source\" })` with `inputs[opts.modname] = prepared.text` plus any `opts.modules`, reads `entries[opts.modname].completion`, closes BOTH `driver.close_loader(loader)` and `driver.close_resolver_context(ctx)`, and returns `{ kind = result.kind, quality = result.quality, prefix = prepared.prefix, replacement_start = prepared.replacement_start, replacement_end = prepared.replacement_end, request = prepared.request, candidates = result.candidates, by_name = by_name, scopes = result.scopes }`.\n   - Must never scrape text with regexes or hardcode candidate filtering by spelling: the real compiler checker observation hooks handle span-identified holes (even when a real local is named `__titan_completion_hole`), live initializer frontiers, dot/colon/static splits, generic owner specialization, `.titan` source-private visibility, `ffi` shadowing (never hiding C types), C macro-field precedence, and target-`int` C-enum eligibility (omitting unproven wide `ULL` enumerators with `quality = \"partial\"`).",
+      "files": [
+        "evals/files/complete_query.lua",
+        "evals/files/c_defs.h",
+        "evals/files/lib_mod.titan"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_completion_01.lua"
+      ],
+      "expected_outputs": [
+        "complete_query.lua"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "lua /verify/oracle/oracle_completion_01.lua"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "comp01-a1-caret-transforms-and-parser-dependencies",
+          "concept_ids": [
+            "titan-completion:inv-2-caret-transforms",
+            "titan-completion:inv-1-versions-and-neutrality"
+          ],
+          "critical": "standard",
+          "check": "`prepare_caret`, `map_to_original_byte`, and `extract_dependencies` delegate directly to `completion.prepare`, `completion.original_byte`, and `completion.dependencies`—preserving `.`/`:` receivers, rejecting comments/unrelated strings/UTF-8 splits, keeping `kind == \"import\"` text unchanged, and handling multiword C primitives including inside `foreign function` with keyword-named arguments."
+        },
+        {
+          "id": "comp01-a2-checker-observation-frontiers-and-visibility",
+          "concept_ids": [
+            "titan-completion:inv-3-checker-observation-and-visibility",
+            "titan-completion:verification-checklist"
+          ],
+          "critical": "standard",
+          "check": "`query_completion` runs real `analysis_only = true, transient_caches = true` checking via `driver.new_resolver_context` + `driver.tableloader`, restoring `driver.imported`/`types.registry` and closing loader/context, accurately observing span-identified holes (preserving real `__titan_completion_hole`), live initializer frontiers, dot/colon/static splits, generic specialization, interface views, `.titan` source-private visibility, and `ffi` shadowing without hiding C types."
+        },
+        {
+          "id": "comp01-a3-c-aggregates-macros-and-target-int-enums",
+          "concept_ids": [
+            "titan-completion:inv-4-c-enum-target-int-proof",
+            "titan-completion:inv-3-checker-observation-and-visibility"
+          ],
+          "critical": "standard",
+          "check": "Uses compiler-supplied `extra_ffi_include_dirs` to observe C aggregate/macro fields (`PROJECTED`) and conservative target-`int` enum proofs (exposing `FIRST_VALUE`/`IMPLICIT_VALUE`/`MINIMUM` while omitting unproven wide `WIDE_VALUE` with `quality == \"partial\"`, never trusting host-Lua values)."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-completion` (`inv-1..inv-4`, `verification-checklist`). Score `idiom_score = 3` only if `lua /verify/oracle/oracle_completion_01.lua` exits `0` against the installed compiler and all three `comp01-a1..a3` checks hold; cap at `<= 1` if regex/string-splitting replaces `completion.prepare`/`dependencies`, `driver.imported`/`types.registry` are leaked un-restored, loader/context cleanup is missing, or candidates are fabricated outside compiler checker hooks."
+    },
+    {
+      "id": "completion-02-closed-world-descriptors-analysis",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": [
+        "titan-completion"
+      ],
+      "candidate_expected_skills": [
+        "titan-completion"
+      ],
+      "candidate_expected_references": [],
+      "optional_skills": [
+        "titan-programmer"
+      ],
+      "forbidden_skills": [
+        "titan-language-server",
+        "titan-application"
+      ],
+      "prompt": "Implement a Lua module `closed_world_index.lua` in the current directory targeting the installed Titan compiler Lua API (`titan-compiler.driver`, `titan-compiler.completion`, `titan-compiler.projectcache`, `titan-compiler.types`, `titan-compiler.parser`, `titan-compiler.checker`, `titan-compiler.io`, `titan-compiler.version` / `c-parser.cdriver`).\n\nEvery function that touches `driver.imported`, `types.registry`, or `driver.TITAN_BIN_PATH` MUST save and restore caller state (including on error) and close every loader and resolver context (`driver.close_loader`, `driver.close_resolver_context`).\n\nExport the following 6 functions:\n\n1. `M.assert_compiler_versions()`:\n   - Asserts `driver.LANGUAGE_SERVER_API_VERSION == 1` (raising an error if absent, non-integer, or different), `completion.VERSION == 1`, and `completion.TRANSFORM_VERSION == 1`.\n   - Returns `{ ls_api = driver.LANGUAGE_SERVER_API_VERSION, completion = completion.VERSION, transform = completion.TRANSFORM_VERSION, project_cache = projectcache.VERSION, header_cache = version.C_HEADER_CACHE_VERSION }` (or `cdriver.HEADER_CACHE_VERSION`).\n\n2. `M.capture_saved_source(modname, filename, source_text)`:\n   - Runs an isolated `analysis_only = true, transient_caches = true` resolver context (`driver.new_resolver_context` + `driver.defaultloader` with `source_roots = { [modname] = true }` and `source_overrides = { [modname] = { kind = \"generated\", main = filename, files = { filename }, contents = { [filename] = source_text } } }`) to check `modname`.\n   - Compacts and encodes `driver.imported[modname]` via `projectcache.compact` and `projectcache.encode` into `payload`.\n   - Decodes a fresh detached body-free entry via `projectcache.decode(payload)` (verifying `entry.ast == nil`), clears `types.registry = {}`, calls `completion.describe(entry)` to materialize scalar facts + detached `documentation`, and returns `{ payload = payload, entry = entry, facts = facts }`.\n\n3. `M.capture_archive_catalog(bin_dir, imported_modname)`:\n   - Temporarily sets `driver.TITAN_BIN_PATH = bin_dir` (restoring the previous value afterward), creates a resolver context with `{ analysis_only = true, prefer_static = true, transient_caches = true }`, loads `imported_modname` via `driver.defaultloader({}, { context = ctx })`, finalizes with `driver.finalize_resolver_context(ctx)`, records the set of keys present in `driver.imported` (`imported_keys`), captures `catalog = driver.completion_binary_catalog(ctx)` (capturing all modules of the finalized selected static archive, including unimported siblings, without importing them), and returns `{ catalog = catalog, imported_keys = imported_keys }`.\n\n4. `M.query_closed_world(opts)` where `opts = { modname, filename, source, caret, cached_source_entries?, cached_binary_interfaces? }`:\n   - Prepares the caret via `completion.prepare(opts.filename, opts.source, opts.caret)`.\n   - Constructs a disk-blocking I/O adapter wrapping `require(\"titan-compiler.io\").new_sync()` whose `read_file(self, path)` raises an error if called on any `.titan`, `.a`, or `.so` file.\n   - Installs `driver.imported = {}` and `types.registry = opts.cached_source_entries and projectcache.registry(opts.cached_source_entries) or {}`.\n   - Creates a resolver context with `{ analysis_only = true, completion_closed_world = true, transient_caches = true, completion = prepared.request, io = blocking_io }`.\n   - Verifies `transient_caches = true` disables persistent probe caching (`local svc = driver.get_probe_service(ctx); transient_probe_cache_disabled = (svc ~= nil and svc.cache_directory == nil)`).\n   - Runs `driver.defaultloader({}, { context = ctx, cached_source_entries = opts.cached_source_entries, cached_binary_interfaces = opts.cached_binary_interfaces, source_roots = { [opts.modname] = true }, source_overrides = { [opts.modname] = { kind = \"generated\", main = opts.filename, files = { opts.filename }, contents = { [opts.filename] = prepared.text } } } })`.\n   - Loads `opts.modname`, extracts `driver.imported[opts.modname].completion`, builds `by_name`, and returns `{ ok = ok, error_message = (not ok and tostring(modtype) or nil), result = result, candidates = result and result.candidates or {}, by_name = by_name, transient_probe_cache_disabled = transient_probe_cache_disabled }`.\n\n5. `M.probe_closed_world_rejection(opts, target_modname, request_opts)`:\n   - Runs a closed-world resolver (`analysis_only = true, completion_closed_world = true, transient_caches = true`, disk-blocking I/O adapter, `cached_source_entries = opts.cached_source_entries`, `cached_binary_interfaces = opts.cached_binary_interfaces`) and invokes `loader(target_modname, request_opts)`, returning `(ok, tostring(result_or_err))` so missing dependencies and `source-import` capability escalations on captured binaries fail closed without reading disk.\n\n6. `M.inspect_analysis_only_generics(modname, filename, source_text)`:\n   - Parses `source_text` via `parser.parse(filename, source_text)` and checks it via `checker.check(modname, ast, source_text, filename, nil, { analysis_only = true })` (never feeding the analysis AST to codegen).\n   - Walks the checked AST and returns:\n     - `is_analysis_only = (ast._analysis_only == true)`\n     - `record_typeparams`: table mapping each `Ast.TopLevelRecord` name to `#node.typeparams`\n     - `call_types`: array of `{ call_type = types.tostring(call._type), callee_type = types.tostring(call.exp._type) }` for every `Ast.ExpCall` found inside function statements/expressions\n     - `case_binding_types`: array of `types.tostring(binding._type)` for every payload binding in `Ast.StatCase` arms.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_completion_02.lua"
+      ],
+      "expected_outputs": [
+        "closed_world_index.lua"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "lua /verify/oracle/oracle_completion_02.lua"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "comp02-a1-version-guards-and-saved-descriptors",
+          "concept_ids": [
+            "titan-completion:inv-1-versions-and-neutrality",
+            "titan-completion:inv-6-saved-descriptors-binary-catalog-sql"
+          ],
+          "critical": "standard",
+          "check": "Guards `driver.LANGUAGE_SERVER_API_VERSION == 1` (rejecting mismatches), publishes body-free compact entries (`entry.ast == nil`) via `projectcache.compact`/`encode`/`decode`, and materializes scalar candidates + detached documentation via `completion.describe` without depending on `types.registry`."
+        },
+        {
+          "id": "comp02-a2-closed-world-prep-binary-catalog-and-no-disk-reads",
+          "concept_ids": [
+            "titan-completion:inv-5-analysis-only-and-closed-world-prep",
+            "titan-completion:inv-6-saved-descriptors-binary-catalog-sql"
+          ],
+          "critical": "standard",
+          "check": "Captures unimported static-archive siblings via `driver.completion_binary_catalog` without importing them into `driver.imported`, runs detached completion with `analysis_only`, `completion_closed_world`, `transient_caches = true` (`cache_directory == nil`), `cached_source_entries`, `cached_binary_interfaces`, and a disk-blocking I/O adapter after the archive is deleted, restores caller global state, and rejects missing modules and binary `source-import` escalations."
+        },
+        {
+          "id": "comp02-a3-analysis-only-applied-generics-and-case-bindings",
+          "concept_ids": [
+            "titan-completion:inv-5-analysis-only-and-closed-world-prep",
+            "titan-completion:verification-checklist"
+          ],
+          "critical": "standard",
+          "check": "Checks under `{ analysis_only = true }` (verifying `ast._analysis_only == true` and never passing the analysis AST to codegen) and observes preserved generic `typeparams`, concrete applied generic call/constructor types (e.g., `gen_demo.Box<|integer|>` and `function (integer): integer`), and un-erased `case` payload binding types (`integer`, not `value`)."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-completion` (`inv-1`, `inv-5`, `inv-6`, `verification-checklist`). Score `idiom_score = 3` only if `lua /verify/oracle/oracle_completion_02.lua` exits `0` against the installed compiler and all three `comp02-a1..a3` checks hold; cap at `<= 1` if `LANGUAGE_SERVER_API_VERSION` mismatch is ignored, `completion_closed_world` or `transient_caches` is omitted, disk reads occur during detached completion, `driver.imported`/`types.registry`/`TITAN_BIN_PATH` are left mutated, or generic calls/`case` bindings are erased to `value`."
+    }
+  ]
+}

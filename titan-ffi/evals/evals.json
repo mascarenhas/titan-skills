@@ -1,0 +1,329 @@
+{
+  "skill_name": "titan-ffi",
+  "evals": [
+    {
+      "id": "ffi-01-thin-native-c-wrapper-owned-callbacks",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-application", "titan-package"],
+      "prompt": "Using the provided primitive C spatial library (`spatial.h` and `spatial.c` — treat both C files as read-only and do NOT modify them or add additional `.c` files), implement a Titan module `spatial_index.titan` (logical module `spatial_index`) that keeps the C boundary strictly primitive-only while implementing k-NN filtering, tag metadata, and result construction in Titan.\n\nExport the following public types and functions:\n- `record Neighbor` with immutable fields `const id: integer`, `const dist_sq: integer`, and `const tag: string`.\n- `record SpatialIndex` keeping the raw `spatial_index_t` pointer and internal tag table private in `local` fields (defaulting unmutated fields to `const`), without any `RawSpatialIndex` wrapper or integer-ID handle registry.\n- `function open(capacity: integer): SpatialIndex`: validates `capacity > 0` (raising otherwise), creates the synchronous handle via `spatial_index_create`, raises on NULL allocation failure, and attaches a synchronous non-capturing reachability finalizer fallback that calls `:close()`.\n- `function SpatialIndex:add(id: integer, x: integer, y: integer, tag: string)`: raises if closed; inserts a `spatial_point_t` via `spatial_index_add`, checks the `spatial_status_t` enum return (`SPATIAL_OK` vs `SPATIAL_ERR_FULL`/`SPATIAL_ERR_INVALID`, raising on error), and stores `tag` in Titan.\n- `function SpatialIndex:count(): integer`: raises if closed; returns `spatial_index_count` as a Titan `integer`.\n- `function SpatialIndex:nearest(qx: integer, qy: integer, k: integer, max_dist_sq: integer?, required_prefix: string?): {Neighbor}`:\n  - Raises if closed or `k < 0`; returns `{}` if `k == 0` or the index is empty.\n  - Copies stored points out of C into an `owned` C point buffer (`spatial_index_copy_points`), computes squared distances via `spatial_distance_sq`, filters points in Titan by `max_dist_sq` (keep only `dist_sq <= max_dist_sq` when non-`nil`) and `required_prefix` (keep only points whose tag starts with `required_prefix` when non-`nil`).\n  - Copies the surviving candidates into an `owned` `spatial_entry_t` array and sorts them by calling `spatial_sort_entries` with a module-private restricted C comparator callback (`local foreign function`) ordering by `dist_sq` ascending, breaking ties by `id` ascending (avoiding signed subtraction overflow).\n  - Builds and returns up to `k` `Neighbor` values in sorted order.\n- `function SpatialIndex:format_summary(label: string): string`: raises if closed; formats `\"<label>:count=<n>\"` into an `owned` `char` buffer using C variadic `snprintf` (explicitly casting Titan `integer` arguments to the exact C format type) and returns a binary-safe string copy of the formatted length.\n- `function SpatialIndex:close()`: idempotent synchronous release via `spatial_index_destroy` (repeated calls are safe no-ops).",
+      "files": [
+        "evals/files/spatial.h",
+        "evals/files/spatial.c"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_spatial.titan",
+        "evals/oracle/check_spatial_boundary.py"
+      ],
+      "expected_outputs": [
+        "spatial_index.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_spatial.titan /verify/oracle/check_spatial_boundary.py .",
+          "python3 check_spatial_boundary.py",
+          "titanc -q --tree . -I . --c-source spatial.c -o build_oracle --exe oracle_spatial oracle_spatial",
+          "./oracle_spatial"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ffi01-a1-thin-c-boundary-and-local-owner",
+          "concept_ids": [
+            "titan-ffi:inv-1-thin-primitive-boundary",
+            "titan-ffi:inv-2-unsafe-boundary-narrow-owners",
+            "titan-programmer:inv-1-exported-record-local-fields",
+            "titan-programmer:inv-2-const-fields-default",
+            "titan-programmer:inv-3-sync-finalizable-defer-close"
+          ],
+          "critical": "issue61_idiom",
+          "check": "Keeps `spatial.h` and `spatial.c` unmodified with zero extra `.c` files; implements k-NN filtering, tag storage, and `Neighbor` construction in `spatial_index.titan`; holds raw `foreign *spatial_index_t` in a `local` field of exported `SpatialIndex` with idempotent `:close()` and a non-capturing synchronous `gc.finalizable` fallback."
+        },
+        {
+          "id": "ffi01-a2-owned-buffers-enums-variadic-casts",
+          "concept_ids": [
+            "titan-ffi:inv-4-owned-bytes-vs-borrowed-pointers",
+            "titan-ffi:c-ffi-headers-types-calls-casts-storage"
+          ],
+          "critical": "standard",
+          "check": "Uses `owned` C array storage with 0-based indexing, `const` C struct pointers, `spatial_status_t` enum checks, explicit C-type casts on `integer` arguments passed to variadic `snprintf`, and `ptr as string(n)` (or exact-length string copy) without escaping borrowed pointers."
+        },
+        {
+          "id": "ffi01-a3-restricted-foreign-function-callback",
+          "concept_ids": [
+            "titan-ffi:inv-3-no-closures-as-c-callbacks",
+            "titan-ffi:source-defined-foreign-functions-and-callbacks"
+          ],
+          "critical": "standard",
+          "check": "Passes a top-level `local foreign function` comparator (obeying the C-only subset without Titan closures or signed subtraction overflow) to `ffi.spatial_sort_entries`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-ffi` (`inv-1..inv-4`, `c-ffi-headers-types-calls-casts-storage`, `source-defined-foreign-functions-and-callbacks`), `titan-programmer` (`inv-1..inv-3`). Score `idiom_score = 3` only if `check_spatial_boundary.py` and `./oracle_spatial` both exit `0` and `ffi01-a1..a3` all hold; cap at `<= 1` if C files are edited or added to implement k-NN/filtering in C, if raw pointers are exposed publicly or placed in an ID registry, if `snprintf` omits explicit C casts on `integer`, or if a pure-Titan sort bypasses `spatial_sort_entries`."
+    },
+    {
+      "id": "ffi-02-thin-browser-canvas-bridge",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-ffi", "titan-application"],
+      "candidate_expected_skills": ["titan-programmer", "titan-ffi", "titan-application"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-websocket", "titan-package"],
+      "prompt": "Build an interactive browser timeline chart split cleanly into multi-module Titan logic (`layout.titan` and `timeline_app.titan`) plus a strictly thin primitive-only JavaScript host binding module (`bindings.mjs`) compiled with `--target browser`.\n\nCreate three files in the current directory:\n\n1. `layout.titan` (pure target-independent Titan module — zero browser imports — owning all geometry, styling policy, and hit-testing):\n   - `record Span` with `const id: string`, `const start_ms: integer`, `const end_ms: integer`, `const color: string`.\n   - `record Rect` with `const id: string`, `const x: float`, `const y: float`, `const width: float`, `const height: float`, `const fill: string`, `const label: string`.\n   - `function compute_layout(spans: {Span}, viewport_w: float, viewport_h: float, total_ms: integer, selected_id: string?): {Rect}` using exact constants `row_h = 24.0`, `gap = 6.0`, `pad_x = 10.0`, `pad_y = 10.0`, `inner_w = viewport_w - 2.0 * pad_x` (clamped `>= 0.0`). For each 1-based span index `i`:\n     - `x = pad_x + (span.start_ms / total_ms) * inner_w`\n     - `width = ((span.end_ms - span.start_ms) / total_ms) * inner_w`\n     - `y = pad_y + ((i - 1) * (row_h + gap))`\n     - `height = row_h`\n     - `fill = \"#ff9900\"` when `selected_id ~= nil and selected_id == span.id`, else `span.color`\n     - `label = span.id .. \" *\"` when selected, else `span.id`\n   - `function hit_test(rects: {Rect}, px: float, py: float): string?`: returns the `id` of the first `Rect` where `px >= r.x and px <= r.x + r.width and py >= r.y and py <= r.y + r.height`, or `nil` if none matches.\n\n2. `timeline_app.titan` (browser entrypoint importing `layout` and the browser bridge module, owning chart state, selection transitions, rendering loop, `BrowserError` handling, and handle/request lifecycle):\n   - Initialize chart state with `viewport_w = 520.0`, `viewport_h = 120.0`, `total_ms = 1000`, `selected_id = nil`, `render_errors = 0`, and 3 spans in order: `Span(\"lex\", 0, 200, \"#3366cc\")`, `Span(\"parse\", 200, 600, \"#33aa66\")`, `Span(\"emit\", 600, 1000, \"#aa44aa\")`.\n   - Store long-lived `BrowserHandle`s (`clear_rect`, `fill_rect`, `fill_text`, `report_selection`) and the active `BrowserRequest?` listener on a module-owned record kept alive after `main` returns (remembering `main`'s `defer`s run before host `drain()`/events; use `defer ...:close()` on transient setup binding handles like `on_pointer` and `register_api`, plus rollback cleanup if mount fails).\n   - In `main(_args: {string}): integer`: mount the chart controller, subscribe to `\"on_pointer\"` via `:listen(...)`, render the initial frame via `clear_rect(0.0, 0.0, 520.0, 120.0)` and for each layout rect call `fill_rect(r.x, r.y, r.width, r.height, r.fill)` then `fill_text(r.label, r.x + 4.0, r.y + 16.0)`, register two exported callables via `\"register_api\"` (`BrowserValue.is_callable`) — `(get_state, close_chart)` — and return `0`.\n   - Pointer listener handler expects `(px: float, py: float, seq: integer)` (validated via `case` on `BrowserValue`; `seq` arrives as JS `BigInt`): updates `selected_id = layout.hit_test(...)`, re-renders the chart, and calls `report_selection` with `(selected_id or \"\", seq, render_errors)` (`is_string`, `is_integer`, `is_integer`).\n   - If any draw binding throws during rendering, catch `browser.BrowserError`, increment `render_errors`, **close the caught error handle (`err:close()`)**, and keep the instance alive without propagating an unhandled error.\n   - `get_state` returns `BrowserValue.is_string((selected_id or \"\") .. \":\" .. render_errors)`. `close_chart` closes the active listener request and all long-lived `BrowserHandle`s idempotently and clears the module reference (breaking JS-to-Lua reference cycles), returning `BrowserValue.is_nil()`.\n\n3. `bindings.mjs` (ES module wrapping raw host primitives and bridge plumbing ONLY — zero layout math, zero hit-testing, zero colors/styling, zero span data):\n   - Export `export function createBindings(ctx2d, eventTarget, hooks)` returning a plain object with keys:\n     - `clear_rect(x, y, w, h)`: calls `ctx2d.clearRect(x, y, w, h)`.\n     - `fill_rect(x, y, w, h, color)`: sets `ctx2d.fillStyle = color` and calls `ctx2d.fillRect(x, y, w, h)`.\n     - `fill_text(text, x, y)`: calls `ctx2d.fillText(text, x, y)`.\n     - `on_pointer()`: returns `{ kind: \"listener\", subscribe(emit) { ... } }` attaching a `\"pointerdown\"` listener on `eventTarget` that forwards `(Number(ev.x), Number(ev.y), BigInt(ev.seq))` to `emit` and returns an unsubscribe function calling `eventTarget.removeEventListener(\"pointerdown\", fn)`.\n     - `report_selection(id, seq, errCount)`: calls `hooks.onSelection(id, seq, errCount)`.\n     - `register_api(getStateFn, closeFn)`: calls `hooks.onRegisterApi(getStateFn, closeFn)`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_layout.titan",
+        "evals/oracle/oracle_canvas_host.mjs",
+        "evals/oracle/check_bindings_thin.py"
+      ],
+      "expected_outputs": [
+        "layout.titan",
+        "timeline_app.titan",
+        "bindings.mjs"
+      ],
+      "verify": {
+        "target": "browser",
+        "network": "none",
+        "timeout_sec": 90,
+        "commands": [
+          "cp /verify/oracle/oracle_layout.titan /verify/oracle/oracle_canvas_host.mjs /verify/oracle/check_bindings_thin.py .",
+          "python3 check_bindings_thin.py",
+          "titanc -q --tree . -o build_native --exe oracle_layout oracle_layout",
+          "./oracle_layout",
+          "TITAN_BUILD_PROFILE=validation titanc -q --target browser --tree . -o build_browser --exe build_browser/timeline_app.mjs timeline_app",
+          "\"$(titanc --print-root)/lib/titan-browser/0.6/titan-browser-run\" --js-test --root . oracle_canvas_host.mjs"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ffi02-a1-thin-bindings-and-multi-module-titan",
+          "concept_ids": [
+            "titan-ffi:inv-1-thin-primitive-boundary",
+            "titan-ffi:browser-javascript-bindings",
+            "titan-ffi:browser-javascript-bridge"
+          ],
+          "critical": "issue61_idiom",
+          "check": "`bindings.mjs` contains only raw Canvas 2D/event/hook primitive wrappers and listener attach/teardown plumbing (`BigInt` marshalling, `{ kind: \"listener\", subscribe }`), while layout geometry, highlight styling (`#ff9900`), hit-testing, and state live in pure `layout.titan` + `timeline_app.titan`."
+        },
+        {
+          "id": "ffi02-a2-browser-value-bigint-and-error-close",
+          "concept_ids": [
+            "titan-ffi:browser-javascript-bindings",
+            "titan-ffi:inv-2-unsafe-boundary-narrow-owners"
+          ],
+          "critical": "issue61_idiom",
+          "check": "Marshals integers strictly as `BigInt` (`is_integer`) across `on_pointer`/`report_selection`, keeps `BrowserHandle`/`BrowserRequest` handles in `local` record fields, catches `browser.BrowserError` with `err:close()` without poisoning the instance, and avoids closing long-lived listener handles inside `main`'s `defer`."
+        },
+        {
+          "id": "ffi02-a3-callable-export-and-cycle-teardown",
+          "concept_ids": [
+            "titan-ffi:browser-javascript-bindings",
+            "titan-programmer:inv-3-sync-finalizable-defer-close"
+          ],
+          "critical": "standard",
+          "check": "Exports bound callables via `BrowserValue.is_callable`, uses `defer ...:close()` for transient setup bindings, and cleanly unsubscribes the listener and closes all handles via `close_chart` to break JS-to-Lua reference cycles."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-ffi` (`inv-1`, `inv-2`, `browser-javascript-bindings`), `titan-programmer` (`inv-1..inv-3`). Score `idiom_score = 3` only if `check_bindings_thin.py`, `./oracle_layout`, and `titan-browser-run --js-test oracle_canvas_host.mjs` all exit `0` and `ffi02-a1..a3` hold; cap at `<= 1` if layout/hit-testing/colors leak into `bindings.mjs`, if integers cross as JS `Number` instead of `BigInt`, if caught `BrowserError` values omit `err:close()`, or if `close_chart` fails to retire the listener and long-lived handles."
+    },
+    {
+      "id": "ffi-03-lua-interop-and-titan-lua",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-thread"],
+      "forbidden_skills": ["titan-reflect", "titan-completion"],
+      "prompt": "Using the provided Lua plugin file `plugin_rules.lua` as reference for the exact Lua-side contract, implement a Titan module `plugin_host.titan` (logical module `plugin_host`) demonstrating Lua-to-Titan interoperability and dynamic Lua execution.\n\nExport the following public types and functions:\n- `record Account` with:\n  - `const id: string` (read-only from Lua)\n  - `balance: integer` (mutable public field accepting dynamic float-to-integer writes from Lua)\n  - `local secret_pin: integer` (hidden from Lua)\n  - `local const audit: {string}` (hidden from Lua)\n  - Public methods:\n    - `Account:credit(amount: integer): integer`: adds `amount` to `self.balance`, appends an audit note, and returns the new balance.\n    - `Account:flag_active(active: boolean): string`: returns `\"on\"` when `active` is `true` and `\"off\"` when `false` (demonstrating Lua truthiness conversion at the edge).\n    - `Account:verify_pin(guess: integer): boolean`: returns `guess == self.secret_pin`.\n    - `Account:audit_count(): integer`: returns `#self.audit`.\n- `function open_account(id: string, initial: integer, pin: integer): Account`: constructs and returns an `Account` with an empty audit array.\n- `union Verdict` with variants `approved(note: string)` and `rejected(code: integer)`.\n- `function verdict_label(v: Verdict): string`: returns `\"approved:\" .. note` or `\"rejected:\" .. code` using `case`.\n- `function make_limits_array(a: integer, b: integer, c: integer): {integer}`: returns `{a, b, c}`.\n- `function make_const_limits(xs: {integer}): const { integer }`: copies `xs` into a `const { integer }` Titan Array proxy and returns it.\n- `function eval_with_env(chunk: string, name: string, env: {string: value}, arg: value): value`: compiles `chunk` with chunk name `name` and custom `_ENV` table `env` via dynamic Lua chunk loading and invokes the compiled function with `arg`.\n- `function load_chunk_reader(reader: io.Reader, name: string): function(...: value): (...: value)`: compiles a Lua chunk from `reader` without closing `reader`.\n- `function apply_dynamic_callback(acct: Account, fn: function(Account): (integer, boolean, string)): (integer, boolean, string)`: invokes a typed Lua callback so the Lua-to-Titan return boundary performs dynamic conversion (accepting integral float `-> integer` and truthiness `-> boolean` while rejecting numbers for `string`).\n- `function read_strict_int_from_map(m: {string: value}, key: string): integer`: projects `m[key]` through Titan's internal strict `value -> integer` guard (accepting Lua integers and rejecting floats such as `2.0`).\n- `function run_isolated(chunk: string, payload: string): string`: creates an independent Lua state, pairs it immediately with `defer ...:close()`, runs `chunk` with `payload` passed via cross-state `TransferValue.is_string`, verifies the returned `TransferValue` is `is_string(s)`, and returns `s` (raising otherwise).",
+      "files": [
+        "evals/files/plugin_rules.lua"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_lua_interop.titan",
+        "evals/oracle/oracle_lua_host.lua"
+      ],
+      "expected_outputs": [
+        "plugin_host.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_lua_interop.titan /verify/oracle/oracle_lua_host.lua .",
+          "titanc -q --tree . -o build_oracle --exe oracle_lua_interop oracle_lua_interop",
+          "./oracle_lua_interop",
+          "titanc -q --tree . -o build_lib plugin_host",
+          "TITAN_PATH_0_6='build_lib;;' lua oracle_lua_host.lua"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ffi03-a1-record-visibility-const-arrays-and-unions",
+          "concept_ids": [
+            "titan-ffi:lua-interop-and-titan-lua",
+            "titan-ffi:inv-2-unsafe-boundary-narrow-owners",
+            "titan-programmer:inv-1-exported-record-local-fields"
+          ],
+          "critical": "standard",
+          "check": "Exposes `Account` public fields/methods, `const { integer }` Array proxies, and opaque `Verdict` union to Lua via `require \"titan\"` + `require \"plugin_host\"` while keeping `secret_pin` and `audit` strictly `local` (raising on Lua access)."
+        },
+        {
+          "id": "ffi03-a2-dynamic-edge-vs-strict-internal-guard",
+          "concept_ids": [
+            "titan-ffi:inv-5-lua-edge-dynamics-vs-internal-strictness",
+            "titan-ffi:lua-interop-and-titan-lua"
+          ],
+          "critical": "standard",
+          "check": "Demonstrates Lua->Titan dynamic edge conversion (`2.0 -> integer`, `0 -> true`, number rejected for `string`) on `apply_dynamic_callback` and Lua writes, contrasted with strict internal `value -> integer` guarding (`2.0` rejected) in `read_strict_int_from_map`."
+        },
+        {
+          "id": "ffi03-a3-lua-load-reader-and-isolated-state",
+          "concept_ids": [
+            "titan-ffi:lua-interop-and-titan-lua",
+            "titan-programmer:inv-3-sync-finalizable-defer-close"
+          ],
+          "critical": "standard",
+          "check": "Implements `eval_with_env` (`lua.load` with `_ENV`), `load_chunk_reader` (`lua.load_from_reader` without closing `reader`), and `run_isolated` (`lua.new()` paired with `defer st:close()` and `transfer.TransferValue`)."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-ffi` (`inv-2`, `inv-5`, `lua-interop-and-titan-lua`), `titan-programmer` (`inv-1`, `inv-3`). Score `idiom_score = 3` only if both `./oracle_lua_interop` and `lua oracle_lua_host.lua` exit `0` and `ffi03-a1..a3` hold; cap at `<= 1` if `secret_pin`/`audit` are exposed publicly, if `read_strict_int_from_map` coerces `2.0` via `as integer` instead of strict guard, if `load_chunk_reader` closes `reader`, or if `lua.new()` omits `defer ...:close()`."
+    },
+    {
+      "id": "ffi-04-ref-runtime-lua-c-api",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_references": ["titan-ffi/references/runtime-lua-c-api.md"],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-completion", "titan-language-server"],
+      "prompt": "Author a low-level trusted Lua 5.5 C-API runtime helper (`ring_ext.c`) implementing the provided header `ring_ext.h` (do NOT modify `ring_ext.h`) together with a Titan runtime module `ring.titan` (logical module `ring`) that directly manipulates Lua 5.5 stack slots, full-userdata uservalues, GC write barriers, `luaL_tolstring`, and `luaL_loadbufferx`/`lua_setupvalue`.\n\n1. `ring_ext.c` (plain C helper implementing `ring_ext.h` — return status codes only; never use `luaL_ref` or `lua_pcall`/`lua_pcallk` for plain C work):\n   - `ring_ext_new(lua_State *L, uint32_t capacity)`: validates `1 <= capacity <= 65535` (returning `RING_ERR_ARG` with net 0 stack effect), checks stack (`lua_checkstack(L, 1)`, returning `RING_ERR_STACK` on failure), allocates full userdata via `lua_newuserdatauv(L, sizeof(ring_udata), (int)capacity)`, initializes `capacity`, `head = 0`, `count = 0`, and leaves the userdata on top of `L` (`RING_OK`).\n   - `ring_ext_push(lua_State *L, int ring_idx, int val_idx)`: converts indices with `lua_absindex`, retrieves `ring_udata *` via `lua_touserdata`, checks stack for temporary push, pushes the value at `val_idx` (`lua_pushvalue`), stores it into the 1-based uservalue slot using `lua_setiuservalue` (so Lua 5.5 generational/incremental GC write barriers fire cleanly; when `count == capacity`, overwrite `head` and advance `head = (head + 1) % capacity`, else write `(head + count) % capacity` and increment `count`), and restores `L`'s stack top on every path.\n   - `ring_ext_pop(lua_State *L, int ring_idx)`: if `count == 0` return `RING_ERR_EMPTY` (net 0 stack effect); otherwise check stack (`>= 2`), retrieve oldest item at 1-based slot `head + 1` via `lua_getiuservalue`, clear that uservalue slot to `nil` (`lua_pushnil` + `lua_setiuservalue`) so GC can collect popped objects, advance `head = (head + 1) % capacity` and decrement `count`, and leave ONLY the popped item on top of `L` (`RING_OK`, net +1).\n   - `ring_ext_peek(lua_State *L, int ring_idx, uint32_t offset)`: validates `offset < count` (`RING_ERR_ARG` otherwise), checks stack (`>= 1`), pushes item at 1-based slot `((head + offset) % capacity) + 1` via `lua_getiuservalue` (`RING_OK`, net +1).\n   - `ring_ext_stats(lua_State *L, int ring_idx, uint32_t *out_count, uint32_t *out_cap)`: writes `count` and `capacity` via out-params without mutating `L`'s stack.\n\n2. `ring.titan` (logical module `ring`, using `foreign import \"lua.h\"`, `foreign import \"lauxlib.h\"`, `foreign import \"titan/ffi.h\"`, `foreign import \"ring_ext.h\"`, following strict current-state stack transactions: snapshot `lua_gettop(L)` + immediate `defer lua_settop(L, top)` + explicit `lua_checkstack` + copy surviving collectables via `lua_totvalue` before restoring top):\n   - `record ValueRing` storing the traced userdata in `local const handle: value`.\n   - `function open(capacity: integer): ValueRing`: validates `1 <= capacity <= 65535`, calls `ring_ext_new`, copies userdata via `lua_totvalue` before `defer` restores top, returns `ValueRing`.\n   - `function ValueRing:push(item: value)`: pushes `self.handle` and `item` via `lua_pushtvalue`, calls `ring_ext_push`, checks status.\n   - `function ValueRing:pop(): (value, boolean)`: returns `(nil, false)` on `RING_ERR_EMPTY`, else copies popped value via `lua_totvalue` and returns `(v, true)`.\n   - `function ValueRing:peek(index: integer): (value, boolean)`: 1-based index (`1 <= index <= len`); returns `(nil, false)` when out of range, else `(v, true)`.\n   - `function ValueRing:len(): integer` and `function ValueRing:capacity(): integer`.\n   - `function format_value(v: value): string`: converts `v` (including tables with `__tostring` metamethods) using `luaL_tolstring` inside a stack transaction reserving sufficient slots (value + `luaL_tolstring`'s 2 transient slots), copying the resulting string before `defer` restores top (and preserving stack height if `__tostring` raises).\n   - `function eval_with_optional_env(chunk: string, env: value): value`: compiles `chunk` with `luaL_loadbufferx(L, chunk, #chunk as foreign size_t, \"=ring_eval\", nil)` inside a stack transaction, optionally assigns `_ENV` via `lua_pushtvalue` + `lua_setupvalue(L, -2, 1)` (handling `lua_setupvalue` returning `NULL` without popping on 0-upvalue binary chunks!), copies the compiled function to a typed Titan callable `function(): value` via `lua_totvalue` BEFORE restoring top (or invokes it cleanly with stack balanced), and returns the chunk's result.",
+      "files": [
+        "evals/files/ring_ext.h"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_ring.titan",
+        "evals/oracle/check_ring_api.py"
+      ],
+      "expected_outputs": [
+        "ring_ext.c",
+        "ring.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_ring.titan /verify/oracle/check_ring_api.py .",
+          "python3 check_ring_api.py",
+          "TITAN_BUILD_PROFILE=validation titanc -q --tree . -I . --c-source ring_ext.c -o build_oracle --exe oracle_ring oracle_ring",
+          "./oracle_ring"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ffi04-a1-stack-transaction-discipline",
+          "concept_ids": [
+            "titan-ffi:inv-6-conditional-reference-reads",
+            "titan-ffi/references/runtime-lua-c-api:stack-transaction-and-gc-invariants",
+            "titan-ffi/references/runtime-lua-c-api:six-guard-rails-layering-and-rooting"
+          ],
+          "critical": "standard",
+          "check": "Every current-state Lua stack helper in `ring.titan` snapshots `lua_gettop(L)`, pairs it immediately with `defer lua_settop(L, top)`, reserves full max temporary slots via `lua_checkstack` (including 3 slots for push + `luaL_tolstring`), copies surviving values via `lua_totvalue` before restore, and leaves `lua_gettop(L)` balanced on both normal and raising paths."
+        },
+        {
+          "id": "ffi04-a2-uservalues-gc-barriers-no-ref-or-pcall",
+          "concept_ids": [
+            "titan-ffi/references/runtime-lua-c-api:six-guard-rails-layering-and-rooting",
+            "titan-ffi/references/runtime-lua-c-api:stack-transaction-and-gc-invariants"
+          ],
+          "critical": "standard",
+          "check": "`ring_ext.c` uses `lua_newuserdatauv` and `lua_setiuservalue`/`lua_getiuservalue` (emitting Lua 5.5 generational/incremental GC write barriers and clearing popped slots to `nil`), returns plain C status codes without `lua_pcall`/`lua_pcallk`, and never uses `luaL_ref`."
+        },
+        {
+          "id": "ffi04-a3-audited-ledger-setupvalue-and-tolstring",
+          "concept_ids": [
+            "titan-ffi/references/runtime-lua-c-api:audited-operation-ledger"
+          ],
+          "critical": "standard",
+          "check": "Correctly handles `luaL_tolstring` transient slots (preserving stack height when `__tostring` raises) and `luaL_loadbufferx` + `lua_setupvalue` NULL non-pop asymmetry on 0-upvalue binary chunks."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-ffi` (`inv-6`), `titan-ffi/references/runtime-lua-c-api.md` (`six-guard-rails-layering-and-rooting`, `stack-transaction-and-gc-invariants`, `audited-operation-ledger`). Score `idiom_score = 3` only if `check_ring_api.py` and `./oracle_ring` under `TITAN_BUILD_PROFILE=validation` GC stress both exit `0` and `ffi04-a1..a3` hold; cap at `<= 1` if `luaL_ref` or `lua_pcall` is used, if GC write barriers or slot-nil clearing are missing, if `defer lua_settop(L, top)` / `lua_checkstack` is omitted, or if 0-upvalue `lua_setupvalue` / raising `__tostring` leaks stack slots."
+    },
+    {
+      "id": "ffi-05-ref-browser-wasm-c-imports",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-ffi", "titan-application"],
+      "candidate_expected_skills": ["titan-programmer", "titan-ffi", "titan-application"],
+      "candidate_expected_references": ["titan-ffi/references/browser-wasm-c-imports.md"],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-networking", "titan-websocket"],
+      "prompt": "Build a `--target browser` WebAssembly application linking a custom C helper (`crc_wasm.c` implementing the provided read-only header `crc_wasm.h`), a Titan browser module (`crc_app.titan`), and a host WebAssembly env import module (`wasm_imports.mjs`) that obeys Wasm-EH `longjmp`, `create({ imports })`, and synchronous C callback (`browser.pin` + `titan_browser_call_sync`) rules.\n\nCreate three files in the current directory (do NOT modify `crc_wasm.h`):\n\n1. `crc_wasm.c` implementing `crc_wasm.h`:\n   - `crc32_update(uint32_t prev_crc, const uint8_t *data, size_t len)`: standard IEEE 802.3 CRC-32 (`0xEDB88320`, `crc32_update(0, \"123456789\", 9) == 0xCBF43926u`).\n   - `crc_wasm_run_pipeline(const titan_browser_identity *callable, uint32_t max_chunks, uint32_t *out_combined_crc, int32_t *out_error_count)`:\n     - Initializes `acc = crc32_update(0, (const uint8_t *)\"123456789\", 9)` and `*out_error_count = 0`.\n     - Calls `host_feed_chunks(&ctx, chunk_trampoline, max_chunks)` with a C callback `chunk_trampoline(void *userdata, uint32_t chunk_crc, uint32_t chunk_len)`.\n     - For each chunk, prepares a zero-initialized `titan_browser_value args[2]` (`TITAN_BROWSER_INTEGER` with `scalar.integer = (int64_t)chunk_crc` and `(int64_t)chunk_len`) and zero-initialized `titan_browser_sync_result res = {0}`, and calls `titan_browser_call_sync(callable, 2, args, &res)`.\n     - On `TITAN_BROWSER_OK` with `res.value.kind == TITAN_BROWSER_INTEGER`, encodes the low 32 bits of `res.value.scalar.integer` as 4 little-endian bytes, folds them via `acc = crc32_update(acc, le4, 4)`, and increments `ok_count`.\n     - On `TITAN_BROWSER_TITAN_ERROR`, increments `*out_error_count` and continues processing subsequent chunks (do not abort).\n     - On `TITAN_BROWSER_STATE` or `TITAN_BROWSER_MEMORY`, records a fatal error.\n     - After EVERY `titan_browser_call_sync` status, `free`s `(void *)res.message`, `(void *)res.trace`, and (when `res.value.kind == TITAN_BROWSER_STRING || res.value.kind == TITAN_BROWSER_BYTES`) `(void *)res.value.bytes`.\n     - Stores `*out_combined_crc = acc` and returns `ok_count` (or `-1` on fatal state/memory error).\n\n2. `crc_app.titan` (logical module `crc_app`):\n   - Imports the browser bridge module, `crc_wasm.h`, and `titan/browser.h`.\n   - Defines a Titan callback `on_chunk(...: browser.BrowserValue): browser.BrowserValue`: extracts `(chunk_crc, chunk_len)` via `case ... when is_integer(...)`; if `chunk_len == 0` raises `\"empty chunk rejected\"` (exercising Wasm-EH `longjmp` inside `titan_browser_call_sync` -> `TITAN_BROWSER_TITAN_ERROR` without poisoning the instance); otherwise returns `BrowserValue.is_integer(chunk_crc ~ chunk_len)`.\n   - In `main(_args: {string}): integer`:\n     - Verify Wasm-EH `catch`/`defer` unwinding locally by catching a test `raise` and verifying a `defer` flag ran.\n     - Pin `on_chunk` via `browser.pin(on_chunk)`, copy `pin:identity()` into an `owned *titan_browser_identity`, and root BOTH the `BrowserPin` and the `owned *titan_browser_identity` inside a module-level owner record BEFORE C sees the identity pointer.\n     - Pair with `defer` to drop the module-level owner slot and call `pin:close()` after C finishes.\n     - Call `ffi.crc_wasm_run_pipeline(id, 16, combined_crc, err_count)` (with stack-local `uint32_t` and `int32_t` out-params), verify return `>= 0`, invoke `ffi.host_report_crc(\"crc-done\", combined_crc, ok_count, err_count)`, and return `0`.\n\n3. `wasm_imports.mjs` (ES module providing host WebAssembly `env` imports — plain objects only, NEVER overriding `wasi_snapshot_preview1.*`, `env.titan_browser_*`, or `env.titan_mco_*`, NEVER wrapping synchronous C callbacks in `WebAssembly.Suspending`, and NEVER caching `HEAPU8`/`HEAPU32` across calls):\n   - Export `export function createHostImports(chunks, onReport)` returning a synchronous factory `(ctx) => ({ env: { host_feed_chunks(ud, fnPtr, maxChunks) { ... }, host_report_crc(tagPtr, combinedCrc, okCount, errCount) { ... } } })` where:\n     - `host_feed_chunks` looks up `const cb = ctx.table.get(fnPtr)` (returning `0` if `fnPtr === 0`), iterates up to `Math.min(chunks.length, maxChunks >>> 0)` invoking `cb(ud, ch.crc >>> 0, ch.len >>> 0)`, and returns the count fed.\n     - `host_report_crc` reads the tag via `ctx.readCString(tagPtr)` and if `typeof onReport === \"function\"` invokes `onReport(tag, combinedCrc >>> 0, okCount | 0, errCount | 0)`.\n   - Export a default sync factory `export default createHostImports([{ crc: 0x11223344, len: 4 }, { crc: 0, len: 0 }, { crc: 0x55667788, len: 8 }], null)` so direct CLI execution with `--imports wasm_imports.mjs` succeeds.",
+      "files": [
+        "evals/files/crc_wasm.h"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_wasm_check.mjs",
+        "evals/oracle/check_wasm_imports.py"
+      ],
+      "expected_outputs": [
+        "crc_wasm.c",
+        "crc_app.titan",
+        "wasm_imports.mjs"
+      ],
+      "verify": {
+        "target": "browser",
+        "network": "none",
+        "timeout_sec": 90,
+        "commands": [
+          "cp /verify/oracle/oracle_wasm_check.mjs /verify/oracle/check_wasm_imports.py .",
+          "python3 check_wasm_imports.py",
+          "TITAN_BUILD_PROFILE=validation titanc -q --target browser --tree . -I . --c-source crc_wasm.c -o build_browser --exe build_browser/crc_app.mjs crc_app",
+          "\"$(titanc --print-root)/lib/titan-browser/0.6/titan-browser-run\" --root . --imports wasm_imports.mjs build_browser/crc_app.mjs",
+          "\"$(titanc --print-root)/lib/titan-browser/0.6/titan-browser-run\" --js-test --root . oracle_wasm_check.mjs"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ffi05-a1-wasm-imports-factory-and-ctx-contract",
+          "concept_ids": [
+            "titan-ffi:inv-6-conditional-reference-reads",
+            "titan-ffi/references/browser-wasm-c-imports:c-imports-and-create-imports",
+            "titan-ffi/references/browser-wasm-c-imports:host-lifecycle-and-wasm32-abi"
+          ],
+          "critical": "standard",
+          "check": "`wasm_imports.mjs` exports a synchronous factory returning plain objects (`{ env: { host_feed_chunks, host_report_crc } }`) without reserved overrides (`wasi_snapshot_preview1`, `titan_browser_*`, `titan_mco_*`), invokes C callbacks via `ctx.table.get(fnPtr)`, reads strings via `ctx.readCString`, and never wraps sync callbacks in `WebAssembly.Suspending`."
+        },
+        {
+          "id": "ffi05-a2-pin-rooting-and-call-sync-cleanup",
+          "concept_ids": [
+            "titan-ffi/references/browser-wasm-c-imports:sync-c-callbacks-pin-and-call-sync",
+            "titan-ffi:inv-3-no-closures-as-c-callbacks"
+          ],
+          "critical": "standard",
+          "check": "`crc_app.titan` roots both `BrowserPin` and `owned *titan_browser_identity` in a long-lived owner before passing the pointer to C and unregisters/closes via `defer`; `crc_wasm.c` zero-initializes `titan_browser_sync_result`, invokes `titan_browser_call_sync`, and `free`s `message`, `trace`, and `STRING`/`BYTES` `value.bytes` on all status codes."
+        },
+        {
+          "id": "ffi05-a3-wasm-eh-longjmp-survival",
+          "concept_ids": [
+            "titan-ffi/references/browser-wasm-c-imports:wasm-eh-longjmp-and-build-contract"
+          ],
+          "critical": "standard",
+          "check": "Links `--c-source crc_wasm.c` cleanly under `--target browser` Wasm-EH, survives Titan `raise`/`catch`/`defer` and `TITAN_BROWSER_TITAN_ERROR` inside `titan_browser_call_sync` on empty chunks without poisoning the instance, and produces the exact combined IEEE CRC-32."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-ffi` (`inv-3`, `inv-6`), `titan-ffi/references/browser-wasm-c-imports.md` (`wasm-eh-longjmp-and-build-contract`, `c-imports-and-create-imports`, `sync-c-callbacks-pin-and-call-sync`, `host-lifecycle-and-wasm32-abi`). Score `idiom_score = 3` only if `check_wasm_imports.py`, direct `titan-browser-run --imports`, and `titan-browser-run --js-test oracle_wasm_check.mjs` all exit `0` and `ffi05-a1..a3` hold; cap at `<= 1` if `wasm_imports.mjs` overrides reserved symbols or uses `WebAssembly.Suspending` on sync callbacks, if `crc_app.titan` fails to root both `BrowserPin` and `owned *titan_browser_identity` or omits `defer pin:close()`, or if `crc_wasm.c` leaks `titan_browser_sync_result` buffers or aborts on `TITAN_BROWSER_TITAN_ERROR`."
+    }
+  ]
+}

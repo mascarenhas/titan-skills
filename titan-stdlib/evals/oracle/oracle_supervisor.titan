@@ -1,0 +1,112 @@
+local async = import "async"
+local os = import "os"
+local strings = import "string"
+local supervisor = import "supervisor"
+
+local function send_self_usr1()
+  local pid_str = strings.format("%d", os.pid())
+  local p = os.spawn("/bin/sh", { "-c", "kill -USR1 " .. pid_str }, os.with_parent_stdin)
+  local so, se = p.stdout, p.stderr
+  defer so:close()
+  defer se:close()
+  local t1 = async.run(function (): string
+    local w = strings.writer(); defer w:close()
+    for c in so:read do w:write(c) end
+    return w:drain()
+  end)
+  local t2 = async.run(function (): string
+    local w = strings.writer(); defer w:close()
+    for c in se:read do w:write(c) end
+    return w:drain()
+  end)
+  async.all_two(t1, t2)
+  local st = p:wait()
+  if st.code ~= 0 then raise "kill -USR1 failed" end
+end
+
+function main(args: {string}): integer
+  -- 1. Direct spawn with stdin + >64KiB concurrent stdout & stderr + child env override
+  local script =
+    "read line; "
+    .. "echo \"ENV=$SUP_TEST_KEY LINE=$line\"; "
+    .. "printf '%090000d\\n' 1; "
+    .. "printf '%090000d\\n' 2 >&2"
+  local res = supervisor.run_direct(
+    "/bin/sh", { "-c", script }, "hello-pipe\n", "SUP_TEST_KEY", "ok42")
+  if res.exit_code ~= 0 or res.signal ~= nil then
+    raise "run_direct non-zero exit"
+  end
+  local f1?, _? = strings.find(res.stdout, "ENV=ok42 LINE=hello-pipe\n")
+  if f1 == nil or #res.stdout < 90000 or #res.stderr < 90000 then
+    raise "run_direct concurrent pipe capture mismatch"
+  end
+  if res.cpu_seconds < 0.0 or res.wall_seconds < 0.0 or res.utc_year < 2020
+     or res.utc_month < 1 or res.utc_month > 12 or res.utc_day < 1 or res.utc_day > 31 then
+    raise "run_direct clock/calendar telemetry invalid"
+  end
+  -- Parent environment must NOT be polluted by child with_env
+  if os.getenv("SUP_TEST_KEY") ~= nil then
+    raise "with_env polluted parent environment"
+  end
+
+  -- 2. Non-zero exit without stdin input
+  local res_fail = supervisor.run_direct("/bin/sh", { "-c", "exit 7" }, nil, nil, nil)
+  if res_fail.exit_code ~= 7 or res_fail.signal ~= nil then
+    raise "expected exit code 7"
+  end
+
+  -- 3. Shell popen merges stdout + stderr
+  local sh_code, sh_out = supervisor.run_shell("echo alpha_out; echo beta_err >&2")
+  local fa?, _? = strings.find(sh_out, "alpha_out")
+  local fb?, _? = strings.find(sh_out, "beta_err")
+  if sh_code ~= 0 or fa == nil or fb == nil then
+    raise "run_shell merged output mismatch"
+  end
+
+  -- 4. Timeout supervision: fast child completes, slow child gets killed ("term") and reaped
+  local t_fast, c_fast, sig_fast? = supervisor.run_with_timeout("/bin/true", {}, 2000)
+  if t_fast or c_fast ~= 0 or sig_fast ~= nil then
+    raise "fast run_with_timeout mismatch"
+  end
+
+  local t_slow, _, sig_slow? = supervisor.run_with_timeout("/bin/sleep", { "5" }, 80)
+  if not t_slow or sig_slow ~= "term" then
+    raise "slow run_with_timeout must time out and terminate child with term"
+  end
+
+  -- 5. Env empty string vs nil distinction
+  os.setenv("SUP_EMPTY_VAR", "")
+  defer os.unsetenv("SUP_EMPTY_VAR")
+  os.unsetenv("SUP_ABSENT_VAR")
+  if supervisor.read_env_or("SUP_EMPTY_VAR", "fallback") ~= "" then
+    raise "read_env_or must preserve empty string"
+  end
+  if supervisor.read_env_or("SUP_ABSENT_VAR", "fallback") ~= "fallback" then
+    raise "read_env_or must return fallback on nil"
+  end
+
+  -- 6. Calendar os.Date ("!*t"), strftime, os.time, os.difftime
+  local epoch, iso = supervisor.utc_calendar(0)
+  if epoch.year ~= 1970 or epoch.month ~= 1 or epoch.day ~= 1
+     or epoch.wday ~= 5 or epoch.yday ~= 1 or iso ~= "1970-01-01T00:00:00Z" then
+    raise "utc_calendar(0) mismatch"
+  end
+  local diff = supervisor.timestamp_diff_seconds(2026, 7, 31, 12, 2026, 7, 31, 13)
+  if diff ~= 3600.0 then
+    raise "timestamp_diff_seconds expected 3600.0, got " .. diff
+  end
+
+  -- 7. One-shot signal waiting + rejection of "kill"
+  local got_sig = supervisor.await_signal_and_cleanup("usr1", send_self_usr1)
+  if got_sig ~= "usr1" then raise "expected usr1, got " .. got_sig end
+
+  local kill_rejected = false
+  do
+    supervisor.await_signal_and_cleanup("kill", function () end)
+  catch
+    kill_rejected = true
+  end
+  if not kill_rejected then raise "wait_signal('kill') must raise" end
+
+  return 0
+end

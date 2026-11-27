@@ -1,0 +1,80 @@
+local hp = import "hashpool"
+local strings = import "string"
+
+local function fail(msg: string)
+  raise "oracle_hashpool: " .. msg
+end
+
+local function ref_fnv1a(chunks: {string}, salt: integer): integer
+  local h = salt & 0xffffffff
+  for i = 1, #chunks do
+    if i > 1 then
+      h = ((h ~ 0xff) * 16777619) & 0xffffffff
+    end
+    local c = chunks[i]
+    for j = 1, #c do
+      local b = strings.byte(c, j)
+      h = ((h ~ b) * 16777619) & 0xffffffff
+    end
+  end
+  return h
+end
+
+function main(args: {string}): integer
+  -- 1. Invalid workers count rejected
+  local bad_workers = false
+  do
+    hp.hash_batch({}, 0, 1)
+  catch
+    bad_workers = true
+  end
+  if not bad_workers then fail("workers=0 should raise") end
+
+  -- 2. Empty batch
+  local empty_out = hp.hash_batch({}, 2, 12345)
+  if #empty_out ~= 0 then fail("empty batch should return empty array") end
+
+  -- 3. Multi-worker batch hash with deterministic FNV-1a and closure-snapshot salt isolation
+  local inputs: {hp.HashInput} = {}
+  for i = 1, 12 do
+    inputs[#inputs + 1] = hp.HashInput(i, { "item-" .. i, "payload\0" .. (i * 7), "tail" })
+  end
+  local seed = 0x811c9dc5
+  local results = hp.hash_batch(inputs, 4, seed)
+  if #results ~= #inputs then fail("result count mismatch: " .. #results) end
+  for i = 1, #inputs do
+    local r = results[i]
+    local want = ref_fnv1a(inputs[i].chunks, seed)
+    if r.id ~= i then fail("unsorted id at " .. i .. ": got " .. r.id) end
+    if r.salt_used ~= seed then
+      fail("closure snapshot violated! worker saw salt=" .. r.salt_used .. " want=" .. seed)
+    end
+    if r.digest ~= want then
+      fail("digest mismatch for id " .. i .. ": got " .. r.digest .. " want " .. want)
+    end
+    if hp.fnv1a_chunks(inputs[i].chunks, seed) ~= want then
+      fail("direct fnv1a_chunks mismatch for id " .. i)
+    end
+  end
+
+  -- 4. Transfer rules: closure snapshot, top-level Array rejection, standalone endpoint rejection
+  local snap = hp.verify_transfer_rules(7)
+  if snap.worker_value ~= 17 or snap.caller_value ~= 1007 then
+    fail("snapshot values mismatch: w=" .. snap.worker_value .. " c=" .. snap.caller_value)
+  end
+  if not snap.direct_array_rejected then fail("top-level Array should be rejected by TransferValue") end
+  if not snap.standalone_endpoint_rejected then fail("standalone endpoint should be rejected outside packet scope") end
+
+  -- 5. Channel semantics: Sender:close preserves buffer, try_send full false, Receiver:close discards, nil payloads
+  local ch = hp.verify_channel_semantics()
+  if #ch.sender_close_preserved ~= 2 or ch.sender_close_preserved[1] ~= 101 or ch.sender_close_preserved[2] ~= 202 then
+    fail("sender_close_preserved mismatch")
+  end
+  if not ch.try_send_full_false then fail("try_send_full_false was false") end
+  if not ch.receiver_close_discarded then fail("receiver_close_discarded was false") end
+  if ch.nil_items_received ~= 2 or ch.non_nil_sum ~= 30 then
+    fail("nil incoming mismatch: nils=" .. ch.nil_items_received .. " sum=" .. ch.non_nil_sum)
+  end
+
+  return 0
+end

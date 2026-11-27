@@ -1,0 +1,46 @@
+diff --git a/titan-compiler/checker.lua b/titan-compiler/checker.lua
+index 1a2b3c4..5d6e7f8 100644
+--- a/titan-compiler/checker.lua
++++ b/titan-compiler/checker.lua
+@@ -412,7 +412,7 @@ function checker:check_method_call(node)
+   if not method then
+-    self:type_error(node, "unknown method '%s'", node.method)
++    self:type_error(node, "type '%s' has no method '%s'", receiver_name, node.method)
+   end
+ end
+diff --git a/spec/checker/method_call_spec.lua b/spec/checker/method_call_spec.lua
+new file mode 100644
+--- /dev/null
++++ b/spec/checker/method_call_spec.lua
+@@ -0,0 +1,14 @@
++local helpers = require "spec.support.helpers"
++describe("method call diagnostics", function()
++  it("includes receiver type name in unknown method error", function()
++    local _, errs = helpers.run_checker("record R end\nfunction f(r: R) r:missing() end")
++    assert.truthy(errs:match("type 'R' has no method 'missing'"))
++  end)
++end)
+diff --git a/titan/url.titan b/titan/url.titan
+index 2b3c4d5..6e7f8a9 100644
+--- a/titan/url.titan
++++ b/titan/url.titan
+@@ -118,6 +118,9 @@ function parse(raw: string): (URL?, Error?)
+   if has_whitespace(raw) then
+     return nil, Error("whitespace in URL")
+   end
++  if has_control_char(raw) then
++    return nil, Error("control character in URL")
++  end
+   return parse_normalized(raw)
+end
+diff --git a/titan/os.browser.titan b/titan/os.browser.titan
+index 3c4d5e6..7f8a9b0 100644
+--- a/titan/os.browser.titan
++++ b/titan/os.browser.titan
+@@ -44,6 +44,7 @@ function setenv(name: string, value: string)
+   if name == "" then
+     raise "os.setenv: empty environment variable name"
+   end
++  validate_browser_env_name(name)
+   set_instance_env(name, value)
+ end

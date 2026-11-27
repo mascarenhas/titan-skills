@@ -1,0 +1,94 @@
+local async = import "async"
+local timer = import "timer"
+
+-- Mutant 1: broken upper capacity clamp, LIFO dequeue, and silent empty enqueue.
+local function normalize_capacity(cap: integer): integer
+  if cap < 1 then
+    return 1
+  end
+  return cap
+end
+
+record JobQueue
+  local const max_size: integer
+  local const items: {string}
+  local head: integer
+  local tail: integer
+  local closed: boolean
+end
+
+function open(capacity: integer): JobQueue
+  return JobQueue(normalize_capacity(capacity), {}, 1, 0, false)
+end
+
+function JobQueue:capacity(): integer
+  return self.max_size
+end
+
+function JobQueue:len(): integer
+  return self.tail - self.head + 1
+end
+
+function JobQueue:is_closed(): boolean
+  return self.closed
+end
+
+function JobQueue:enqueue(item: string): boolean
+  if self.closed or self:len() >= self.max_size then
+    return false
+  end
+  self.tail = self.tail + 1
+  self.items[self.tail] = item
+  return true
+end
+
+function JobQueue:dequeue(): string?
+  if self:len() <= 0 then
+    return nil
+  end
+  -- Bug: pops from tail (LIFO) instead of head (FIFO)
+  local value? = self.items[self.tail]
+  self.items[self.tail] = nil
+  self.tail = self.tail - 1
+  return value
+end
+
+function JobQueue:close()
+  self.closed = true
+end
+
+function drain_async(items: {string}, delay_ms: integer): {string}
+  if delay_ms < 0 then
+    raise "negative delay"
+  end
+  local cap = #items + 1
+  local send, receive, close_ch = async.channel<|string?|>(cap)
+  defer close_ch()
+  local producer = async.run(function(): integer
+    for i = 1, #items do
+      if delay_ms > 0 then
+        timer.sleep(delay_ms)
+      end
+      local item? = items[i]
+      if item ~= nil then
+        send(item)
+      end
+    end
+    send(nil)
+    return #items
+  end)
+  local out: {string} = {}
+  while true do
+    local msg? = receive()
+    if msg == nil then
+      break
+    end
+    out[#out + 1] = msg
+  end
+  local st = async.join(producer)
+  local ok, _ = st:has_succeeded()
+  if not ok then
+    raise "producer failed"
+  end
+  return out
+end

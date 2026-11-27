@@ -1,0 +1,162 @@
+local async = import "async"
+local fs = import "fs"
+local gc = import "gc"
+local journal = import "journal"
+local os = import "os"
+local path = import "path"
+local strings = import "string"
+
+local function run_cmd(prog: string, args: {string})
+  local p = os.spawn(prog, args, os.with_parent_stdin)
+  local so, se = p.stdout, p.stderr
+  defer so:close()
+  defer se:close()
+  local o_task = async.run(function (): string
+    local w = strings.writer()
+    defer w:close()
+    for c in so:read do w:write(c) end
+    return w:drain()
+  end)
+  local e_task = async.run(function (): string
+    local w = strings.writer()
+    defer w:close()
+    for c in se:read do w:write(c) end
+    return w:drain()
+  end)
+  async.all_two(o_task, e_task)
+  local st = p:wait()
+  if st.code ~= 0 then
+    raise "helper command failed: " .. prog
+  end
+end
+
+function main(args: {string}): integer
+  -- 1. Pure lexical path checks
+  local p1 = journal.inspect_path("a//b/../c.tar.gz")
+  if p1.normalized ~= "a/c.tar.gz"
+     or p1.dir ~= "a"
+     or p1.base ~= "c.tar.gz"
+     or p1.ext ~= ".gz"
+     or p1.slash_path ~= "a/c.tar.gz"
+     or p1.is_abs
+     or p1.sep ~= "/" then
+    raise "inspect_path relative mismatch"
+  end
+
+  local p2 = journal.inspect_path("/var/log/")
+  if p2.normalized ~= "/var/log" or p2.dir ~= "/var" or p2.base ~= "log"
+     or p2.ext ~= "" or not p2.is_abs then
+    raise "inspect_path absolute mismatch"
+  end
+
+  local p3 = journal.inspect_path("")
+  if p3.normalized ~= "." or p3.dir ~= "." or p3.base ~= "." or p3.ext ~= "." or p3.is_abs then
+    raise "inspect_path empty mismatch"
+  end
+
+  local joined = journal.journal_path("work", "/logs", "events.jlog")
+  if joined ~= "work/logs/events.jlog" then
+    raise "journal_path prefix lost: " .. joined
+  end
+
+  -- 2. Disposable temp directory setup
+  local seed = fs.tmpname()
+  fs.unlink(seed)
+  local work_dir = seed .. "_jdir"
+  fs.mkdir(work_dir)
+  defer do
+    local items = fs.list(work_dir)
+    for i = 1, #items do
+      local item? = items[i]
+      if item ~= nil then
+        do fs.unlink(path.join(work_dir, item)) catch end
+      end
+    end
+    do fs.rmdir(work_dir) catch end
+  end
+
+  local jpath = path.join(work_dir, "audit.jlog")
+
+  -- 3. Missing journal behavior
+  local empty_entries = journal.read_entries(jpath)
+  if #empty_entries ~= 0 then raise "expected empty entries for missing journal" end
+  if journal.compact_journal(jpath, 1) ~= 0 then raise "expected 0 compacted for missing journal" end
+
+  -- 4. Append + read + invalid seq error unwind
+  journal.append_record(jpath, 1, "boot")
+  journal.append_record(jpath, 2, "ready")
+  journal.append_record(jpath, 3, "serve")
+  journal.append_record(jpath, 4, "flush")
+
+  local rejected_bad_seq = false
+  do
+    journal.append_record(jpath, 0, "bad")
+  catch
+    rejected_bad_seq = true
+  end
+  if not rejected_bad_seq then raise "seq <= 0 should raise" end
+
+  local entries = journal.read_entries(jpath)
+  if #entries ~= 4 then raise "expected 4 entries, got " .. #entries end
+  if entries[1].seq ~= 1 or entries[1].payload ~= "boot"
+     or entries[2].seq ~= 2 or entries[2].payload ~= "ready"
+     or entries[3].seq ~= 3 or entries[3].payload ~= "serve"
+     or entries[4].seq ~= 4 or entries[4].payload ~= "flush" then
+    raise "entries mismatch after append"
+  end
+
+  -- 5. Compaction retains seq >= min_seq and leaves no staging temp file
+  local retained = journal.compact_journal(jpath, 3)
+  if retained ~= 2 then raise "expected 2 retained entries, got " .. retained end
+  local after = journal.read_entries(jpath)
+  if #after ~= 2 or after[1].seq ~= 3 or after[1].payload ~= "serve"
+     or after[2].seq ~= 4 or after[2].payload ~= "flush" then
+    raise "compacted entries mismatch"
+  end
+  local listed = fs.list(work_dir)
+  if #listed ~= 1 or listed[1] ~= "audit.jlog" then
+    raise "unexpected staging files left in work_dir"
+  end
+
+  -- 6. stat vs lstat including dangling symlink
+  local k_file? = journal.stat_kind(jpath)
+  local lk_file? = journal.lstat_kind(jpath)
+  if k_file ~= "file" or lk_file ~= "file" then raise "regular file stat/lstat mismatch" end
+
+  local missing_path = path.join(work_dir, "does_not_exist")
+  if journal.stat_kind(missing_path) ~= nil or journal.lstat_kind(missing_path) ~= nil then
+    raise "missing path must return nil"
+  end
+
+  local link_path = path.join(work_dir, "dangling.lnk")
+  run_cmd("/bin/ln", { "-s", missing_path, link_path })
+  defer do fs.unlink(link_path) catch end
+  if journal.stat_kind(link_path) ~= nil then raise "dangling symlink stat_kind must be nil" end
+  local lk_sym? = journal.lstat_kind(link_path)
+  if lk_sym ~= "symlink" then raise "dangling symlink lstat_kind must be symlink" end
+
+  -- 7. Directory watcher observes canonical path event and cleans up
+  local canonical_dir = fs.realpath(work_dir)
+  local poke_path = path.join(work_dir, "poke.txt")
+  local evs = journal.watch_once(work_dir, function ()
+    fs.write_file(poke_path, "ping")
+  end)
+  defer do fs.unlink(poke_path) catch end
+  if #evs == 0 then raise "watch_once returned no events" end
+  local saw_canonical = false
+  for i = 1, #evs do
+    local ev? = evs[i]
+    if ev ~= nil then
+      local f?, _? = strings.find(ev, canonical_dir)
+      if f ~= nil then saw_canonical = true end
+    end
+  end
+  if not saw_canonical then
+    raise "watch_once events did not carry canonical absolute path"
+  end
+
+  -- 8. Trigger GC cycles to expose any illegal async File:close() finalizer
+  gc.collect()
+  gc.collect()
+  return 0
+end

@@ -1,0 +1,134 @@
+local async = import "async"
+local http = import "http"
+local str = import "string"
+local websocket = import "websocket"
+local ws_stream = import "ws_stream"
+
+local function fail(msg: string)
+  raise "oracle_ws_loopback failed: " .. msg
+end
+
+local function check(cond: boolean, msg: string)
+  if not cond then fail(msg) end
+end
+
+function main(args: {string}): integer
+  defer http.close_idle_connections()
+  -- 1. Start stream server with an explicit allowed Origin policy.
+  local srv = ws_stream.start_stream_server("https://app.example")
+  defer srv:stop()
+  local port = srv:port()
+  check(port > 0, "ephemeral port must be > 0")
+  local base_http = "http://127.0.0.1:" .. port
+  local base_ws = "ws://127.0.0.1:" .. port
+
+  -- 2. Verify pre-accept HTTP route (404) and auth (401) checks.
+  do
+    local r404 = http.get(base_http .. "/unknown")
+    defer r404:close()
+    check(r404.status == 404, "expected 404 for unknown route, got " .. r404.status)
+  end
+
+  do
+    local r401 = http.get(base_http .. "/stream")
+    defer r401:close()
+    check(r401.status == 401, "expected 401 when X-Auth-Token is missing, got " .. r401.status)
+  end
+
+  do
+    local bad_auth = http.headers()
+    bad_auth:set("X-Auth-Token", "wrong-token")
+    local r401b = http.get(base_http .. "/stream", http.RequestOptions { headers = bad_auth })
+    defer r401b:close()
+    check(r401b.status == 401, "expected 401 when X-Auth-Token is wrong, got " .. r401b.status)
+  end
+
+  -- 3. Verify Origin rejection (403 HandshakeError) inside websocket.accept.
+  do
+    local denied = false
+    local denied_status: integer? = nil
+    local h = http.headers()
+    h:set("X-Auth-Token", "secret-token")
+    h:set("Origin", "https://evil.example")
+    do
+      local c = websocket.connect(base_ws .. "/stream", websocket.DialOptions {
+        headers = h,
+        subprotocols = {"stream.v1"},
+      })
+      c:close()
+    catch
+      if error is websocket.HandshakeError then
+        denied = true
+        denied_status = (error as websocket.HandshakeError).status
+      else
+        raise
+      end
+    end
+    check(denied and denied_status == 403, "expected 403 HandshakeError for disallowed Origin")
+  end
+
+  -- 4. Full round-trip exchange: server-priority case-sensitive subprotocol ("stream.v2"),
+  --    text, empty text "", NUL-bearing binary, >16 KiB fragmented payload, concurrent Ping/Pong,
+  --    and clean Close handshake.
+  local large = str.rep("Z", 40000)
+  local report = ws_stream.run_client_exchange(
+    base_ws .. "/stream",
+    "secret-token",
+    "https://app.example",
+    large
+  )
+  check(report.subprotocol == "stream.v2",
+    "expected server-priority subprotocol 'stream.v2', got " .. (report.subprotocol or "nil"))
+  check(report.text_echo == "hello-ws", "unexpected text_echo: " .. report.text_echo)
+  check(report.empty_echo == "", "empty text message must round-trip as empty string")
+  check(report.binary_echo == "a\0b\0c" and #report.binary_echo == 5,
+    "binary message must preserve interior NUL bytes")
+  check(report.large_len == 40000,
+    "expected 40000-byte fragmented echo, got " .. report.large_len)
+  check(report.ping_ok, "expected Ping/Pong with active reader Task to succeed")
+  check(report.clean_eof, "expected clean (nil, nil) EOF after reciprocal Close")
+  check(report.close_code == 1000, "expected close_code 1000")
+
+  -- 5. Verify closing the HTTP server does NOT close already-upgraded WebSocket sessions.
+  do
+    local h = http.headers()
+    h:set("X-Auth-Token", "secret-token")
+    h:set("Origin", "https://app.example")
+    local live = websocket.connect(base_ws .. "/stream", websocket.DialOptions {
+      headers = h,
+      subprotocols = {"stream.v1"},
+    })
+    defer live:close()
+    check(live:subprotocol() == "stream.v1", "expected stream.v1 on live session")
+
+    -- Stop HTTP listener while upgraded session remains open.
+    srv:stop()
+
+    live:write(websocket.TEXT, "survives-server-stop")
+    local kind?, msg? = live:read()
+    check(kind ~= nil and msg == "survives-server-stop",
+      "upgraded WebSocket session must survive http.Server:close()")
+    case kind
+    when text() then
+    when binary() then fail("expected text reply after server stop")
+    end
+    live:shutdown(1000, "after-stop", 2000)
+    local ccode?, _ = live:close_status()
+    check(ccode == 1000, "expected clean 1000 close after server stop")
+  end
+
+  -- 6. Verify abnormal transport loss on /abrupt raises Error("abnormal", ...)
+  --    with close_status() == (nil, nil) (never synthetic 1006).
+  do
+    local srv2 = ws_stream.start_stream_server(nil)
+    defer srv2:stop()
+    local url_abrupt = "ws://127.0.0.1:" .. srv2:port() .. "/abrupt"
+    local ab = ws_stream.probe_abnormal_close(url_abrupt)
+    check(ab.error_kind == "abnormal",
+      "expected error_kind 'abnormal', got " .. ab.error_kind)
+    check(ab.close_code == nil and ab.close_reason == nil,
+      "abnormal transport loss must leave close_status() at (nil, nil), never synthetic 1006")
+  end
+
+  return 0
+end

@@ -1,0 +1,126 @@
+{
+  "skill_name": "titan-reflect",
+  "evals": [
+    {
+      "id": "reflect-01-nominal-descriptors-dynamic-access",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-reflect"],
+      "candidate_expected_skills": ["titan-programmer", "titan-reflect"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-json", "titan-completion"],
+      "prompt": "Implement a structural runtime-audit, redaction, and dynamic-construction library in `audit_reflect.titan` (logical module `audit_reflect`) using Titan's standard `reflect` module.\n\nExport the following public functions:\n- `function exact_tag(v: value): string`: inspects `v` via `reflect.inspect(v)` (preserving exact runtime tags such as `3` -> `\"integer\"` vs `3.0` -> `\"float\"`) and returns one of the 19 canonical tag strings: `\"nil\"`, `\"integer\"`, `\"float\"`, `\"boolean\"`, `\"string\"`, `\"array\"`, `\"const_array\"`, `\"map\"`, `\"record\"`, `\"union\"`, `\"interface\"`, `\"titan_function\"`, `\"lua_function\"`, `\"lua_c_function\"`, `\"owned_foreign_pointer\"`, `\"owned_foreign_array\"`, `\"lua_userdata\"`, `\"lua_thread\"`, or `\"raw_pointer\"`.\n- `function describe_type(t: reflect.Type): string`: inspects `t` with `case` (never `==` or Map keys) and formats:\n  - scalars: `\"nil\"`, `\"boolean\"`, `\"integer\"`, `\"float\"`, `\"string\"`, `\"value\"`\n  - `is_option(inner)`: `describe_type(inner) .. \"?\"`\n  - `is_array(constness, elem)`: `\"{\" .. elem .. \"}\"` for mutable, `\"const {\" .. elem .. \"}\"` for const, `\"const? {\" .. elem .. \"}\"` for maybe-const\n  - `is_map(k, v)`: `\"{\" .. describe_type(k) .. \": \" .. describe_type(v) .. \"}\"`\n  - `is_named(nt)`: `\"named:\" .. nt.name`\n  - `is_record(r)` / `is_union(u)` / `is_interface(i)`: `\"record:\" .. r.name`, `\"union:\" .. u.name`, `\"interface:\" .. i.name`\n  - `is_function(ft)`: `\"function(\" .. #ft.param_descriptors .. \")->\" .. #ft.return_descriptors`\n  - any foreign/C variant: `\"foreign\"`.\n- `function resolve_nominal_kind(fqtn: string): string`: queries initialized modules via `reflect.find_nominal(fqtn)` (preserving `nil`) and returns `\"missing\"`, `\"record\"`, `\"union\"`, or `\"interface\"`.\n- `function inspect_erased_field(v: value, field_name: string): (string, string, string?)`: inspects record `v`, finds public field `field_name` in `rec.type.fields[1..rec.n_fields]` (raising if `v` is not a record or the field is missing), and returns `(rec.type.name, describe_type(field.type), resolved_kind?)`. When `field.type` is `is_named(nt)`, resolve it one step (`nt:resolve()`) and set `resolved_kind?` to `\"record\"`, `\"union\"`, `\"interface\"`, or `\"value\"`; otherwise `nil`.\n- `function redact_string_fields(target: value, keys: const? {string}, replacement: string): integer`: inspects record `target` (raising if not a record), iterates 1-based public ordinals `1..rec.n_fields` (never 0-based `FieldType.index`), and for every public field whose name appears in `keys`, is **not** `const`, and currently holds a `string` value (checked on `rec:get(i)`), replaces it via `rec:set(i, replacement)`. Returns the count of mutated fields.\n- `function can_direct_construct(v: value): boolean`: inspects `v`; returns `true` for `is_record(rv)` only when **both** `rv.type.is_public` and `rv.type.all_public` are `true` (and similarly for `is_union(uv)`), returning `false` otherwise.\n- `function construct_record_smart(fqtn: string, args: const {value}): value`: looks up `fqtn` via `reflect.find_nominal(fqtn)` (raising if missing or not a record). If `rt.is_public and rt.all_public`, constructs directly via `rt:construct(args)` (initializing `const` fields directly without calling `new`). Otherwise obtains `rt:public_constructor()` (raising if `nil`) and invokes `ctor.callable(...args)` returning the constructed record.\n- `function describe_union_value(v: value): (string, integer, string?, integer)`: inspects union `v` (raising otherwise), matches `uv.tag` against `uv.type.variants` by `variant.tag` (not list position assumption), and returns `(uv.type.name, uv.tag, matched_variant_name?, uv.n_parts)`—returning `nil` for the name when an active `local` variant arm is held without crashing.\n- `function construct_public_variant(fqtn: string, variant_name: string, parts: const {value}): value`: looks up public union `fqtn`, finds the public variant with matching `name`, and constructs it via `ut:construct(variant.tag, parts)`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_reflect_audit.titan"
+      ],
+      "expected_outputs": [
+        "audit_reflect.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_reflect_audit.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_reflect_audit oracle_reflect_audit",
+          "./oracle_reflect_audit"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "refl01-a1-exact-tags-and-1based-ordinals",
+          "concept_ids": [
+            "titan-reflect:inv-1-exact-runtime-tags-inspect",
+            "titan-reflect:inv-2-1based-public-ordinals",
+            "titan-reflect:value-type-quick-map"
+          ],
+          "critical": "standard",
+          "check": "Uses `reflect.inspect(v)` preserving exact runtime tags (`3` -> `integer` vs `3.0` -> `float`), and indexes `RecordValue:get`/`set` strictly by 1-based public ordinal `1..rec.n_fields` (never 0-based `FieldType.index`), skipping `const` fields safely."
+        },
+        {
+          "id": "refl01-a2-nominal-lookup-case-type-and-erased-generics",
+          "concept_ids": [
+            "titan-reflect:inv-4-initialized-modules-no-type-eq",
+            "titan-reflect:inv-5-erased-generic-descriptors",
+            "titan-reflect:value-type-quick-map"
+          ],
+          "critical": "standard",
+          "check": "Preserves `nil` on `reflect.find_nominal(fqtn)` (`local found?`), inspects `reflect.Type` exclusively via `case` (never `==`/Map keys), and handles erased generic descriptors (`T`/`T?` -> `is_value`, constrained `T: I` -> `is_named` resolving to `is_interface`)."
+        },
+        {
+          "id": "refl01-a3-public-constructor-direct-construct-and-union-tags",
+          "concept_ids": [
+            "titan-reflect:inv-3-dense-public-union-tags-private-arms",
+            "titan-reflect:inv-6-public-constructor-vs-direct-construct",
+            "titan-reflect:field-access-native-projections-direct-construction"
+          ],
+          "critical": "standard",
+          "check": "Checks BOTH `is_public` and `all_public` before calling `RecordType:construct`, falls back to `RecordType:public_constructor()` for records with `local` fields, matches `UnionValue.tag` via `VariantType.tag`, and handles active `local` union arms cleanly."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-reflect` (`inv-1..inv-6`, `value-type-quick-map`, `field-access-native-projections-direct-construction`). Score `idiom_score = 3` only if `./oracle_reflect_audit` exits `0` and all three `refl01-a1..a3` checks hold; cap at `<= 1` if `FieldType.index` is passed to `get`/`set`, `is integer` replaces `reflect.inspect`, `is_public` is ignored when `all_public == true`, `Type` values are compared with `==`, or active `local` union arms crash lookup."
+    },
+    {
+      "id": "reflect-02-callable-invocation-and-interface-views",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-reflect"],
+      "candidate_expected_skills": ["titan-programmer", "titan-reflect"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-ffi"],
+      "forbidden_skills": ["titan-completion", "titan-websocket"],
+      "prompt": "Implement a dynamic callable-invocation, Interface-view inspection, and native-projection library in `invoke_reflect.titan` (logical module `invoke_reflect`) using Titan's standard `reflect` and `string` modules.\n\nExport the following public types and functions:\n- `record FunctionSummary` with `const kind: string`, `const param_count: integer`, `const is_vararg: boolean`, `const return_count: integer`, and `const has_flexret: boolean`.\n- `function inspect_callable(fn: value): FunctionSummary`: inspects `fn` via `reflect.inspect(fn)` (aliasing reserved keyword `type` in `case` patterns such as `when is_titan_function { signature = type }`) and returns:\n  - for Titan functions: `FunctionSummary(\"titan\", #sig.param_descriptors, sig.vararg_descriptor ~= nil, #sig.return_descriptors, sig.flexret_descriptor ~= nil)`\n  - for Lua functions: `FunctionSummary(\"lua\", meta.n_params, meta.is_vararg, 0, true)`\n  - for Lua C functions: `FunctionSummary(\"lua_c\", 0, true, 0, true)`\n  - raises on non-callables.\n- `function invoke_method(receiver: value, method_name: string, ...: value): (...: value)`: inspects `receiver` (`is_record`, `is_union`, or `is_interface`), searches the descriptor's public `methods` for `method_name` (raising if absent—enforcing that `local` methods are hidden), and invokes `m.callable(recv, ...)` passing `rv.value` / `uv.value` / `iv.value` (the Interface wrapper itself for Interfaces, not `iv.wrapped`) as the first argument followed by `...`.\n- `function list_member_names(v: value): ({string}, {string})`: inspects `v` (`is_record`, `is_union`, or `is_interface`) and returns `(public_field_names, public_method_names)` in exact descriptor order (preserving record/union name-sorted methods and Interface declaration-order methods, omitting `local` fields/methods; unions return `{}` for fields).\n- `function inspect_interface_view(iface_val: value): (string, string, {string: value})`: requires `reflect.inspect(iface_val)` to match `is_interface(iv)` (raising otherwise), reads every captured `const` field via 1-based `iv:get(i)` into `{string: value}`, separately inspects `iv.wrapped` to obtain the underlying concrete record/union nominal name, and returns `(iv.type.name, concrete_name, snapshot_fields)`.\n- `function try_set_field(target: value, field_name: string, new_val: value): (boolean, string?)`:\n  - If `target` is an `Interface`, returns `(false, \"interface fields are read-only\")`.\n  - If `target` is a `Record`, locates `field_name` in public `fields[1..rv.n_fields]`; if absent (including hidden `local` fields), returns `(false, \"field not found\")`; otherwise attempts `rv:set(i, new_val)` inside `do ... catch` using the 1-based public ordinal `i` (never `FieldType.index`), returning `(true, nil)` on success or `(false, strings.tostring(error))` on failure (rejecting `const` fields or type mismatches while leaving prior state unchanged).\n  - Otherwise returns `(false, \"not a record\")`.\n- `function project_fields(target: value): {string: value}`: inspects record `target` (raising otherwise), calls `rv:project(i)` for every 1-based public ordinal `1..rv.n_fields`, and returns a `{string: value}` map keyed by `field.name`.\n- `function root_callable(fn: value): (function(...: value): (...: value), value)`: verifies `fn` is a Titan, Lua, or Lua C function via `reflect.inspect(fn)` and returns `(callable_part, fn)` so callers retain the original `value` root alongside the dynamic callable.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_reflect_invoke.titan",
+        "evals/oracle/native_sample.h"
+      ],
+      "expected_outputs": [
+        "invoke_reflect.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_reflect_invoke.titan /verify/oracle/native_sample.h .",
+          "titanc -q --tree . -I . -o build_oracle --exe oracle_reflect_invoke oracle_reflect_invoke",
+          "./oracle_reflect_invoke"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "refl02-a1-callable-case-alias-method-dispatch-and-rooting",
+          "concept_ids": [
+            "titan-reflect:inv-7-reflected-callables-owned-c-rooting",
+            "titan-reflect:value-type-quick-map"
+          ],
+          "critical": "standard",
+          "check": "Aliases reserved `type` in `is_titan_function`/`is_lua_function` `case` arms, passes `rv.value`/`uv.value`/`iv.value` as first arg to `MethodType.callable` with forwarded `...`, preserves descriptor ordering (sorted for records/unions vs declaration order for Interfaces), and keeps original `value` rooted in `root_callable`."
+        },
+        {
+          "id": "refl02-a2-interface-views-and-local-const-enforcement",
+          "concept_ids": [
+            "titan-reflect:inv-2-1based-public-ordinals",
+            "titan-reflect:field-access-native-projections-direct-construction"
+          ],
+          "critical": "standard",
+          "check": "Inspects `InterfaceValue` reading captured fields via 1-based `iv:get(i)` and concrete type via `iv.wrapped`, rejects setting on Interfaces, hidden `local` fields, and `const` fields, and applies Lua-boundary conversion cleanly on mutable fields without mutating state on error."
+        },
+        {
+          "id": "refl02-a3-native-project-ordinals",
+          "concept_ids": [
+            "titan-reflect:field-access-native-projections-direct-construction",
+            "titan-reflect:inv-2-1based-public-ordinals",
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "standard",
+          "check": "Calls `RecordValue:project(i)` using 1-based public ordinals (omitting `local` fields and projecting native C integers/structs losslessly), and defaults `FunctionSummary` fields to `const`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-reflect` (`inv-2`, `inv-7`, `value-type-quick-map`, `field-access-native-projections-direct-construction`), `titan-programmer` (`inv-2`). Score `idiom_score = 3` only if `./oracle_reflect_invoke` exits `0` and all three `refl02-a1..a3` checks hold; cap at `<= 1` if `iv.wrapped` is passed to Interface `MethodType.callable` instead of `iv.value`, `FieldType.index` is used instead of 1-based ordinals, `type` keyword is not aliased in function `case` arms, `local` fields/methods leak, or `project(i)` is replaced by `get(i)`."
+    }
+  ]
+}

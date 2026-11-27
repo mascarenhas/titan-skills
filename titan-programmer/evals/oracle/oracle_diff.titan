@@ -1,0 +1,75 @@
+local diff = import "diff"
+
+function main(_args: {string}): integer
+  -- 1. Truthiness: 0 and "" are truthy; only nil and false are falsy
+  if not diff.is_present(0) then return 1 end
+  if not diff.is_present(0.0) then return 2 end
+  if not diff.is_present("") then return 3 end
+  if not diff.is_present(true) then return 4 end
+  if diff.is_present(false) then return 5 end
+  if diff.is_present(nil) then return 6 end
+
+  -- 2. Dynamic value -> integer coercion (is paired with as)
+  if diff.coerce_int_or(7, -1) ~= 7 then return 7 end
+  if diff.coerce_int_or(2.0, -1) ~= 2 then return 8 end
+  if diff.coerce_int_or(2.5, -1) ~= -1 then return 9 end
+  if diff.coerce_int_or("7", -1) ~= -1 then return 10 end
+  if diff.coerce_int_or(false, -1) ~= -1 then return 11 end
+  if diff.coerce_int_or(nil, -1) ~= -1 then return 12 end
+
+  -- 3. Number/scalar stringification without `n as string`
+  if diff.format_value(nil) ~= "nil" then return 13 end
+  if diff.format_value(true) ~= "true" then return 14 end
+  if diff.format_value(false) ~= "false" then return 15 end
+  if diff.format_value(0) ~= "0" then return 16 end
+  if diff.format_value(-42) ~= "-42" then return 17 end
+  if diff.format_value(1.5) ~= "1.5" then return 18 end
+  if diff.format_value("") ~= "" then return 19 end
+  if diff.format_value("ok") ~= "ok" then return 20 end
+  local tbl: {string: integer} = { ["a"] = 1 }
+  if diff.format_value(tbl) ~= "<other>" then return 21 end
+
+  -- 4. const? {string} input, variadic forwarding, const {string} frozen return
+  local mut_prefix: {string} = { "a", "b" }
+  local frozen1: const {string} = diff.merge_tags(mut_prefix, "c", "d")
+  if #frozen1 ~= 4 or frozen1[1] ~= "a" or frozen1[2] ~= "b" or frozen1[3] ~= "c" or frozen1[4] ~= "d" then
+    return 22
+  end
+  local frozen2: const {string} = diff.merge_tags(frozen1, "e")
+  if #frozen2 ~= 5 or frozen2[5] ~= "e" then return 23 end
+  local frozen_empty: const {string} = diff.merge_tags({}, "only")
+  if #frozen_empty ~= 1 or frozen_empty[1] ~= "only" then return 24 end
+
+  -- 5. Spread + flexible return in both finite and open sinks
+  local a?, b?, c? = diff.slice_window(frozen2, 2, 3)
+  if a ~= "b" or b ~= "c" or c ~= nil then return 25 end
+  local open_list = { "head", diff.slice_window(frozen2, 2, 4) }
+  if #open_list ~= 4 or open_list[1] ~= "head" or open_list[2] ~= "b" or open_list[4] ~= "d" then
+    return 26
+  end
+  local empty_open = { "head", diff.slice_window(frozen2, 4, 2) }
+  if #empty_open ~= 1 or empty_open[1] ~= "head" then return 27 end
+
+  -- 6. Stateful map diff handling 0, "", false vs nil absence
+  local keys: const {string} = { "keep_zero", "flag", "empty_str", "added", "removed" }
+  local old_cfg: {string: value} = {
+    ["keep_zero"] = 0,
+    ["flag"] = false,
+    ["empty_str"] = "",
+    ["removed"] = 0,
+  }
+  local new_cfg: {string: value} = {
+    ["keep_zero"] = 0,
+    ["flag"] = true,
+    ["empty_str"] = "",
+    ["added"] = false,
+  }
+  local changes: const {diff.Change}, counts: {string: integer} = diff.diff_maps(keys, old_cfg, new_cfg)
+  if #changes ~= 3 then return 28 end
+  if changes[1].key ~= "flag" or changes[1].summary ~= "false->true" then return 29 end
+  if changes[2].key ~= "added" or changes[2].summary ~= "+false" then return 30 end
+  if changes[3].key ~= "removed" or changes[3].summary ~= "-0" then return 31 end
+  if counts["added"] ~= 1 or counts["removed"] ~= 1 or counts["changed"] ~= 1 then return 32 end
+
+  return 0
+end

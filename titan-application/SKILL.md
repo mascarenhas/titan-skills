@@ -1,452 +1,156 @@
 ---
 name: titan-application
-description: Start or organize a standalone Titan application repository, including source and test layout, build artifact ownership, initial .gitignore, installed SDK use, executable delivery checks, and browser (`--target browser`) application layout and deployment. Use alongside titan-programmer for application scaffolding and build setup; compiler and standard-library development use their existing repository workflows.
+description: Use when building, organizing, or deploying standalone Titan executables or browser WebAssembly apps. Covers titanc -o/--incremental/--tree/--exe/--static, target variants, Makefiles, .gitignore, Windows payloads, and .mjs/.wasm deployment; use titan-package for LuaRocks libraries and titan-ffi for C FFI or titan.browser JS bridges.
 ---
 
-# Titan application startup
+# Titan applications: layout, native builds, and browser deployment
 
-Use this skill when creating an application from scratch or repairing its build
-and repository layout. Load [titan-programmer](../titan-programmer/SKILL.md)
-before writing or reviewing Titan source, and
-[titan-tester](../titan-tester/SKILL.md) for native Titan tests. Add the relevant
-API skills as the application needs them; this skill owns project setup, not
-language or protocol contracts.
+Scaffold, build, organize, or deploy standalone native and WebAssembly browser Titan applications. Pair with `skill://titan-programmer` for `.titan` code, `skill://titan-tester` for native tests/`--coverage`, `skill://titan-async` for Tasks/`--no-uv-bootstrap`, `skill://titan-ffi` for C helpers and `titan.browser`/`bindings.js`, and `skill://titan-protobuf` for `titan-protobuf.mjs`. Use `skill://titan-package` for reusable LuaRocks libraries.
 
-## Choose the application boundary
+## Non-negotiable invariants
 
-Use a prepared, ABI-matched Titan SDK and its Lua/native toolchain. Inspect the
-available installation and the user's deployment target before choosing build
-commands. An application consumes that installation; building a new compiler
-prefix or changing Titan itself is separate work. The compiler is a build-time
-tool, not an application runtime dependency.
+1. **Compiler-owned incremental builds & output isolation:** Always run `titanc --incremental --output <dir>` (`-o`). Never write per-module Make `.o` rules, header inventories, or compiler/SDK stamps; `titanc` tracks imports, C headers, flags, `--c-source`, and final links. Keep incompatible flags, build profiles (`TITAN_BUILD_PROFILE=production` vs `validation`), and targets (`--target browser` writes `<out>/.titan-target`) in **separate** `-o` dirs.
+2. **Output locks & reserved paths:** `titanc` serializes concurrent runs sharing `-o` (or `dirname(--exe)`) via permanent `<dir>/.titan-build.lock` on local POSIX/NTFS filesystems (network shares unsupported). Never place authored files at `<out>/.titan/`, `.native/`, `.titan-links/`, `.coverage/`, `.titan-target`, `<stem>.{c,o,priv.h,ffi.h,titan.h}`, or split `<stem>.partN.{c,o}` (`1 <= N < --c-parts`).
+3. **`--tree`, positional roots & SDK source fallback:** Positional roots and `--test-dir` resolve **only** under authored `--tree` roots (default `.`, semicolon-separated `'src;tests'`), never `<root>/lib/titan/0.6`. Ordinary `import`s fall back to read-only `<root>/lib/titan/0.6` (requiring `-o` whenever installed source is selected).
+4. **Entry point, `--exe` vs `--static`, and Windows:** Export exact `function main(args: {string}): integer` in one requested root (`args[1]` is first user arg). `--exe PATH` is relative to CWD, not `-o`. Unix `--static` embeds reached Titan `.a` archives + app-compiled source with zero `.so` fallback (rejects DSO-only providers and no-main library links; never implies system `-static`). Windows has **no** `--static`: it emits `<exe>.exe` + `<out>/lib/titan/0.6/<logical-root>.dll` on the same volume.
+5. **Browser builds & deployment:** `--target browser` requires `-o`, **`wasi-sdk` 34** (any `34.x`, LLVM 23.1), exact **Binaryen `version_133`**, Node 26+ JSPI (`TITAN_NODE`), and matching `TITAN_BUILD_PROFILE` against `make browser-sdk`. Deploy `.mjs`, `.wasm`, and `.wasm.trace` from **one** build over HTTP (`text/javascript`, `application/wasm`, CSP `script-src 'wasm-unsafe-eval'`; never `file://`) and always `await instance.dispose()`.
+6. **Delivery checks & `TITANC` hygiene:** Keep `TITANC` a single executable name/path (never flags/wrappers)—runtime SDK fallback runs `$TITANC --print-root` without a shell. Prove standalone delivery in a relocated temp dir under `env -i` with `titanc`/`lua` off `PATH`.
 
-An illustrative layout is:
+## Target and build-mode matrix
+
+| Mode | Command | Output & provider resolution |
+| --- | --- | --- |
+| Unix dynamic | `titanc --incremental -o build --exe build/app app.main` | Links source (`.a` fallback); loads `.so` via `!;!/../lib/titan/0.6`, then SDK fallback. |
+| Unix `--static` | `titanc --incremental --static -o build-s --exe build-s/app app.main` | Embeds reached Titan `.a` closure + source; rejects DSO-only providers; system libs stay dynamic. |
+| Windows native | `titanc --incremental -o build --exe build/bin/app.exe app.main` | DLL-only (MSYS2 CLANG64); emits `<exe>.exe` + `build/lib/titan/0.6/<root>.dll`. |
+| Browser Wasm | `titanc --target browser --incremental -o build-web --exe build-web/app.mjs app` | Self-contained `.mjs`, `.wasm`, `.wasm.trace`, `.wasm.map` (`--exe` must end in `.mjs`). |
+| Compile-only | `titanc -c --incremental -o build ...` | Owned `.o`/headers only; rejects `--exe`, `-l`, `-L`, `--ldflag`, `-X`, `--no-uv-bootstrap`. |
+
+## Repository layout, target variants, and `.gitignore`
 
 ```text
 project/
-  .gitignore
-  README.md
-  main.titan
-  app/
-    service.titan
-  tests/
-    service_test.titan
-  build/                 # generated sources, objects, runners, and payloads
+  .gitignore  README.md  main.titan    # function main(args: {string}): integer
+  app/service.titan                    # reusable modules
+  tests/service_test.titan             # native tests (--test-dir tests)
+  build/  build-browser/               # separate -o trees (ignored)
 ```
 
-Choose names and a build tool to fit the project. A single-module experiment
-can use `titanc` directly; a maintained application needs repeatable build and
-test commands, but does not inherently require Make or this exact tree.
+Compile logical dotted names (`main`, `app.service`), never file paths. Transitive `async` imports auto-enable Runtime bootstrap (`uv` alone does not); see `skill://titan-async` before `--no-uv-bootstrap`.
 
-The program entry point is exactly `main(args: {string}): integer`, exported
-from one selected root. Compile logical module names such as `main` or
-`tests.service_test`, without filename extensions. See the base skill's
-[compilation examples](../titan-programmer/SKILL.md#compile-with-titanc) and
-the [module manual](../../../doc/language/modules.md) for source lookup and
-entry-point semantics. Keep the entry point focused on configuration and
-resource ownership; reusable application modules can be tested separately.
-Programs that transitively import `titan.async` receive the compiler's Runtime
-bootstrap by default; importing `titan.uv` alone does not enable it. Consult
-[titan-async](../titan-async/SKILL.md) before choosing `--no-uv-bootstrap`,
-custom Runtime ownership, or shutdown behavior.
+**Target-specific source variants:** Any flat file, folder main, or contributor `name.titan` supports `name.<label>.titan` using lowercase labels `linux`, `darwin`, `windows`, `browser`, `native`:
+- Native selects `<host>` -> `native` -> default; `--target browser` selects `browser` -> default (omitting native-only files).
+- Stacked (`x.linux.native.titan`) or mis-cased (`x.Linux.titan`) names error. Folder contributors sort by logical name (label stripped); a main variant replaces the default main and its `do ... end` initializer.
+- `-T`/`--target` (overriding `TITAN_TARGET`) accepts host OS or `browser` (`native` and cross-OS error). Labels never enter generated `.c`/`.o`/executable names.
 
-## Establish output ownership before compiling
+```titan
+-- file: platform.native.titan
+function label(): string
+  return "native"
+end
 
-Always invoke `titanc --incremental --output build` for the application and
-its `--test` build. Titan owns the source import graph, dependency-order
-scheduling, object certification, and final-link reuse; a build tool that skips
-the invocation cannot detect changes through the compiler. Do not maintain
-per-module `.o` rules, import/header inventories, or compiler/SDK/configuration
-stamps to decide whether Titan needs to run.
+-- file: platform.browser.titan
+function label(): string
+  return "browser"
+end
 
-`titanc` prints per-module progress lines on stderr by default. Keep that
-default in the project's Makefile, so people building on a terminal see it.
-When you run a build or test command yourself, add `-q` to keep your log to
-diagnostics and native tool output, or `-v` for command-level debugging
-([build output](../titan-programmer/SKILL.md#compile-with-titanc)).
+-- file: main.titan
+local io = import "io"
+local platform = import "platform"
 
-Titan creates missing output directories and writes generated C, objects,
-headers, and native outputs there, preserving the selected source hierarchy.
-`--tree` selects authored sources independently; no source copies are needed.
-It takes an ordered, semicolon-separated list of roots, quoted for the shell:
-`--tree 'src;tests'` looks up each logical module in `src` first, then in
-`tests`, so a runner under `tests/` imports `src` modules by their usual names
-(`demo.main`) while keeping its own (`runner`). Omitting `--tree` uses `.` as
-the authored root. Positional `titanc` build roots and `--test-dir` resolve
-only from authored `--tree` roots (never the implicit SDK fallback); ordinary
-`import` statements inside a valid authored root fall back to the read-only
-implicit SDK root `<root>/lib/titan/0.6` after authored roots (requiring
-`--output` whenever an installed source is selected through that fallback).
-When the application imports prebuilt libraries whose reached members recorded
-external dependencies from installed source, `titanc` supplies one owner per
-module through ordinary selection—compiling source once (requiring `--output`
-only when installed fallback source is actually selected or on
-`--target browser`) or selecting a compatible compiled provider or canonical
-common-prefix bundle (linked from `.a` or loaded lazily from a DSO/DLL; Unix
-`--static` rejects DSO-only providers) without rebuilding the library. An
-existing application retains any module it compiled from source if disk
-distribution changes; see
-[`titan-package`](../titan-package/SKILL.md#source-only-packages) for full
-per-target, conflict, upgrade, and bare-Lua rules.
-There is no source-path environment variable.
-Keep generated files outside the installed SDK. Target-specific runner and
-entrypoint files live under `build/.titan-links/<key>/synthetic/`; native C
-helpers live under `build/.native/`. Treat these as compiler-owned inventories,
-not paths to reconstruct or glob. Split outputs reserve `<stem>.partN.c` and
-`<stem>.partN.o` for `1 <= N < --c-parts`, even when fewer parts are emitted;
-do not place authored files or other targets at those paths. On native
-Windows, links also stage each launcher and provider DLL in a sibling
-`<file>.stage.tmp.<suffix>` directory. A later link removes a leftover one, but
-fails with `refusing to retire stale Windows staging` and deletes nothing if it
-holds a build input or if Titan cannot identify every native input and tool
-(an uncertified compiler or uninterpretable linker flags). Keep authored files
-out of those directories, and inspect and delete a reported leftover yourself.
-
-Application and test builds can share this output tree safely on local
-filesystems: `titanc` locks it through certification and publication. Unchanged
-production objects are shared when native flags, SDK, and resolved provider
-bindings match. Use separate output directories for incompatible configurations.
-Keep source-path spelling stable too: changing `--tree src` to an absolute
-spelling can legitimately miss because source paths appear in generated code
-and diagnostics, even when the files are the same.
-
-Reinstalling or republishing a byte-identical Titan compiler and SDK is a hit
-for an otherwise cacheable build whose outputs and certificates are still valid,
-when the SDK's headers and providers resolve to the same paths and all other
-inputs, options, and the native toolchain are unchanged: every object, native
-C node, and final link is reused, and `titanc` compiles and links nothing
-despite new timestamps and inodes. The digest cache may rehash those files
-first. With this explicit output tree, moving the tree or an identical SDK
-prefix also keeps certified objects and native final links; the first build
-after a move may preprocess generated C once to confirm it is unchanged, and
-reused objects keep their original embedded debug paths. An SDK reached
-through a symlink is not relocatable, so retargeting that symlink can
-legitimately miss. Opaque native mechanisms (`@file` arguments, `-fplugin`,
-`-specs`, `-wrapper`, `-Xclang` or `-Xlinker`) or an uncertified toolchain
-make the affected native C nodes or final link uncacheable, so they run on
-every build, republished or not.
-
-Titan keeps a disposable digest cache at `build/.titan/digests`. It reuses
-hashes only when precise device/inode, size, mode, and nanosecond mtime/ctime
-observations match; otherwise it reads and hashes the input again. Missing or
-malformed cache data is ignored. The coordinator loads and atomically saves
-this hint under the output lock; no persistent digest cache is used without
-`--output`. This is separate from object and final-link certificates.
-
-The compiler separates coverage objects from ordinary objects in `.coverage`
-subdirectories inside the output tree. Independent coverage executables or
-processes need separate output roots when their counter lifetimes overlap:
-each execution resets its own counters. See the tester skill's
-[native coverage guidance](../titan-tester/SKILL.md#opt-in-native-production-coverage).
-Only delete output directories that the build owns; authored sources stay
-outside them.
-
-Use `--exe build/app` and `--exe build/app-tests` for exact executable
-destinations, relative to the working directory, rather than moving a compiler
-output afterward. Windows appends `.exe` when absent and keeps the application
-provider DLL under the output tree (named after the logical root module, not
-the `--exe` basename); preserve the documented payload layout.
-
-Pass native inputs directly: `-I DIR` and `-D NAME=VALUE` for headers/defines,
-`-L DIR` and `-l LIB` for linking, and repeatable single-argument
-`--cflag=ARG` / `--ldflag=ARG` for other native switches. Translate other
-`pkg-config` tokens through those phase-specific switches, not as bare
-`titanc` options. Pass app-owned C helpers with `--c-source app/native_helper.c`;
-Titan compiles and certifies them and their header inputs. If a Make rule needs
-the actual object path for a copy or another tool, capture stdout from
-`titanc -c --incremental --output build --c-source app/native_helper.c --print-c-objects`.
-The flag requires `-c` and at least one `--c-source`; it prints one absolute
-certified object path per C-source argument, in argument order, one per line.
-`-c` rejects link-phase options (`-l`, `-L`, `--ldflag`, `-X`, `--exe`, and
-`--no-uv-bootstrap`), so give that capture only the compile-phase switches
-(`-I`, `-D`, `--cflag`) and add the link switches to the final image commands;
-do not reuse one complete native argument list for both. Do not glob
-`build/.native/*.o`: that cache can retain nodes from older source locations
-and holds one node per C source. Prefer passing `--c-source` directly to the
-final Titan build when no external object consumer is needed. Capturing an
-object links nothing by itself: every image that needs the helper still gets
-it, either through its own `--c-source` or by linking the captured object with
-`-X`.
-
-`titanc` parses `CC` as shell words, so a valid value can quote an executable
-path that contains spaces, such as `CC='"C:/Program Files/LLVM/bin/clang.exe"'`.
-Forward a caller-configurable compiler unchanged with `export CC` rather than
-re-quoting it as `CC="$(CC)"` inside a recipe.
-
-Custom generators, third-party native-library builds, environment checks,
-packaging, test execution, and coverage output-root policy remain build-tool
-work.
-
-A short Linux/macOS Makefile can follow this shape. Here another tool also
-reads the C helper's object, so the rule captures it once and both images link
-those bytes:
-
-```make
-TITANC ?= titanc
-TITAN_JOBS ?= 4
-BUILD_FLAGS = --incremental --output build --static -j $(TITAN_JOBS)
-NATIVE_COMPILE = -I native -D APP_HELPER=1
-NATIVE_LINK = -l m
-HELPER = build/c-objects/helper.o
-DELIVERY_PATH ?= /usr/bin:/bin
-SMOKE_ARGS ?= --self-test
-
-.PHONY: all $(HELPER) build/app build/app-tests test package check-delivery
-all: build/app
-
-$(HELPER):
-	+@object=$$($(TITANC) -c --incremental --output build -j $(TITAN_JOBS) \
-	  $(NATIVE_COMPILE) --c-source native/helper.c --print-c-objects) && \
-	mkdir -p $(@D) && { cmp -s "$$object" $@ || cp -p "$$object" $@; }
-
-build/app: $(HELPER)
-	+$(TITANC) $(BUILD_FLAGS) $(NATIVE_COMPILE) $(NATIVE_LINK) \
-	  -X $(HELPER) --exe $@ main
-
-build/app-tests: $(HELPER)
-	+$(TITANC) $(BUILD_FLAGS) $(NATIVE_COMPILE) $(NATIVE_LINK) \
-	  --test --tree . --test-dir tests -X $(HELPER) --exe $@
-
-test: build/app build/app-tests
-	build/app-tests
-
-# Also copy any provider DSO the image selected to dist/bin or dist/lib/titan/0.6.
-package: build/app
-	rm -rf dist && mkdir -p dist/bin && cp -p build/app dist/bin/
-
-# Run after `make package`; no prerequisites, so it never runs titanc or lua.
-check-delivery:
-	@test -x dist/bin/app || { echo 'run make package first' >&2; exit 1; }
-	@if env -i PATH='$(DELIVERY_PATH)' sh -c 'command -v titanc || command -v lua'; \
-	then echo 'DELIVERY_PATH must not reach titanc or lua' >&2; exit 1; fi
-	@tmp=$$(mktemp -d) && cp -Rp dist/. "$$tmp" && \
-	( cd "$$tmp" && env -i HOME="$$tmp" PATH='$(DELIVERY_PATH)' \
-	  "$$tmp/bin/app" $(SMOKE_ARGS) ); \
-	status=$$?; rm -rf "$$tmp"; exit $$status
+function main(args: {string}): integer
+  local target = args[1] or platform.label()
+  io.print("hello from " .. target)
+  return 0
+end
 ```
 
-The phony image targets always ask the compiler to certify; unchanged links
-are reused. The helper rule is phony too: it always asks `titanc` for the
-certified object, captures only stdout, and copies the object only when its
-bytes change. `-X` takes several payloads, so give it the object and then
-another option (`--exe`) before any module name. The final-link certificate
-digests `-X` payloads, so an unchanged helper still hits.
-The `+` recipes pass GNU Make's jobserver. GNU Make 4.4 or newer's
-FIFO jobserver shares its pool with Titan's frontend/native jobs. Older pipe
-jobservers that cannot be shared, including stock macOS Make, use Titan's own
-`-j` / `TITAN_JOBS` cap; Linux can also share privately reopened pipe
-descriptors. Native Windows uses the local cap and omits `--static`.
-Keep `TITANC` a single program name or path: compiled programs and Lua hosts
-read an environment variable of the same name for their SDK fallback, start it
-without a shell as `$TITANC --print-root`, and GNU Make exports a command-line
-`TITANC` into recipes such as `build/app-tests`. Give a compiler command with
-arguments or a wrapper another variable name. On Windows the compiler is the
-native `titanc.exe`; the fallback looks up a name without a directory (the
-default `titanc`, or `TITANC=titanc`) only in the `PATH` entries, adding `.exe`
-when it has no extension, so the same `TITANC ?= titanc` works there. The
-fallback query never inherits `LUA_INIT` or `LUA_INIT_5_5`.
-Add `-v` to see native command echoes and object/native/link hits and miss
-reasons on stderr; worker output and diagnostics also go there, leaving
-`--print-c-objects` stdout as paths only. Capture both streams for a build log
-(`2>&1`), but leave stderr separate when capturing object paths. Consult
-[incremental compilation](../../../doc/language/toolchain.md#incremental-and-separate-compilation)
-for certification boundaries and
-[output directories](../../../doc/language/toolchain.md#output-directories) for native
-switches, executable destinations, and locking.
-
-`check-delivery` must not depend on the phony images, a generator, or
-`package`: each would invoke `titanc` or the SDK's `lua`, which the check
-keeps out of reach. It runs the packaged copy with the temporary deployment as
-its working directory, so nothing resolves against the source tree, under
-`env -i`, which clears `TITAN_ROOT`, `TITANC`, `TITAN_PATH_0_6`, `TITAN_PATH`,
-`LUA_PATH`, `LUA_CPATH`, and dynamic-loader variables such as
-`LD_LIBRARY_PATH`, and it refuses a
-`DELIVERY_PATH` that still finds `titanc` or `lua`. `SMOKE_ARGS` selects a
-bounded mode of the application, so the check finishes on its own.
-
-## Create the initial `.gitignore`
-
-For the output layout above, start with:
+**Initial `.gitignore`:** Ignore generated outputs and local secrets narrowly; **never** add blanket `*.c`, `*.h`, `*.lua`, `*.sqlite3`, `*.json`, or `*.log` rules (they hide authored helpers/fixtures).
 
 ```gitignore
-# All configured build modes and their generated outputs.
 /build/
-
-# Packaged delivery copy made by `make package`.
+/build-browser/
 /dist/
-
-# Workspace language-server cache.
+/site/
 .titan-ls/
-
-# Local environment files; public templates can be committed.
 .env
 .env.*
 !.env.example
 !.env.*.example
 ```
 
-Adapt these paths to the actual project. Add narrow rules for repository-local
-runtime state only when the application creates it: for example, an application
-using a root `state.sqlite3` can ignore `/state.sqlite3` and `/state.sqlite3-*`
-for its SQLite sidecars. Keep databases, logs, credentials, and live-test
-receipts in explicitly owned local paths or outside the repository. An ignored
-environment file is only a storage convention; document how the application
-actually receives its configuration. Example files contain public placeholders.
+Verify with `git check-ignore --no-index build/main.c .env.local .env.example main.titan app/helper.c tests/fixtures/sample.sqlite3`.
 
-Avoid blanket `*.c`, `*.h`, `*.lua`, `*.sqlite3`, `*.json`, or `*.log` rules:
-authored FFI helpers, Lua utilities, and test fixtures may use those extensions.
-For a legacy build that omits `--output`, enumerate the generated paths beside
-the selected module stems, including executable/provider/loader output and
-synthetic entry-point/test files. Do not copy Titan's compiler-repository ignore
-file into an application; its source trees and dependency builds differ.
+## Native flags, `--c-source`, Make integration, and delivery
 
-Check the initial rules against both generated/private and authored candidates:
+**Flag order:** (1) `TITAN_BUILD_PROFILE` (`production`: `-O3`, Linux `-flto=auto -ffat-lto-objects`, `-g1`/`-gline-tables-only`; `validation`: `-O0 -fno-lto -g`) -> (2) shell-word-split `TITAN_EXTRA_CPPFLAGS`/`CFLAGS`/`LDFLAGS` -> (3) CLI `-I`, `-D`, `--cflag`, `-L`, `-l`, `--ldflag` in written order -> (4) SDK `-I` dirs last. Forward `CC` via `export CC` (not `CC="$(CC)"`; quote spaced paths as `CC='"C:/.../clang.exe"'`). For debugger builds on a `production` SDK, set `TITAN_EXTRA_CFLAGS='-Og -g -fno-lto' TITAN_EXTRA_LDFLAGS='-Og -g -fno-lto'`.
 
-```sh
-git check-ignore --no-index build/main.c .env.local .env.example \
-  main.titan app/native_helper.c scripts/helper.lua tests/fixtures/sample.sqlite3
-git status --short --ignored
-git ls-files
+**C helpers:** Pass `--c-source native/helper.c` directly to the final link (`<out>/.native/`). If another tool needs the `.o` path, capture stdout of `titanc -c --incremental -o build <compile-flags-only> --c-source native/helper.c --print-c-objects` (never glob `build/.native/*.o`) and link via `-X <obj>` before `--exe` and module names.
+
+**GNU Makefile (`+` shares Make 4.4+ FIFO / Linux pipe jobservers; macOS stock 3.81 uses local `-j`/`TITAN_JOBS`):**
+
+```make
+TITANC ?= titanc
+TITAN_JOBS ?= 4
+BUILD_FLAGS = --incremental --output build --static -j $(TITAN_JOBS)
+DELIVERY_PATH ?= /usr/bin:/bin
+SMOKE_ARGS ?= --self-test
+
+.PHONY: all app app-tests test package check-delivery
+all: app
+
+app:
+	+$(TITANC) $(BUILD_FLAGS) --exe build/app main
+
+app-tests:
+	+$(TITANC) $(BUILD_FLAGS) --test --tree . --test-dir tests --exe build/app-tests
+
+test: app app-tests
+	./build/app-tests
+
+package: app
+	rm -rf dist && mkdir -p dist/bin && cp -p build/app dist/bin/
+
+check-delivery:
+	@test -x dist/bin/app || { echo 'run make package first' >&2; exit 1; }
+	@if env -i PATH='$(DELIVERY_PATH)' sh -c 'command -v titanc || command -v lua'; \
+	then echo 'DELIVERY_PATH must not reach titanc or lua' >&2; exit 1; fi
+	@tmp=$$(mktemp -d) && cp -Rp dist/. "$$tmp" && \
+	( cd "$$tmp" && env -i HOME="$$tmp" PATH='$(DELIVERY_PATH)' \
+	  "$$tmp/bin/app" $(SMOKE_ARGS) ); status=$$?; rm -rf "$$tmp"; exit $$status
 ```
 
-Only the build output and local environment file should be printed by that
-`check-ignore` example. An illustrative candidate need not exist for the
-command to check its rule. Repeat with the application's actual executable,
-Windows payload if relevant, runtime state, and legitimate fixture paths.
-Review tracked files as well: `.gitignore` does not remove anything already
-tracked, and an already committed secret needs separate remediation rather
-than an ignore rule.
+- **Tests & delivery:** App and `--test` share `build/` via `.titan-build.lock`. `--test-dir` must lie inside a `--tree` root (first containing root sets logical prefix; discovers `test(s)`, `spec(s)`, `*_test(s)`, `*_spec(s)`; filter with `--test-exclude`). Keep `check-delivery` prerequisite-free; for dynamic builds also ship provider `.so` files in `dist/bin/` or `dist/lib/titan/0.6/`.
+- **Logs, cache & splits:** Keep default stderr progress in Makefiles; use `-q` in scripts and `-v` for commands and miss reasons (`source-set`, `source-content`, `configuration`, `c-input`, `import-interface`, `import-binding`). Opaque flags (`@file`, `-fplugin`, `-specs`, `-wrapper`, `-Xclang`, `-Xlinker`) disable caching on affected nodes/links. Disposable digest cache: `<out>/.titan/digests`. `--c-parts` defaults to `4` on Linux, `1` elsewhere.
+- **Provider lookup & stock Lua:** Runtime searches `TITAN_PATH_0_6` -> `TITAN_PATH` -> `!;!/../lib/titan/0.6` (`;;` splices default, `!` = exe dir; `.` is never searched at runtime) -> once-per-state SDK fallback (`TITAN_ROOT` or `$TITANC --print-root`). Never put `lib/titan/0.6` on `package.cpath`. `ldd`/`otool -L` miss lazily `dlopen`'d Titan providers; rely on `check-delivery`. Stock Lua 5.5.1 hosts set `LUA_CPATH_5_5="$ROOT/lib/lua/5.5/?.so;;"` + `TITAN_ROOT`/`TITAN_PATH_0_6` (checkout `--lua` needs `MYCFLAGS=-fPIC`).
 
-## Connect native tests and delivery
+## Windows deployment and platform deltas
 
-Use `--test-dir tests` instead of maintaining a root list when test owners
-follow the naming rule: their final logical component is `test`, `tests`,
-`spec`, `specs`, or ends in `_test`, `_tests`, `_spec`, or `_specs`. The directory
-must lie inside a `--tree` root, and the first listed root containing it
-supplies the logical prefix: with `--tree .`, `tests/` retains the `tests.*`
-namespace; with `--tree 'src;tests'`, its modules are top-level names such as
-`router_test`. Add explicit logical roots for other names.
-`--test-exclude tests.platform_test` removes an exact automatic root, not an
-explicit root or a module imported by another selected root. `--exe` keeps the
-runner destination independent of root order. Read the tester skill's
-[project build guidance](../titan-tester/SKILL.md#9-compile-run-and-filter-a-project-suite)
-for discovery, synthetic modules, filters, and installed provider selection.
-Run a known test and inspect the selected count: a successful empty filtered
-run is not test evidence.
+Build from MSYS2 **CLANG64** (`LC_ALL=C.UTF-8`, `PREFIX == ROCKS_TREE`): `mingw32-make -f Makefile.win lua|luarocks|compiler PREFIX=/c/Titan/sdk`. Direct `luarocks.exe` needs `LUAROCKS_CONFIG="<sdk>/etc/luarocks/config-5.5.lua"`. `bin/titanc.exe` ignores `LUA_INIT`/`LUA_PATH`/`LUA_CPATH`.
 
-The generated runner uses the same compiled `titan.test` provider as ordinary
-imports, through public `Case.new` and `run`; it needs no private test source
-installation. On Linux/macOS, `--static` standalone and `--test` executables
-embed the full reached Titan dependency closure from `.a` archives plus source
-compiled in the application (with no fallback to shared Titan providers; a
-missing archive for an external prebuilt dependency not satisfied by
-application-compiled source is a build error; `--static` is rejected on
-final no-main library outputs, though `-c --static` still compiles objects for
-a later executable). Dynamic/default applications may still fall back to an
-archive-only dependency or compile source. `--static` governs Titan module
-archives and does not force `libc`, OS support, or external native libraries to
-link statically (nor forbid explicit linker flags that request it). Validate
-the delivery claim with a relocated application in a temporary directory and
-an environment without compiler or SDK search paths: unset `TITAN_ROOT`,
-`TITANC`, `TITAN_PATH_0_6`, and `TITAN_PATH`, and keep `titanc` and the SDK's
-`lua` off `PATH`. Run the check against an already packaged copy, with no
-build step in it, as `check-delivery` above does.
-A program searches its selected DSOs only in its own directory and in
-`../lib/titan/0.6` beside it, then asks the installed SDK (through `TITAN_ROOT`
-or `titanc --print-root`) once per Lua state, so a passing run with `titanc`
-still reachable can hide a missing provider. Deploy dynamic providers in one of
-those two directories. Check its native dependencies; clearing `PATH` alone
-does not rule out embedded absolute paths, and `ldd` / `otool -L` inspect
-direct OS linker dependencies only (not Titan provider DSOs opened lazily via
-`dlopen`, or `LoadLibraryExW` on Windows), so rely on the relocated run to
-prove provider independence. Use a bounded smoke test that
-exercises the application's entry point and representative functionality.
+- **Payload layout:** Ship `bin/<app>.exe`, `bin/lua55.dll`, native DLLs (`libuv-1.dll`, `libllhttp-9.4.dll`, `libsqlite3-0.dll`, and matched `libcrypto*.dll`/`libssl*.dll`, e.g. `-4-x64` MSYS2 OpenSSL 4 or `-3-x64` bundled 3.5.7), plus `lib/titan/0.6/<logical-root>.dll` and `titan.dll`. Use separate `-o` dirs if two test binaries share a first root.
+- **Traps:** Close processes holding mapped DLLs before rebuild/uninstall. Leftover `<file>.stage.tmp.<suffix>` dirs auto-retire on the next certified link (refused if holding inputs or uncertified—delete manually). `--c-source` helpers omit `LUAI_FUNC` dllimports (define `LUA_LIB` or `__declspec(dllexport)` to export `luaopen_*`). Raw C worker threads start in 53-bit x87 mode (call `_fpreset()` for `long double`). Validate in a plain Windows shell without SDK `PATH` on local NTFS.
 
-When Windows is part of the requested target, follow the
-[Windows build guide](../../../doc/implementation/windows-build.md).
-Windows has no Titan `--static` mode: retain the EXE launcher, application and
-standard provider DLLs, controlled Lua DLL, native dependency DLLs, and required
-licenses in their documented layout. Use a separate native Windows build tree
-and validate the delivered payload from an ordinary shell with build-tool/SDK
-paths removed. A Unix static build or successful Windows compilation alone
-does not prove that payload runs independently of the SDK.
+## Browser (`--target browser`) builds, loader, and deployment
 
-The project README should give the required SDK capabilities, build/test/run
-commands, output location, configuration defaults and secrets, runtime state,
-and intended deployment layout. Record actual platform checks and limitations.
-Keep environment-specific compiler paths and private validation artifacts out
-of the committed project. Follow the user's commit, review, and CI instructions
-for delivery; application startup does not itself authorize CI dispatch or
-changes to the compiler repository.
-
-## Browser applications
-
-Choose `--target browser` when the application runs in a web page, or as an ES
-module in a bundler or Node 26+. Titan builds it with `wasi-sdk` 34 and
-Binaryen `version_133`, from Linux, macOS or Windows (MSYS2 CLANG64), into a
-WebAssembly image for JSPI-capable engines. On Windows use `make -f Makefile.win` for `lua-browser`
-and `browser-sdk`, and use the [Windows browser setup](../../../doc/language/windows-build.md#build-for-the-browser)
-for the separate Node 26+ executable and runner.
-Files, raw sockets, servers, child processes, threads and SQLite are not
-available there: check [the browser standard
-library](../../../doc/language/browser-target.md#the-browser-standard-library)
-first, and keep such work in a native application. The installation needs the
-[browser Lua and SDK](../../../doc/language/installation.md#the-browser-lua-and-sdk).
-Load [titan-ffi](../titan-ffi/SKILL.md) for the page bridge (`titan.browser`,
-`create({bindings})`) and [titan-async](../titan-async/SKILL.md) for Tasks and
-timers on the browser driver.
-
-The browser chapter's [complete
-application](../../../doc/language/browser-target.md#a-complete-application)
-(`doc/language/browser-app/`) is a working model:
-
-```text
-project/
-  app.titan            # main(args: {string}): integer
-  index.html           # imports ./app.mjs and calls create(...)
-  greeting.txt         # a static file the program fetches
-  build-browser/       # titanc --target browser output
-  site/                # the deployment copy that the server serves
-```
-
-A browser output directory refuses native builds and the reverse, so keep it
-apart from `build/` ([one target per output
-directory](../../../doc/language/browser-target.md#one-target-per-output-directory)):
+**Setup:** Linux, macOS, or Windows MSYS2 CLANG64 (`make -f Makefile.win lua-browser` & `browser-sdk`). Configure `WASI_SDK_PATH` (or `PATH`; `CC`/`AR`/`RANLIB` ignored), `BINARYEN_ROOT`/`WASM_OPT`, `TITAN_NODE`, and Chrome 137+ / Firefox 153+ / Safari 27+. Run `make lua-browser PREFIX="$PREFIX"` then `make browser-sdk PREFIX="$PREFIX"`. Clear native `TITAN_PATH_0_6` and native flags (`-fPIC`, `-flto`, `-march=...`, `-O*`, `-g*`, `--no-line-directives`).
 
 ```sh
-titanc --target browser --incremental --output build-browser --exe build-browser/app.mjs app
+titanc --target browser --incremental -o build-browser --exe build-browser/app.mjs app
 mkdir -p site
-cp index.html greeting.txt build-browser/app.mjs build-browser/app.wasm build-browser/app.wasm.trace site/
-# Only a page that uses typed copies, as the model's does:
-cp "$PREFIX/lib/titan-browser/0.6/titan-protobuf.mjs" site/
+cp index.html build-browser/app.mjs build-browser/app.wasm build-browser/app.wasm.trace site/
+cp "$PREFIX/lib/titan-browser/0.6/titan-protobuf.mjs" site/   # only if using protobuf.portable
 ```
 
-The build uses `TITAN_BUILD_PROFILE` (`production` unless set), which must
-match the profile the browser SDK recorded; keep one output directory per
-profile ([build profiles](../../../doc/language/browser-target.md#build-profiles)).
-Deploy `app.mjs`, `app.wasm` and `app.wasm.trace` of one build together: the
-module embeds the loader, refuses a binary from another build, and reads the
-trace table for Titan frames in errors. `app.wasm.map` is only for developer
-tools. The module finds `app.wasm` and `app.wasm.trace` next to itself,
-resolved against its own URL; a page that serves them elsewhere passes
-`create({locateFile})` ([asset
-location](../../../doc/language/browser-target.md#asset-location)). Serve
-`.mjs` as JavaScript and `.wasm` as `application/wasm`, over HTTP: browsers
-load neither a module script nor the loader's fetches from a `file://` page.
-A page on another origin needs CORS on these files, and a Content Security
-Policy needs `script-src 'wasm-unsafe-eval'`
-([deploying](../../../doc/language/browser-target.md#deploying)).
-For local serving, copy the chapter's
-[`http-dev-server.titan`](../../../doc/language/browser-target.md#serving-the-page)
-from the Titan source tree's `doc/language/` and build it natively into the
-native output tree (`titanc -o build --exe build/http-dev-server
-http-dev-server`), then run `build/http-dev-server site 8000`; it is a
-development server only. To bundle, follow [using a
-bundler](../../../doc/language/browser-target.md#using-a-bundler) for Vite's
-settings. Ignore `/build-browser/` and the generated `/site/` copy in
-`.gitignore`.
+- **Hosting & bundlers:** Serve `.mjs`, `.wasm`, and `.wasm.trace` from one build (mismatches fail `TITAN_BROWSER_PROTOCOL`; `.wasm.map` is DevTools-only). Cross-origin needs CORS; Vite needs `build: { assetsInlineLimit: 0 }`; moved assets or `blob:`/`data:` modules need `create({ locateFile })`. For local dev, build `doc/language/http-dev-server.titan` natively in a separate `-o` dir.
+- **Loader (`create(options)`):** `.mjs` embeds loader/factory (zero external imports). Options: `stdin`/`stdout`/`stderr` (`+ *Kind`/`*End`), `locateFile`, `requireTrace`, `bindings`, `imports`, `env`, `onNotificationError`, `requestDrain`, `onEngineFailure`. Methods: `initialize()`, `run(args)` (once -> `{ kind, status, bytes, trace }`), `call`, `callTask(cb, args, { signal })`, `notify`, `drain`, `dispose()`. Reverse calls inside bindings/sinks reject `TITAN_BROWSER_REENTRY` (use `notify()`). See `skill://titan-ffi` for thin primitive-only `bindings`/`imports` and `doc/language/browser-app/`.
+- **Stdlib subset & limits:** 21 modules (14 complete: `coroutine`, `gc`, `io`, `iteration`, `json`, `math`, `path` [POSIX], `peg`, `protobuf`, `reflect`, `string`, `test`, `transfer`, `url`; 6 browser-adapted: `async`, `timer`, `os`, `lua`, `http`, `websocket`; browser-only `browser`). **6 absent at compile time:** `fs`, `net`, `sqlite3`, `ssl`, `thread`, `uv`. Limits: `LUAI_MAXCCALLS = 100` (native 200), 1 MiB main / 256 KiB coroutine C stacks, 16 MiB–2 GiB linear memory, 7,654,321 B max function / 1 GiB `.wasm`, 128-level protobuf/transfer nesting, no `--coverage`, cross-heap JS/Lua cycles uncollected, Safari traces omit line numbers, `production` inlining merges frames (`--test` keeps test frames; `validation` keeps all).
+- **CLI runner:** `"$PREFIX/lib/titan-browser/0.6/titan-browser-run"` (not in `bin/`) `[--engine node|chromium] [--imports FILE] [--root DIR] [--timeout MS] build-browser/tests.mjs -- --filter='...'` (`TITAN_BROWSER_ROOT_NO_SANDBOX=1` for root container Chromium).
 
-`titanc --target browser --test` images run under `titan-browser-run`, under
-Node or headless Chromium, as test infrastructure; pages never use it. Check
-the reported case count, as for native tests ([testing from the command
-line](../../../doc/language/browser-target.md#testing-from-the-command-line)).
+## Pre-delivery verification checklist
+
+1. Native and `--test` builds pass via `titanc --incremental -o <dir>` with non-zero reported cases; separate `-o` per target/profile.
+2. `git check-ignore --no-index` ignores build/dist/site/cache/`.env.*` while keeping authored `.c`/`.h`/`.lua`/fixtures tracked.
+3. Relocated `check-delivery` passes in a temp copy under `env -i` with `TITAN_*`/`LUA_*`/`LD_LIBRARY_PATH` unset and `titanc`/`lua` off `PATH`.
+4. Windows targets pass in a plain Windows shell with `bin/lua55.dll`, native/OpenSSL DLLs, and `lib/titan/0.6/*.dll`, without SDK `PATH`.
+5. Browser targets bundle `.mjs`/`.wasm`/`.wasm.trace` from one matching-profile build, pass `titan-browser-run` (enforces `requireTrace: true` by default), and verify HTTP MIME/CORS/CSP + `dispose()`.

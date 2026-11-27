@@ -1,0 +1,115 @@
+local pb = import "protobuf"
+local strings = import "string"
+local tpb = import "telemetry_pb"
+
+local function must_raise_containing(fn: function(), needle: string, label: string)
+  local caught = ""
+  do
+    fn()
+  catch
+    if error is string then
+      caught = error as string
+    end
+  end
+  if caught == "" then
+    raise ("expected error: " .. label)
+  end
+  local pos? = strings.find(caught, needle)
+  if pos == nil then
+    raise ("error mismatch for " .. label .. ": got '" .. caught .. "', expected '" .. needle .. "'")
+  end
+end
+
+function main(_args: {string}): integer
+  -- 1. Byte-exact Proto3 test vector: present zero scalars always emit, absent Option omitted
+  local zero_m = tpb.Metric(0, false, "", nil)
+  local zero_wire = pb.serialize(zero_m)
+  if zero_wire ~= "\x08\x00\x10\x00\x1a\x00" then return 1 end
+
+  -- 2. Byte-exact Proto3 test vector: ZigZag sint64 (-1 -> 1), NUL + non-UTF-8 raw bytes
+  local raw_m = tpb.Metric(-1, true, "a\x00\xff", "hi")
+  local raw_wire = pb.serialize(raw_m)
+  if raw_wire ~= "\x08\x01\x10\x01\x1a\x03a\x00\xff\x22\x02hi" then return 2 end
+
+  -- 3. Union Packet.metric roundtrip via deserialize AND deserialize_nominal
+  local p_metric = tpb.Packet.metric(raw_m)
+  local pm_wire = tpb.encode_packet(p_metric)
+  local pm1 = tpb.decode_packet(pm_wire)
+  local pm2 = tpb.decode_packet_nominal(pm_wire)
+  case pm1
+  when metric(m) then
+    if m.seq ~= -1 or m.ok ~= true or m.raw ~= "a\x00\xff" or m.note ~= "hi" then return 3 end
+  else
+    return 4
+  end
+  case pm2
+  when metric(m) then
+    if m.seq ~= -1 or m.raw ~= "a\x00\xff" then return 5 end
+  else
+    return 6
+  end
+
+  -- 4. Batch with interior nil hole in labels + const {Metric} items
+  local labels: {string} = {}
+  labels[1] = "first"
+  labels[3] = "third"
+  local items_mut: {tpb.Metric} = { zero_m, raw_m }
+  local batch = tpb.Batch(labels, items_mut as const {tpb.Metric})
+  local pb_wire = tpb.encode_packet(tpb.Packet.batch(batch))
+  local dec_batch = tpb.decode_packet(pb_wire)
+  case dec_batch
+  when batch(b) then
+    if #b.labels ~= 3 then return 7 end
+    local l1? = b.labels[1]
+    local l2? = b.labels[2]
+    local l3? = b.labels[3]
+    if l1 ~= "first" or l2 ~= nil or l3 ~= "third" then return 8 end
+    if #b.items ~= 2 or b.items[1].seq ~= 0 or b.items[2].seq ~= -1 then return 9 end
+  else
+    return 10
+  end
+
+  -- 5. Union Packet.heartbeat with absent option
+  local hb_wire = tpb.encode_packet(tpb.Packet.heartbeat(-42, nil))
+  local hb_dec = tpb.decode_packet(hb_wire)
+  case hb_dec
+  when heartbeat(ts, lbl) then
+    if ts ~= -42 or lbl ~= nil then return 11 end
+  else
+    return 12
+  end
+
+  -- 6. Proto3 schema output checks
+  local sch = tpb.packet_schema()
+  local s1? = strings.find(sch, 'syntax = "proto3";')
+  local s2? = strings.find(sch, "sint64")
+  local s3? = strings.find(sch, "bytes")
+  local s4? = strings.find(sch, "oneof")
+  if s1 == nil or s2 == nil or s3 == nil or s4 == nil then return 13 end
+
+  -- 7. Anonymous tuple serialize_fields / deserialize_fields preserving interior & trailing nils
+  local env1 = tpb.encode_envelope(7, nil, nil)
+  local seq1, pay1?, tag1? = tpb.decode_envelope(env1)
+  if seq1 ~= 7 or pay1 ~= nil or tag1 ~= nil then return 14 end
+
+  local env2 = tpb.encode_envelope(-9, nil, "tail\x00end")
+  local seq2, pay2?, tag2? = tpb.decode_envelope(env2)
+  if seq2 ~= -9 or pay2 ~= nil or tag2 ~= "tail\x00end" then return 15 end
+
+  -- 8. Malformed wire bytes raise protobuf error
+  must_raise_containing(function() tpb.decode_packet("\xff\xff\xff") end, "protobuf:", "malformed wire")
+
+  -- 9. 128-level nesting limit (127 chained records under a nominal root OK; 128 exceeds 128 levels)
+  local ok_chain = tpb.build_chain(127)
+  local ok_wire = tpb.encode_chain(ok_chain)
+  if #ok_wire == 0 then return 16 end
+
+  local deep_chain = tpb.build_chain(128)
+  must_raise_containing(
+    function() tpb.encode_chain(deep_chain) end,
+    "nesting exceeds 128 levels",
+    "depth > 128"
+  )
+
+  return 0
+end

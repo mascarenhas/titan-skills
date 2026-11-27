@@ -1,0 +1,10 @@
+local entry = import "ledger.entry"
+local service = import "ledger.service"
+
+function main(_args: {string}): integer
+  local batch = service.open_batch("check")
+  local e = batch:add("x", 10, "secret")
+  local leaked = e.secret_tag
+  if #leaked == 0 then return 1 end
+  return 0
+end

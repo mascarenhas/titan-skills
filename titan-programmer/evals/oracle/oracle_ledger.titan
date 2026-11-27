@@ -1,0 +1,38 @@
+local entry = import "ledger.entry"
+local service = import "ledger.service"
+
+function main(_args: {string}): integer
+  -- Direct public factory works via ordinary import
+  local standalone = entry.create("init", 100, "internal-a")
+  if standalone.id ~= "init" or standalone:amount() ~= 100 then return 1 end
+
+  -- Empty id must be rejected
+  local rejected = false
+  do
+    entry.create("", 50, "bad")
+  catch
+    rejected = true
+  end
+  if not rejected then return 2 end
+
+  -- Service uses trusted .titan source import to call local method and read local fields
+  local batch = service.open_batch("q4")
+  if batch.name ~= "q4" then return 3 end
+  if batch:total_cents() ~= 0 then return 4 end
+
+  local e1 = batch:add("inv-1", 500, "audit-alpha")
+  local e2 = batch:add("inv-2", 250, "audit-beta")
+  if e1.id ~= "inv-1" or e1:amount() ~= 500 then return 5 end
+  if e2.id ~= "inv-2" or e2:amount() ~= 250 then return 6 end
+  if batch:total_cents() ~= 750 then return 7 end
+
+  local updated = batch:adjust(e1, -120)
+  if updated ~= 380 or e1:amount() ~= 380 then return 8 end
+  if batch:total_cents() ~= 630 then return 9 end
+
+  if batch:audit_tag(e1) ~= "audit-alpha" then return 10 end
+  if batch:audit_tag(e2) ~= "audit-beta" then return 11 end
+  if batch:audit_tag(standalone) ~= "internal-a" then return 12 end
+
+  return 0
+end

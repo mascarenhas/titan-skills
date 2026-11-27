@@ -1,0 +1,133 @@
+local json = import "json"
+local api = import "api_json"
+
+local function must_raise_json_error(fn: function(), expected_code: string?, expected_path: string?, label: string)
+  local matched = false
+  local got_code = ""
+  local got_path = ""
+  do
+    fn()
+  catch
+    if not (error is json.Error) then
+      raise ("expected json.Error for " .. label)
+    end
+    local err: json.Error = error
+    got_code = err.code
+    got_path = err.path
+    matched = true
+  end
+  if not matched then
+    raise ("expected json.Error for " .. label .. " but succeeded")
+  end
+  if expected_code ~= nil and got_code ~= expected_code then
+    raise ("code mismatch for " .. label .. ": got " .. got_code .. ", want " .. expected_code)
+  end
+  if expected_path ~= nil and got_path ~= expected_path then
+    raise ("path mismatch for " .. label .. ": got " .. got_path .. ", want " .. expected_path)
+  end
+end
+
+function main(_args: {string}): integer
+  -- 1. Encode union with custom tag_field; local `version` field omitted
+  local acc = api.Account(7, "Ada", nil)
+  if acc:schema_version() ~= 2 then return 1 end
+  local text = api.encode_event(api.ApiEvent.created(acc), "kind")
+  if text ~= '{"kind":"created","value":{"id":7,"name":"Ada","bio":null}}' then return 2 end
+
+  -- 2. Decode union variants with custom tag_field; Account.new invoked (version == 2)
+  local ev1 = api.decode_event(text, "kind", false)
+  case ev1
+  when created(a) then
+    if a.id ~= 7 or a.name ~= "Ada" or a.bio ~= nil or a:schema_version() ~= 2 then return 3 end
+  else
+    return 4
+  end
+
+  -- Missing optional field `bio` decodes as nil
+  local ev2 = api.decode_event('{"kind":"created","value":{"id":8,"name":"Grace"}}', "kind", false)
+  case ev2
+  when created(a) then
+    if a.id ~= 8 or a.name ~= "Grace" or a.bio ~= nil or a:schema_version() ~= 2 then return 5 end
+  else
+    return 6
+  end
+
+  -- Named-part variant and empty variant with default "tag"
+  local ren_json = api.encode_event(api.ApiEvent.renamed(11, "ops"), nil)
+  local ev3 = api.decode_event(ren_json, nil, false)
+  case ev3
+  when renamed(id, label) then
+    if id ~= 11 or label ~= "ops" then return 7 end
+  else
+    return 8
+  end
+
+  local ping_json = api.encode_event(api.ApiEvent.ping(), nil)
+  if ping_json ~= '{"tag":"ping"}' then return 9 end
+  local ev4 = api.decode_event(ping_json, nil, false)
+  case ev4
+  when ping() then
+  else
+    return 10
+  end
+
+  -- 3. ignore_unknown_fields applies ONLY to records, NEVER to union envelopes
+  local rec_extra = '{"kind":"created","value":{"id":9,"name":"Lin","extra_ignored":123}}'
+  local ev5 = api.decode_event(rec_extra, "kind", true)
+  case ev5
+  when created(a) then
+    if a.id ~= 9 or a.name ~= "Lin" or a:schema_version() ~= 2 then return 11 end
+  else
+    return 12
+  end
+
+  must_raise_json_error(
+    function() api.decode_event(rec_extra, "kind", false) end,
+    "unknown_field",
+    '$["value"]["extra_ignored"]',
+    "strict unknown record field"
+  )
+
+  must_raise_json_error(
+    function() api.decode_event('{"kind":"ping","bogus":1}', "kind", true) end,
+    nil,
+    nil,
+    "extra union envelope key even with ignore_unknown_fields"
+  )
+
+  -- 4. tag_field collision with union variant part raises invalid_union
+  must_raise_json_error(
+    function() api.encode_event(api.ApiEvent.renamed(1, "x"), "label") end,
+    "invalid_union",
+    nil,
+    "tag_field collision"
+  )
+
+  -- 5. Active local union variant raises private_variant on encode
+  must_raise_json_error(
+    function() api.encode_event(api.make_internal_event("shh"), nil) end,
+    "private_variant",
+    nil,
+    "private union variant"
+  )
+
+  -- 6. Const Array schema + exact integer decimal validation above 2^53
+  local nums: const {integer} = api.decode_const_ints("[1, 1.0, 2e2, 9007199254740993]")
+  if #nums ~= 4 or nums[1] ~= 1 or nums[2] ~= 1 or nums[3] ~= 200 or nums[4] ~= 9007199254740993 then
+    return 13
+  end
+
+  -- 7. Map schema decode
+  local scores: {string: integer} = api.decode_scores('{"alpha":10,"beta":-5}')
+  if scores["alpha"] ~= 10 or scores["beta"] ~= -5 then return 14 end
+
+  -- 8. Unregistered nominal module/type raises unknown_type (never falls back to value)
+  must_raise_json_error(
+    function() api.decode_unknown_type("{}") end,
+    "unknown_type",
+    nil,
+    "unknown_type"
+  )
+
+  return 0
+end

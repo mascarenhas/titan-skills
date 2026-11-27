@@ -1,0 +1,155 @@
+{
+  "skill_name": "titan-websocket",
+  "evals": [
+    {
+      "id": "websocket-01-http-upgrade-framing-ping-close",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": [
+        "titan-programmer",
+        "titan-websocket",
+        "titan-networking",
+        "titan-async"
+      ],
+      "candidate_expected_skills": [
+        "titan-programmer",
+        "titan-websocket",
+        "titan-networking",
+        "titan-async"
+      ],
+      "candidate_expected_references": [],
+      "optional_skills": [
+        "titan-stdlib"
+      ],
+      "forbidden_skills": [
+        "titan-pegs",
+        "titan-sqlite3"
+      ],
+      "prompt": "Implement a native loopback HTTP/1.1 WebSocket upgrade server and duplex client library in `ws_stream.titan` (logical module `ws_stream`) using Titan's standard `websocket`, `http`, and `async` modules.\n\nExport the following public types, methods, and functions:\n\n1. `record StreamServer` holding the `http.Server`, its background serving `async.Task`, its ephemeral `port: integer`, and a shutdown guard in `local` fields, with methods:\n   - `StreamServer:port(): integer`: returns the server's bound ephemeral TCP port.\n   - `StreamServer:stop()`: idempotently closes the HTTP listener (`server:close()`), cancels the serving Task if not finished, and joins it via `async.join`. Stopping the HTTP server must NOT close already-upgraded WebSocket sessions.\n\n2. `function start_stream_server(allowed_origin: string?): StreamServer`:\n   - Starts an HTTP/1.1 listener on `127.0.0.1` with ephemeral port `0` (`http.listen`), spawns a serving Task, and dispatches routes inside the `http.Handler`:\n     - Route `/stream`: MUST authenticate BEFORE upgrading by checking header `X-Auth-Token` equals `\"secret-token\"`; if missing or wrong, respond with HTTP `401` and return without calling `websocket.accept`. When authenticated, upgrade via `websocket.accept(req, res, websocket.AcceptOptions { subprotocols = {\"stream.v2\", \"stream.v1\"}, allowed_origins = allowed_origin ~= nil and {allowed_origin} or nil, read_limit = 131072 })`, immediately register `defer conn:close()`, and loop reading messages with `local kind?, msg? = conn:read()`, breaking cleanly on `kind == nil` and echoing each message back with `conn:write(kind, msg)` (preserving empty text `\"\"`, binary NUL bytes, and >16 KiB multi-fragment payloads).\n     - Route `/abrupt`: upgrade via `websocket.accept(req, res)`, immediately register `defer conn:close()`, write one text message `\"boom\"`, and immediately retire the connection via `conn:close()` WITHOUT calling `conn:shutdown()` so the peer observes abnormal transport loss.\n     - Any other route: respond with HTTP `404` and return.\n\n3. `record RoundTripReport` with `const` fields: `subprotocol: string?`, `text_echo: string`, `empty_echo: string`, `binary_echo: string`, `large_len: integer`, `ping_ok: boolean`, `close_code: integer?`, `close_reason: string?`, and `clean_eof: boolean`.\n\n4. `function run_client_exchange(endpoint: string, auth_token: string, origin: string?, large_payload: string): RoundTripReport`:\n   - Builds `http.Headers` containing `X-Auth-Token` = `auth_token` (and `Origin` = `origin` when non-nil) and connects via `websocket.connect(endpoint, websocket.DialOptions { headers = headers, subprotocols = {\"stream.v1\", \"stream.v2\"}, read_limit = 131072 })` (note client lists `stream.v1` first so server-preference order selects `\"stream.v2\"`).\n   - Immediately registers `defer conn:close()`.\n   - Spawns a concurrent reader Task calling `conn:read()` for 4 expected replies (inspecting `MessageType` via `case` rather than `==`, distinguishing text vs binary), with a `defer` block that cancels (if unfinished) and joins the reader Task.\n   - While the concurrent reader Task is active (servicing incoming Pong/control frames), calls `conn:ping(2000)` and records `ping_ok = true`.\n   - Writes 4 messages in order: text `\"hello-ws\"`, empty text `\"\"`, binary `\"a\\0b\\0c\"`, and text `large_payload`.\n   - Joins the reader Task so receive ownership is clear before calling `conn:shutdown(1000, \"done\", 2000)`.\n   - Reads `local code?, reason? = conn:close_status()` and verifies clean close (`clean_eof = (code == 1000)`), returning the populated `RoundTripReport`.\n\n5. `record AbnormalReport` with `const` fields: `error_kind: string`, `close_code: integer?`, and `close_reason: string?`.\n\n6. `function probe_abnormal_close(endpoint: string): AbnormalReport`:\n   - Connects to `endpoint`, registers `defer conn:close()`, reads the initial `\"boom\"` message, then calls `conn:read()` again inside `do ... catch` expecting `websocket.Error`.\n   - Records `err.kind` (must be `\"abnormal\"`) and `local code?, reason? = conn:close_status()` (must stay `(nil, nil)` — never synthesize code `1006`), returning `AbnormalReport`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_ws_loopback.titan"
+      ],
+      "expected_outputs": [
+        "ws_stream.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "loopback",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_ws_loopback.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_ws_loopback oracle_ws_loopback",
+          "./oracle_ws_loopback"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ws01-a1-defer-close-preaccept-auth-and-server-stop",
+          "concept_ids": [
+            "titan-websocket:inv-1-defer-close-upgrade-handoff",
+            "titan-websocket:pre-delivery-checklist"
+          ],
+          "critical": "standard",
+          "check": "Performs route (`404`) and `X-Auth-Token` (`401`) checks in `http.Handler` before `websocket.accept`, registers immediate `defer conn:close()` after every `accept`/`connect`, passes `handler` as the 2nd argument to `http.listen`, and cleanly stops `StreamServer` without closing already-upgraded WebSocket sessions."
+        },
+        {
+          "id": "ws01-a2-concurrent-reader-duty-and-ping-pong",
+          "concept_ids": [
+            "titan-websocket:inv-2-reader-duty-ping",
+            "titan-websocket:inv-3-duplex-framing-shutdown-takeover"
+          ],
+          "critical": "standard",
+          "check": "Runs an active concurrent reader Task calling `conn:read()` while `conn:ping(2000)` executes, handles >16 KiB fragmented payloads alongside empty text `\"\"` and NUL-preserving binary frames, and joins/finishes the reader Task before `conn:shutdown(1000, \"done\", 2000)` takes receive ownership."
+        },
+        {
+          "id": "ws01-a3-clean-eof-vs-abnormal-loss-no-1006",
+          "concept_ids": [
+            "titan-websocket:inv-4-clean-eof-vs-abnormal-loss",
+            "titan-websocket:opening-policy-framing-loopback"
+          ],
+          "critical": "standard",
+          "check": "Preserves options via `local kind?, msg? = conn:read()`, inspects `MessageType` singletons (`websocket.TEXT`/`BINARY`) using `case` (never `==`), enforces `allowed_origins` (`403`) and server-priority case-sensitive subprotocols (`\"stream.v2\"`), and separates clean `(nil, nil)` Close EOF from `websocket.Error(\"abnormal\", ...)` leaving `close_status() == (nil, nil)` without synthesizing `1006`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-websocket` (`inv-1..inv-4`, `opening-policy-framing-loopback`, `pre-delivery-checklist`), `titan-networking` (`inv-1`, `inv-6`), `titan-async` (`inv-2`), `titan-programmer` (`inv-1`, `inv-2`, `inv-5`). Score `idiom_score = 3` only if `./oracle_ws_loopback` exits `0` and all three `ws01-a1..a3` checks hold; cap at `<= 1` if `defer conn:close()` is missing, auth runs after `accept`, `ping()` runs without a concurrent reader Task, `MessageType` is compared with `==`, reader coordination before `shutdown()` is omitted, or abnormal loss synthesizes close code `1006`."
+    },
+    {
+      "id": "websocket-02-backpressure-limits-and-browser",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": [
+        "titan-programmer",
+        "titan-websocket",
+        "titan-async"
+      ],
+      "candidate_expected_skills": [
+        "titan-programmer",
+        "titan-websocket",
+        "titan-async"
+      ],
+      "candidate_expected_references": [],
+      "optional_skills": [
+        "titan-networking",
+        "titan-application",
+        "titan-ffi",
+        "titan-stdlib"
+      ],
+      "forbidden_skills": [
+        "titan-pegs",
+        "titan-package"
+      ],
+      "prompt": "Implement two Titan WebSocket modules in the current directory: a native limits/cancellation/handoff module `ws_limits.titan` (logical module `ws_limits`) and a browser-compatible WebSocket client module `ws_browser_client.titan` (logical module `ws_browser_client`) that compiles cleanly under BOTH native targets and `--target browser` (`titanc --target browser -c`).\n\n### Module 1: `ws_limits.titan` (native)\nExport:\n1. `record LimitProbeResult` with `const` fields: `error_kind: string`, `operation: string`, and `close_code: integer?`.\n2. `function enforce_read_limit(endpoint: string, max_bytes: integer): LimitProbeResult`:\n   - Connects with `websocket.DialOptions { read_limit = max_bytes }`, registers `defer conn:close()`, calls `conn:read()`, catches `websocket.Error`, and returns `LimitProbeResult { error_kind = err.kind, operation = err.operation, close_code = err.close_code }` (expecting `\"limit\"`, `\"websocket.read\"`, `1009`).\n3. `function check_utf8_and_close_codes(endpoint: string): (string, string)`:\n   - Connects to `endpoint`, registers `defer conn:close()`, attempts `conn:write(websocket.TEXT, \"\\255\\254\")` catching `websocket.Error` (`utf8_kind`), attempts `conn:shutdown(1006, \"reserved\")` catching `websocket.Error` (`state_kind`), then cleanly shuts down with `conn:shutdown(1000, \"ok\", 2000)`, returning `(utf8_kind, state_kind)`.\n4. `function ping_without_reader_timeout(endpoint: string, timeout_ms: integer): (string, boolean)`:\n   - Connects to `endpoint`, registers `defer conn:close()`, calls `conn:ping(timeout_ms)` WITHOUT any concurrent reader Task, catches `websocket.Error` (capturing `err.kind`, expected `\"timeout\"`), then verifies the calling Task was not cancelled by calling `timer.sleep(1)` and returning `(err.kind, true)`.\n5. `function probe_cancelled_read_terminalizes(endpoint: string, cancel_after_ms: integer): (boolean, string)`:\n   - Connects to `endpoint`, registers `defer conn:close()`, spawns a child Task running `conn:read()` (an admitted idle read), sleeps `cancel_after_ms`, cancels and joins the child Task verifying `child:status():has_cancelled()`, then attempts `conn:write(websocket.TEXT, \"after-cancel\")` catching the latched terminal error (returning `(true, \"cancelled\")` when `error is async.CancellationReason`, or `(true, err.kind)` when `error is websocket.Error`).\n6. `function transfer_accepted_and_discard(payload: string): (string, integer)`:\n   - Starts an ephemeral loopback `http.Server` (`http.listen(\"127.0.0.1\", handler, 0)`), MUST call `server:read_ahead(false)` BEFORE starting `server:serve()` in a background Task, and tears down the server cleanly via `defer` (`server:close()`, cancel if unfinished, `async.join`).\n   - On `/handoff`: calls `websocket.accept(req, res)`, detaches the idle accepted `Connection` via `async.TransferValue.from_value(conn)` (calling `conn:close()`), adopts it via `local adopted: websocket.Connection = packet:to_value()`, immediately registers `defer adopted:close()`, reads one text message, echoes it back, and reads until clean EOF.\n   - On `/discard`: calls `websocket.accept(req, res)`, detaches the idle session via `local raw = conn:to_transfer_payload()`, and discards the unadopted payload via `websocket.Connection.discard_transfer_payload(raw)`, recording its integer close status.\n   - Runs a client against `/handoff` sending `payload`, reading the echo, and shutting down with `1000`; runs a second client against `/discard` (tolerating closure after discard); returns `(echoed_payload, discard_status)`.\n\n### Module 2: `ws_browser_client.titan` (cross-target: compiles under `--target browser -c` AND native)\nMust use ONLY the browser-compatible WebSocket subset (`MessageType`, `TEXT`, `BINARY`, `Error`, `HandshakeError`, `DialOptions`, `connect`, and `Connection`'s `read`, `write`, `shutdown`, `close`, `subprotocol`, `close_status`) — NEVER reference `accept`, `AcceptOptions`, `ping`, transfer hooks, or `DialOptions.headers`/`ca_file`.\nExport:\n1. `record BrowserClientConfig` with `const` fields: `endpoint: string`, `subprotocols: {string}`, `read_limit: integer`, and `handshake_timeout: integer`.\n2. `record BrowserExchangeResult` with `const` fields: `ok: boolean`, `subprotocol: string?`, `reply: string?`, `error_kind: string?`, and `close_code: integer?`.\n3. `function is_browser_close_code(code: integer): boolean`:\n   - Returns `true` ONLY for browser-legal `shutdown` codes (`1000` or `3000..4999`).\n4. `function exchange_once(cfg: BrowserClientConfig, payload: string, close_code: integer): BrowserExchangeResult`:\n   - Rejects any `close_code` failing `is_browser_close_code(close_code)` before dialing, returning `BrowserExchangeResult { ok = false, subprotocol = nil, reply = nil, error_kind = \"state\", close_code = nil }`.\n   - Connects via `websocket.connect(cfg.endpoint, websocket.DialOptions { subprotocols = cfg.subprotocols, read_limit = cfg.read_limit, handshake_timeout = cfg.handshake_timeout })` (omitting `headers` and `ca_file`) with immediate `defer conn:close()`.\n   - Catches `websocket.HandshakeError` returning `BrowserExchangeResult { ok = false, subprotocol = nil, reply = nil, error_kind = \"handshake\", close_code = nil }`, and catches `websocket.Error` returning `ok = false, error_kind = err.kind, close_code = err.close_code`.\n   - If `#cfg.subprotocols > 0` and `conn:subprotocol() == nil`, returns `BrowserExchangeResult { ok = false, subprotocol = nil, reply = nil, error_kind = \"handshake\", close_code = nil }` (matching browser rejection when offered subprotocols go unselected).\n   - Writes `websocket.TEXT, payload`, reads `local kind?, data? = conn:read()`, dispatches `kind` via `case`, calls `conn:shutdown(close_code, \"bye\", 2000)`, and returns `BrowserExchangeResult { ok = true, subprotocol = conn:subprotocol(), reply = data, error_kind = nil, close_code = close_code }`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_ws_limits.titan"
+      ],
+      "expected_outputs": [
+        "ws_limits.titan",
+        "ws_browser_client.titan"
+      ],
+      "verify": {
+        "target": "native+browser",
+        "network": "loopback",
+        "timeout_sec": 90,
+        "commands": [
+          "TITAN_BUILD_PROFILE=validation titanc -q --target browser -c --tree . -o build_browser ws_browser_client",
+          "cp /verify/oracle/oracle_ws_limits.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_ws_limits oracle_ws_limits",
+          "./oracle_ws_limits"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ws02-a1-read-limit-utf8-close-codes-and-timeouts",
+          "concept_ids": [
+            "titan-websocket:inv-6-fairness-and-read-limit",
+            "titan-websocket:native-vs-browser-error-table"
+          ],
+          "critical": "standard",
+          "check": "Enforces incoming `read_limit` surfacing `Error(\"limit\", \"websocket.read\", ..., 1009)`, catches `Error(\"utf8\", ...)` on invalid outgoing UTF-8 and `Error(\"state\", ...)` on reserved Close code `1006`, catches `Error(\"timeout\", ...)` on readerless `ping()` without cancelling the caller Task, and confirms admitted `read()` cancellation terminalizes the session."
+        },
+        {
+          "id": "ws02-a2-native-transfer-read-ahead-and-discard",
+          "concept_ids": [
+            "titan-websocket:browser-client-and-transfer",
+            "titan-websocket:pre-delivery-checklist"
+          ],
+          "critical": "standard",
+          "check": "Configures `server:read_ahead(false)` before `server:serve()`, detaches/adopts an idle accepted session via `async.TransferValue` with immediate `defer adopted:close()`, and cleans up an unadopted transfer payload via `websocket.Connection.discard_transfer_payload`."
+        },
+        {
+          "id": "ws02-a3-browser-subset-portability-and-close-policy",
+          "concept_ids": [
+            "titan-websocket:inv-5-browser-subset",
+            "titan-websocket:native-vs-browser-error-table",
+            "titan-websocket:browser-client-and-transfer"
+          ],
+          "critical": "standard",
+          "check": "`ws_browser_client.titan` compiles under `titanc --target browser -c` using only browser-supported WebSocket APIs (no `accept`, `AcceptOptions`, `ping`, transfer hooks, `headers`, or `ca_file`), enforces browser-legal `shutdown` codes (`1000` and `3000..4999` only), and treats unselected offered subprotocols and pre-open failures as `HandshakeError`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-websocket` (`inv-5`, `inv-6`, `native-vs-browser-error-table`, `browser-client-and-transfer`, `pre-delivery-checklist`), `titan-async` (`inv-2`, `inv-3`), `titan-programmer` (`inv-1`, `inv-2`, `inv-5`). Score `idiom_score = 3` only if `titanc --target browser -c` and `./oracle_ws_limits` both exit `0` and all three `ws02-a1..a3` checks hold; cap at `<= 1` if `ws_browser_client.titan` uses native-only APIs (`accept`/`ping`/`headers`/`ca_file`/transfer) or allows browser-illegal close codes (`1001..1014`), if `server:read_ahead(false)` is missing before `serve()`, if `discard_transfer_payload` is omitted, or if `defer conn:close()` is skipped."
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+local async = import "async"
+local fs = import "fs"
+local ipc = import "ipc_pipe"
+local strings = import "string"
+
+local function fail(msg: string)
+  raise "oracle_ipc_pipe: " .. msg
+end
+
+local function run_async_checks(): nil
+  -- 1. Duplex binary-framed pipe pair over uv.pipe_t + await_with + BufferedSubscription
+  local sock = "/tmp/ew4_oracle_ipc_pipe.sock"
+  do fs.unlink(sock) catch end
+  defer do fs.unlink(sock) catch end
+
+  local a, b = ipc.open_pipe_pair(sock)
+  defer a:close()
+  defer b:close()
+
+  if a:handle_kind() ~= "named_pipe" or b:handle_kind() ~= "named_pipe" then
+    fail("handle_kind mismatch: " .. a:handle_kind())
+  end
+
+  -- Build a >16 KiB multi-chunk binary payload with embedded NULs
+  local big_w = strings.writer()
+  for i = 1, 512 do
+    big_w:write("chunk-" .. i .. "\0\xff\x01payload-padding-bytes!!")
+  end
+  local big = big_w:drain()
+
+  -- Send coalesced frames (empty, binary NUL, large) from a -> b while reading concurrently
+  local sender = async.run(function (): nil
+    a:send_frame("")
+    a:send_frame("hello\0world")
+    a:send_frame(big)
+    return nil
+  end)
+
+  local f1? = b:recv_frame()
+  local f2? = b:recv_frame()
+  local f3? = b:recv_frame()
+  async.join(sender)
+
+  if f1 ~= "" then fail("frame 1 empty payload mismatch") end
+  if f2 ~= "hello\0world" then fail("frame 2 NUL payload mismatch") end
+  if f3 ~= big then fail("frame 3 large payload mismatch") end
+
+  -- Reverse direction b -> a
+  b:send_frame("reply-back")
+  local r1? = a:recv_frame()
+  if r1 ~= "reply-back" then fail("reverse frame mismatch") end
+
+  -- Closing a delivers clean EOF (nil) to b; double close is idempotent
+  a:close()
+  a:close()
+  local eof_frame? = b:recv_frame()
+  if eof_frame ~= nil then fail("expected nil EOF after peer close") end
+  b:close()
+  b:close()
+
+  -- 2. Cancellable uv.fs_stat via await_cancellable_with
+  -- 3. Cancellable uv.fs_stat via await_cancellable_with
+  local tmp_file = "/tmp/ew4_oracle_stat_sample.bin"
+  do
+    local fh = fs.open(tmp_file, "w")
+    defer fh:close()
+    fh:write("0123456789abcdef\0xyz")
+  end
+  defer do fs.unlink(tmp_file) catch end
+
+  local sz = ipc.stat_file_size(tmp_file)
+  if sz ~= 20 then fail("stat_file_size got " .. sz .. ", want 20") end
+
+  local saw_enoent = false
+  do
+    ipc.stat_file_size("/tmp/ew4_definitely_missing_file_999999")
+  catch
+    if error is async.OperationError then
+      local op_err: async.OperationError = error
+      if op_err.name == "ENOENT" and op_err.operation == "ipc_pipe.stat" and op_err.code < 0 then
+        saw_enoent = true
+      end
+    end
+  end
+  if not saw_enoent then fail("missing stat_file_size did not raise ENOENT OperationError") end
+
+  -- 4. ExternalWait normal wake & synchronous unregister on cancellation
+  local woken1, unreg1 = ipc.wait_external_wake(15, nil)
+  if not woken1 or unreg1 then
+    fail("wait_external_wake normal mismatch")
+  end
+  local woken2, unreg2 = ipc.wait_external_wake(300, 15)
+  if woken2 or not unreg2 then
+    fail("wait_external_wake cancel mismatch")
+  end
+
+  -- 5. Failed pipe_connect2 maps OperationError and still cleanly closes handle
+  local cerr = ipc.connect_missing_pipe("/tmp/ew4_missing_pipe_999999.sock")
+  if cerr.code >= 0 or cerr.operation ~= "ipc_pipe.connect" or #cerr.name == 0 or #cerr.message == 0 then
+    fail("connect_missing_pipe OperationError mismatch: " .. cerr.name .. " " .. cerr.operation)
+  end
+
+  return nil
+end
+
+function main(args: {string}): integer
+  -- Standalone uv.loop_t phase probe directly on main Lua thread (--no-uv-bootstrap)
+  local lp = ipc.probe_loop_phases(3)
+  if lp.prepare_count < 3 or lp.check_count < 3 or not lp.timer_fired
+     or not lp.loop_closed_ok or lp.has_loop_new or not lp.has_pipe_init then
+    fail("probe_loop_phases mismatch: prep=" .. lp.prepare_count .. " chk=" .. lp.check_count)
+  end
+
+  local task = async.run(run_async_checks)
+  async.loop()
+  case task:status()
+  when succeeded() then
+  when failed(err) then err:raise()
+  else fail("async checks did not succeed: " .. task:status():as_string())
+  end
+  return 0
+end

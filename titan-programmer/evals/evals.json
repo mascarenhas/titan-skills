@@ -1,0 +1,249 @@
+{
+  "skill_name": "titan-programmer",
+  "evals": [
+    {
+      "id": "programmer-01-sync-handle-store",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-async", "titan-thread"],
+      "prompt": "Using the provided synchronous C handle library (`sync_handle.h` and `sync_handle.c`, whose create and release functions execute synchronously without yielding), implement two Titan source files in the current directory:\n\n1. `store.titan` exporting `record Store`, public function `open(capacity: integer): Store`, and public methods:\n   - `Store:capacity(): integer`: raises an error if the store is closed; otherwise queries and returns `sync_handle_capacity` as an `integer`.\n   - `Store:append(msg: string): integer`: raises if closed or if the slot array's current high-water length is already `>= capacity`; otherwise appends `msg` at `#slots + 1` and returns the 1-based slot index.\n   - `Store:tombstone(slot: integer)`: raises if closed; if `1 <= slot <= #slots`, sets that slot to `nil` (leaving interior holes intact while allowing trailing tombstones to shrink `#slots`); out-of-bounds indices are safe no-ops.\n   - `Store:get(slot: integer): string?`: raises if closed; returns the string at `slot`, or `nil` when tombstoned or out of bounds (never raising on a tombstoned hole).\n   - `Store:len(): integer`: raises if closed; returns the exact `#slots` length (0 when empty, highest present positive index across interior tombstones, shrinking when trailing slots are tombstoned).\n   - `Store:live_count(): integer`: raises if closed; counts non-`nil` slots across `1..#slots` safely across interior holes.\n   - `Store:close()`: synchronous, non-yielding, idempotent release of the native `sync_handle_t` via `sync_handle_release` (repeated calls are safe no-ops).\n\n   Keep the raw C handle and internal slot storage private inside `Store`, default unmutated fields to `const`, reject `capacity <= 0` or allocation failure in `open`, and register a synchronous non-capturing reachability finalizer fallback that invokes `:close()` if a `Store` is collected unclosed.\n\n2. `main.titan` exporting `main(args: {string}): integer` that imports `store`, opens a `Store`, pairs acquisition immediately with deterministic scope-exit cleanup (`defer`), exercises `append`, interior and trailing `tombstone`, `get`, `len`, `live_count`, and `capacity`, and exits `0`.",
+      "files": [
+        "evals/files/sync_handle.h",
+        "evals/files/sync_handle.c"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_store.titan"
+      ],
+      "expected_outputs": [
+        "store.titan",
+        "main.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "titanc -q --tree . -I . --c-source sync_handle.c -o build --exe main main",
+          "./main",
+          "cp /verify/oracle/oracle_store.titan .",
+          "titanc -q --tree . -I . --c-source sync_handle.c -o build_oracle --exe oracle_store oracle_store",
+          "./oracle_store"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "prog01-a1-local-fields-no-id-map",
+          "concept_ids": [
+            "titan-programmer:inv-1-exported-record-local-fields",
+            "titan-ffi:inv-2-unsafe-boundary-narrow-owners"
+          ],
+          "critical": "issue61_idiom",
+          "check": "Exported `Store` record places the raw C handle and internal slot array directly in `local` fields with a public `open` factory (or custom `Store.new`), without inventing a `RawStore` wrapper or `{integer: Store}` ID registry."
+        },
+        {
+          "id": "prog01-a2-const-fields-default",
+          "concept_ids": [
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "issue61_idiom",
+          "check": "Unmutated `Store` fields (such as the internal slot array reference or immutable metadata) are declared `const` / `local const`."
+        },
+        {
+          "id": "prog01-a3-sync-finalizable-and-caller-defer",
+          "concept_ids": [
+            "titan-programmer:inv-3-sync-finalizable-defer-close",
+            "titan-stdlib:gc-finalizable"
+          ],
+          "critical": "issue61_idiom",
+          "check": "`Store` implements an idempotent non-yielding `:close()` method and registers a non-capturing `gc.finalizable` fallback whose callback invokes `:close()` on its parameter, while `main.titan` cleans up deterministically with immediate `defer store:close()`."
+        },
+        {
+          "id": "prog01-a4-exact-array-holes",
+          "concept_ids": [
+            "titan-programmer:inv-4-exact-array-len-and-holes"
+          ],
+          "critical": "issue61_idiom",
+          "check": "Slot storage uses a Titan `{string}` Array (never `{integer: string}`), appends via `slots[#slots + 1] = msg` (no manual length counter), and reads hole-prone slots via option-preserving `local msg? = slots[i]` (or `iteration.ipairs` with `v?`)."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-programmer` (`inv-1..inv-4`), `titan-ffi` (`inv-2`), `titan-stdlib` (`gc-finalizable`). Score `idiom_score = 3` only if `./main` and `./oracle_store` both exit `0` and all four `prog01-a1..a4` checks hold (including caller `defer store:close()` in `main.titan` and non-capturing `gc.finalizable` invoking `:close()`); cap at `<= 1` if an integer-ID handle registry, missing caller `defer`, missing/capturing/no-op finalizer, manual array length tracking, or forced unwrap on a tombstoned slot appears."
+    },
+    {
+      "id": "programmer-02-typed-domain-unions-generics",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer"],
+      "candidate_expected_skills": ["titan-programmer"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-reflect", "titan-json"],
+      "prompt": "Implement a canonical multi-file Titan folder module named `rules` composed of main source `rules/rules.titan` and contributor source `rules/eval.titan` (sharing one module namespace so `rules.eval` is NOT independently importable).\n\nExport the following public surface from logical module `rules`:\n- `const default_threshold: integer?` declared without an initializer and assigned `10` inside `rules/rules.titan`'s trailing root `do ... end` initializer (computed by calling a module-local helper, respecting module initialization frontiers and Titan's nil-admitting rule for initializer-less `const` module variables).\n- `interface Matchable` with read-only field `id: string` and method `function score(): integer`.\n- Generic `record Rule<|T|>` with fields `const id: string`, `const payload: T`, `const enabled: boolean?`, and mutable `weight: integer`, plus method `function Rule:score(): integer` returning `self.weight`.\n- Closed `union Decision` with variants:\n  - `allow(reason: string)`\n  - `deny(code: integer, end: string)` (note the part name `end`)\n  - `skip()`\n- `function make_rule<|T|>(id: string, payload: T, weight: integer, enabled: boolean?): Rule<|T|>` returning a `Rule<|T|>` constructed with shorthand `Rule<|T|>(...)` or literal syntax.\n- `function is_explicitly_disabled(flag: boolean?): boolean` returning `true` ONLY when `flag` is explicitly `false`, and `false` for both `nil` and `true`.\n- `function describe_matchable<|M: Matchable|>(item: M): string` returning `item.id .. \":\" .. item:score()`.\n- `function snapshot_and_eval(r: Rule<|string|>, delta: integer): (string, integer)` converting `r` to a `Matchable` view, adding `delta` to `r.weight`, and returning `view.id, view:score()`.\n- `function format_decision(d: Decision?): string` returning `\"none\"` for `nil`, `\"allow:\" .. reason` for `allow`, `\"deny:\" .. code .. \":\" .. detail` for `deny`, and `\"skip\"` for `skip` (using `case` without redundant `d as Decision` after the `nil` check).\n- `function evaluate(r: Rule<|string|>, threshold: integer): Decision` delegating core rule checking to a module-local helper defined in `rules/eval.titan`: returns `Decision.skip()` when `r.enabled == nil`, `Decision.deny { code = 403, end = \"disabled\" }` when `r.enabled == false`, raises `\"negative score\"` when `r:score() < 0` (catching inside a `catch` block that runs cleanup/observation and re-raises with bare `raise` to preserve the original traceback), returns `Decision.allow(r.id .. \"=\" .. r.payload)` when `r:score() >= threshold`, and otherwise returns `Decision.deny { code = 400, end = \"below_threshold\" }`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_rules.titan",
+        "evals/oracle/oracle_bad_rules_import.titan"
+      ],
+      "expected_outputs": [
+        "rules/rules.titan",
+        "rules/eval.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_rules.titan /verify/oracle/oracle_bad_rules_import.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_rules oracle_rules",
+          "./oracle_rules",
+          "! titanc -q --tree . -c -o build_neg oracle_bad_rules_import"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "prog02-a1-folder-module-and-init-frontier",
+          "concept_ids": [
+            "titan-programmer:inv-8-canonical-short-imports-init-frontier",
+            "titan-programmer:errors-defer-modules-titanc"
+          ],
+          "critical": "standard",
+          "check": "`rules/rules.titan` (main) and `rules/eval.titan` (contributor) form one canonical folder module (`rules.eval` is rejected by `titanc`), and `const default_threshold` is initialized inside `rules/rules.titan`'s trailing root `do ... end` block."
+        },
+        {
+          "id": "prog02-a2-boolean-opt-and-auto-unwrap",
+          "concept_ids": [
+            "titan-programmer:inv-5-options-boolean-opt-auto-unwrap"
+          ],
+          "critical": "standard",
+          "check": "`boolean?` checks distinguish `nil` from `false` via explicit `== nil` / `~= nil` (not `not flag`), and `format_decision` relies on post-`nil`-check auto-unwrap on `Decision?` without redundant `d as Decision`."
+        },
+        {
+          "id": "prog02-a3-unions-interfaces-generics-named-calls",
+          "concept_ids": [
+            "titan-programmer:inv-7-returns-record-ctor-named-calls",
+            "titan-programmer:records-unions-interfaces-generics"
+          ],
+          "critical": "standard",
+          "check": "Uses closed `union`/`case` aliasing keyword part `end` (`{ alias = end }`), structural `interface Matchable` conversion and constrained generic `<|M: Matchable|>`, `Rule<|T|>(...)` construction shorthand, and declaration named calls `Decision.deny { ... }`."
+        },
+        {
+          "id": "prog02-a4-catch-bare-raise-traceback",
+          "concept_ids": [
+            "titan-programmer:errors-defer-modules-titanc"
+          ],
+          "critical": "standard",
+          "check": "Error re-throw in `evaluate` uses a trailing block `catch` with bare `raise` (preserving original traceback rather than resetting via `raise error`)."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-programmer` (`inv-5`, `inv-7`, `inv-8`, `records-unions-interfaces-generics`, `errors-defer-modules-titanc`). Score `idiom_score = 3` only if `oracle_rules` exits `0`, negative `oracle_bad_rules_import` compile check fails as expected, and `prog02-a1..a4` all pass; cap at `<= 1` if `not flag` merges `nil`/`false`, `catch` uses `raise error` instead of bare `raise`, redundant `as Decision` casts appear after a `nil` check, or `rules/eval.titan` is unused/duplicated."
+    },
+    {
+      "id": "programmer-03-trusted-source-import-boundary",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer"],
+      "candidate_expected_skills": ["titan-programmer"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-package", "titan-ffi"],
+      "prompt": "Implement a two-module Titan package under `ledger/` demonstrating the trusted source-import visibility boundary:\n\n1. `ledger/entry.titan` (logical module `ledger.entry`):\n   - Export `record Entry` with fields:\n     - `const id: string` (public const)\n     - `local amount_cents: integer` (private mutable — keeping synthesized `Entry.new` private)\n     - `local const secret_tag: string` (private const)\n   - Export public factory `create(id: string, amount_cents: integer, tag: string): Entry` that raises an error if `id == \"\"` and constructs `Entry` directly.\n   - Export public method `Entry:amount(): integer` returning `self.amount_cents`.\n   - Define private method `local function Entry:apply_delta(delta: integer)` that updates `self.amount_cents = self.amount_cents + delta`.\n   - Do NOT define a public `Entry.new` or expose `secret_tag` / `apply_delta` publicly.\n\n2. `ledger/service.titan` (logical module `ledger.service`):\n   - Import `ledger.entry` using Titan's explicit `.titan` source-import directive so `ledger.service` can directly access `Entry`'s `local` fields and `local` method.\n   - Export `record Batch` with `const name: string` and private `local const entries: {entry.Entry}`.\n   - Export public factory `open_batch(name: string): Batch`.\n   - Export public methods:\n     - `Batch:add(id: string, amount_cents: integer, tag: string): entry.Entry` (creates an `Entry`, appends it via `entries[#entries + 1] = e`, returns it)\n     - `Batch:adjust(e: entry.Entry, delta: integer): integer` (calls private `e:apply_delta(delta)` directly and returns updated `e.amount_cents`)\n     - `Batch:audit_tag(e: entry.Entry): string` (reads private `e.secret_tag` directly)\n     - `Batch:total_cents(): integer` (sums `amount_cents` across `self.entries`).",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_ledger.titan",
+        "evals/oracle/oracle_bad_ledger_field.titan",
+        "evals/oracle/oracle_bad_ledger_new.titan"
+      ],
+      "expected_outputs": [
+        "ledger/entry.titan",
+        "ledger/service.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "titanc -q --tree . -o build_lib ledger.entry",
+          "cp /verify/oracle/oracle_ledger.titan /verify/oracle/oracle_bad_ledger_field.titan /verify/oracle/oracle_bad_ledger_new.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_ledger oracle_ledger",
+          "./oracle_ledger",
+          "! titanc -q --tree . -c -o build_neg_field oracle_bad_ledger_field",
+          "! titanc -q --tree . -c -o build_neg_new oracle_bad_ledger_new"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "prog03-a1-local-fields-private-new",
+          "concept_ids": [
+            "titan-programmer:inv-1-exported-record-local-fields",
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "issue61_idiom",
+          "check": "`Entry` and `Batch` store private state directly in `local` / `local const` fields with public factories (`create`, `open_batch`), leaving synthesized `Entry.new` private (confirmed by negative compile check) and avoiding integer-ID registries."
+        },
+        {
+          "id": "prog03-a2-explicit-titan-source-import",
+          "concept_ids": [
+            "titan-programmer:errors-defer-modules-titanc"
+          ],
+          "critical": "standard",
+          "check": "`ledger/service.titan` uses `import \"ledger.entry.titan\"` to access `e:apply_delta`, `e.amount_cents`, and `e.secret_tag` directly while ordinary callers of `ledger.entry` and `ledger.service` cannot read `secret_tag` or invoke `Entry.new`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-programmer` (`inv-1`, `inv-2`, `errors-defer-modules-titanc`). Score `idiom_score = 3` only if `ledger.entry` builds cleanly, `oracle_ledger` exits `0`, both negative compile checks fail, and `prog03-a1..a2` hold; cap at `<= 1` if `ledger/entry.titan` makes `secret_tag` or `apply_delta` public, uses an ID registry, or omits `const` on unmutated fields."
+    },
+    {
+      "id": "programmer-04-lua-habit-traps-and-locals",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer"],
+      "candidate_expected_skills": ["titan-programmer"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-pegs", "titan-reflect"],
+      "prompt": "Port the legacy Lua config-diff helper in `legacy_diff.lua` to strongly typed Titan in `diff.titan`, obeying Titan's rules for truthiness, dynamic `value` coercion, `const`/`const?` Arrays, variadics, spreads, and Map literals.\n\nExport the following public API from `diff.titan`:\n- `record Change` with `const key: string` and `const summary: string`.\n- `function is_present(v: value): boolean`: matches Lua/Titan truthiness — returns `true` for `0`, `0.0`, `\"\"`, `true`, and objects, and `false` ONLY for `nil` and `false`.\n- `function coerce_int_or(v: value, fallback: integer): integer`: returns the integer value when `v` dynamically converts to `integer` (accepting `7` and integral float `2.0`, rejecting `2.5`, `\"7\"`, `false`, `nil`), otherwise returns `fallback`.\n- `function format_value(v: value): string`: returns `\"nil\"` for `nil`, `\"true\"`/`\"false\"` for booleans, decimal text for integers/floats (using Titan string concatenation coercion `\"\" .. n`, never `n as string`), the string itself for strings, and `\"<other>\"` for any other value.\n- `function merge_tags(prefix: const? {string}, ...: string): const {string}`: accepts either mutable or `const` prefix Arrays without extra copying, appends all variadic `...` string arguments, and returns a frozen `const {string}` Array.\n- `function slice_window(items: const? {string}, first: integer, last: integer): (...: string)`: flexible-return helper returning the 1-based inclusive slice `items[first..last]` via spread when `1 <= first <= last <= #items`, and zero values otherwise.\n- `function diff_maps(keys: const? {string}, old_cfg: {string: value}, new_cfg: {string: value}): (const {Change}, {string: integer})`: iterates `keys` from `1` to `#keys`, builds a mutable local accumulator of `Change` records (distinguishing `nil` absence from `false`/`0`/`\"\"`), returns the frozen `const {Change}` list and a `{string: integer}` counts Map initialized with bracketed keys `\"added\"`, `\"removed\"`, and `\"changed\"`.",
+      "files": [
+        "evals/files/legacy_diff.lua"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_diff.titan"
+      ],
+      "expected_outputs": [
+        "diff.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_diff.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_diff oracle_diff",
+          "./oracle_diff"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "prog04-a1-lua-delta-truthiness-maps-string-coercion",
+          "concept_ids": [
+            "titan-programmer:lua-to-titan-delta",
+            "titan-programmer:inv-6-no-subtyping-value-strict-vs-dynamic"
+          ],
+          "critical": "standard",
+          "check": "Preserves `0`/`\"\"` truthiness vs `nil`/`false` falsiness, uses bracketed `{ [\"added\"] = 0, ... }` Map literals, uses `\"\" .. n` (never `n as string`), and pairs `v is integer` with `v as integer` for dynamic `value` coercion."
+        },
+        {
+          "id": "prog04-a2-const-arrays-variadics-spread-mutable-accumulators",
+          "concept_ids": [
+            "titan-programmer:types-containers-functions-control-flow",
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "standard",
+          "check": "Uses `const? {string}` for read-only Array parameters, freezes local mutable accumulators with `as const {T}`, forwards variadics `...: string`, and returns `slice_window` via 1-based inclusive spread `...items[first, last]` as a flexible return."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-programmer` (`inv-2`, `inv-6`, `lua-to-titan-delta`, `types-containers-functions-control-flow`). Score `idiom_score = 3` only if `oracle_diff` exits `0` and both `prog04-a1..a2` pass cleanly; cap at `<= 1` if `0`/`\"\"` are treated as falsy, `false` is confused with absent `nil` in `diff_maps`, `coerce_int_or` rejects `2.0` or skips `is`/`as`, or `slice_window` drops open-sink spread results."
+    }
+  ]
+}

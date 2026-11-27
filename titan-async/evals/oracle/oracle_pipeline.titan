@@ -1,0 +1,106 @@
+local async = import "async"
+local pipeline = import "pipeline"
+local timer = import "timer"
+
+local function fail(msg: string)
+  raise "oracle_pipeline: " .. msg
+end
+
+function main(args: {string}): integer
+  -- 1. Latch: event-driven ResumeToken wait + release + already-open + idempotent release
+  local latch = pipeline.Latch()
+  if latch:has_waiter() then fail("fresh latch should have no waiter") end
+
+  local waiter = async.run(function (): string
+    return latch:wait()
+  end)
+  async.yield()
+  if not latch:has_waiter() then fail("latch should register waiter before release") end
+
+  -- Second concurrent waiter must raise "Latch busy"
+  local busy_err = ""
+  do
+    latch:wait()
+  catch
+    busy_err = error as string
+  end
+  if busy_err ~= "Latch busy" then fail("expected Latch busy, got: " .. busy_err) end
+
+  latch:release("green-light")
+  latch:release("ignored-second")
+  if latch:has_waiter() then fail("latch should clear waiter on release") end
+  case async.join(waiter)
+  when succeeded(v) then
+    if v ~= "green-light" then fail("latch value mismatch: " .. v) end
+  else
+    fail("latch waiter did not succeed")
+  end
+  -- Already-opened wait returns immediately without suspending
+  if latch:wait() ~= "green-light" then fail("already-opened latch mismatch") end
+
+  -- 2. Latch cancellation cleanly detaches waiter so a later waiter can succeed
+  local latch2 = pipeline.Latch()
+  local cancelled_waiter = async.run(function (): string
+    return latch2:wait()
+  end)
+  async.yield()
+  if not latch2:has_waiter() then fail("latch2 waiter missing") end
+  cancelled_waiter:cancel(async.CancellationReason.simple("stop"))
+  local was_cancelled, _ = async.join(cancelled_waiter):has_cancelled()
+  if not was_cancelled then fail("latch2 waiter not cancelled") end
+  if latch2:has_waiter() then fail("cancelled latch2 waiter leaked registration") end
+
+  local second_waiter = async.run(function (): string
+    return latch2:wait()
+  end)
+  async.yield()
+  latch2:release("recovered")
+  case async.join(second_waiter)
+  when succeeded(v) then
+    if v ~= "recovered" then fail("latch2 second waiter mismatch") end
+  else
+    fail("latch2 second waiter failed")
+  end
+
+  -- 3. Bounded async.channel with nil sentinel + close drops buffered items
+  local doubled = pipeline.double_through_channel({ 3, 0, -5, 11, 20 }, 2)
+  local expected = { 6, 0, -10, 22, 40 }
+  if #doubled ~= #expected then fail("double_through_channel length mismatch") end
+  for i = 1, #expected do
+    if doubled[i] ~= expected[i] then fail("double_through_channel element mismatch at " .. i) end
+  end
+
+  local empty_doubled = pipeline.double_through_channel({}, 1)
+  if #empty_doubled ~= 0 then fail("empty double_through_channel mismatch") end
+
+  local closed_msg = pipeline.verify_channel_close_drops(2)
+  if closed_msg ~= "channel is closed" then
+    fail("verify_channel_close_drops got: " .. closed_msg)
+  end
+
+  -- 4. reader_writer_channel framing across chunk boundaries + embedded NUL + buffered suffix after writer:close()
+  local frames, saw_closed = pipeline.read_rw_frames({ "al", "pha\nbe\0ta\ngamma\n" }, "\n")
+  if not saw_closed or #frames ~= 3 or frames[1] ~= "alpha" or frames[2] ~= "be\0ta" or frames[3] ~= "gamma" then
+    fail("read_rw_frames mismatch: count=" .. #frames)
+  end
+
+  -- 5. timer.ticker collects ticks and returns false after close
+  local ticks, after_close = pipeline.collect_ticker_ticks(5, 3)
+  if ticks ~= 3 or after_close then
+    fail("collect_ticker_ticks mismatch: ticks=" .. ticks)
+  end
+
+  -- 6. Coalescing async.Receiver delivers latest value and rejects post-close wait
+  local rep = pipeline.coalesce_receiver_messages({ "first", "middle", "final-value" })
+  if rep.latest ~= "final-value" or rep.closed_error ~= "receiver is closed" then
+    fail("coalesce_receiver_messages mismatch: latest=" .. rep.latest .. " err=" .. rep.closed_error)
+  end
+
+  -- 7. Cancelled outer Task's defer still joins child via add_terminal_listener + await_cleanup
+  local child_cleaned, child_status = pipeline.join_in_cancelled_cleanup(300)
+  if not child_cleaned or child_status ~= "cancelled" then
+    fail("join_in_cancelled_cleanup mismatch: cleaned=" .. (child_cleaned and "true" or "false") .. " st=" .. child_status)
+  end
+
+  return 0
+end

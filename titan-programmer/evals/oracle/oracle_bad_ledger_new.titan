@@ -1,0 +1,7 @@
+local entry = import "ledger.entry"
+
+function main(_args: {string}): integer
+  local e = entry.Entry("x", 10, "secret")
+  if e.id ~= "x" then return 1 end
+  return 0
+end

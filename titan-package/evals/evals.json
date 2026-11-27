@@ -1,0 +1,124 @@
+{
+  "skill_name": "titan-package",
+  "evals": [
+    {
+      "id": "package-01-multi-module-rockspec-and-install",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-package"],
+      "candidate_expected_skills": ["titan-programmer", "titan-package"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-tester"],
+      "forbidden_skills": ["titan-application", "titan-completion"],
+      "prompt": "Author a reusable multi-module Titan library packaged as a LuaRocks format `3.0` rock named `titan-metric` (`0.1.0-1`) that bundles a canonical folder module and a sibling submodule into a single common-prefix provider.\n\nCreate these files:\n1. Canonical folder module `metric.core` under `src/metric/core/`:\n   - `src/metric/core/core.titan` (main file): exports `record Sample` with `const label: string` and `const value: integer`, `function make_sample(label: string, value: integer): Sample`, and `function scale(s: Sample, factor: integer): integer` (delegating to the folder-local helper `scaled_value` defined in `math_contrib.titan`).\n   - `src/metric/core/math_contrib.titan` (contributor file — no `do ... end` initializer): defines `local function scaled_value(v: integer, factor: integer): integer` returning `v * factor`.\n2. Sibling module `src/metric/format.titan` (logical module `metric.format`):\n   - Imports `metric.core` and exports `function render(s: core.Sample, factor: integer): string` returning `s.label .. \"=\" .. core.scale(s, factor)`.\n3. Native tests in `tests/metric_test.titan`:\n   - Public `test_*(context: test.Context)` verifying `metric.core` and `metric.format` (`render(make_sample(\"cpu\", 7), 3) == \"cpu=21\"`), runnable via `titanc --incremental --test --tree \"src;tests\" --test-dir tests`.\n4. Format `3.0` rockspec `titan-metric-0.1.0-1.rockspec`:\n   - Must execute cleanly in LuaRocks' empty `_ENV` (no globals such as `table`).\n   - Declare `package = \"titan-metric\"`, `version = \"0.1.0-1\"`, and `dependencies = { \"lua ~> 5.5\", \"titan ~> 0.6\" }`.\n   - `build` (`type = \"command\"`): compile both roots together (`\"$(SCRIPTS_DIR)/titanc\" --incremental --tree src --output build metric.core metric.format` — NEVER pass `--static` on a library!) to emit the common-prefix provider `build/metric.so` and `build/metric.a`; stage ONLY those two final files into `\"$(PREFIX)/dist/modules/\"` (never copy `build/` wholesale, intermediates, `dist/bin/`, or symlinks). Include `platforms.windows` `cmd.exe` overrides compiling with `titanc.exe` and staging `build\\metric.dll` into `$(PREFIX)\\dist\\modules\\metric.dll`.\n   - `hooks`: set `post_install = '\"$(SCRIPTS_DIR)/titan-install\" --path \"$(PREFIX)\"'` with `platforms.windows.post_install = '\"$(SCRIPTS_DIR)\\titan-install.bat\" --path \"$(PREFIX)\"'`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/setup_rock_tree.py",
+        "evals/oracle/oracle_consumer.titan",
+        "evals/oracle/oracle_pkg01.py"
+      ],
+      "expected_outputs": [
+        "src/metric/core/core.titan",
+        "src/metric/core/math_contrib.titan",
+        "src/metric/format.titan",
+        "tests/metric_test.titan",
+        "titan-metric-0.1.0-1.rockspec"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 90,
+        "commands": [
+          "python3 /verify/oracle/oracle_pkg01.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "pkg01-a1-folder-module-and-common-prefix-provider",
+          "concept_ids": [
+            "titan-package:inv-1-rock-name-vs-logical-name-and-prefix-providers",
+            "titan-package:inv-2-no-static-on-libraries-and-external-deps",
+            "titan-package:multi-module-providers-folder-modules-and-x-payloads"
+          ],
+          "critical": "standard",
+          "check": "Implements canonical folder module `src/metric/core/{core,math_contrib}.titan` (shared `local` scope, private non-importable contributor) plus `src/metric/format.titan`, and compiles both roots without `--static` into a single common-prefix provider pair `metric.so` + `metric.a`."
+        },
+        {
+          "id": "pkg01-a2-rockspec-dist-staging-and-outside-consumer",
+          "concept_ids": [
+            "titan-package:inv-3-prefix-vs-env-dist-staging-and-titan-install",
+            "titan-package:staging-dist-mapping",
+            "titan-package:complete-minimal-library-package"
+          ],
+          "critical": "standard",
+          "check": "Format `3.0` empty-`_ENV`-safe rockspec declares `lua ~> 5.5` and `titan ~> 0.6`, includes Windows `cmd.exe` overrides, stages ONLY `modules/metric.so` and `modules/metric.a` under `$(PREFIX)/dist/`, publishes via `titan-install --path \"$(PREFIX)\"`, passes native tests, and serves an outside consumer across dynamic, `--static`, and bare-Lua `require \"titan\"` modes."
+        }
+      ],
+      "judge_rubric": "Score `idiom_score = 3` only if `oracle_pkg01.py` exits `0` (empty-`_ENV` rockspec audit, native tests, `luarocks --tree /verify/rock-tree make`, clean `dist/` audit, outside dynamic/`--static`/Lua consumer checks, and private-contributor check all pass) and both assertions hold. Cap at `<= 1` if `--static` is passed to library `titanc`, extra build intermediates leak into `$(PREFIX)/dist/`, `post_install` omits `titan-install --path \"$(PREFIX)\"`, Windows overrides are missing, or rockspec fails in empty `_ENV`."
+    },
+    {
+      "id": "package-02-provider-bundling-dso-compat-and-uninstall",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-package"],
+      "candidate_expected_skills": ["titan-programmer", "titan-package"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-ffi", "titan-stdlib"],
+      "forbidden_skills": ["titan-application", "titan-language-server"],
+      "prompt": "Using the provided C helper files `helper.h` and `helper.c` (located at the workspace root — treat both as read-only), author a source-only Titan dependency rock and a two-version compiled multi-module provider rock that links the private C object via `-X`, depends on the installed source-only rock without embedding it, ships a public header under `dist/include/bundle/`, and upgrades cleanly from `v1` to `v2` without breaking already-compiled dynamic consumers.\n\nCreate these three rock directories:\n1. `base-rock/` — source-only rock `titan-tagfmt` (`0.1.0-1`):\n   - `base-rock/titan-tagfmt-0.1.0-1.rockspec`: format `3.0` empty-`_ENV`-safe rockspec (`package = \"titan-tagfmt\"`, `version = \"0.1.0-1\"`, `dependencies = { \"lua ~> 5.5\", \"titan ~> 0.6\" }`) staging `tagfmt.titan` into `$(PREFIX)/dist/modules/tagfmt.titan` and invoking `\"$(SCRIPTS_DIR)/titan-install\" --path \"$(PREFIX)\"` in `hooks.post_install` (with `platforms.windows` overrides).\n   - `tagfmt` module (`base-rock/src/tagfmt.titan` or `base-rock/dist/modules/tagfmt.titan`): exports `function bracket(tag: string, body: string): string` returning `\"[\" .. tag .. \"]\" .. body`.\n2. `v1/` — compiled multi-module provider rock `titan-bundle` (`1.0.0-1`):\n   - `v1/src/bundle/hash.titan` (`bundle.hash`): imports `helper.h`, exports `record Digest` with ordered public fields `const tag: string` and `const score: integer`, and `function compute(a: integer, b: integer): Digest` returning `Digest(\"h1\", bundle_mix_hash(a, b))`.\n   - `v1/src/bundle/report.titan` (`bundle.report`): imports `bundle.hash` and installed source module `tagfmt` via ordinary `import \"tagfmt\"` (NEVER explicit `.titan` import across the installed source boundary!), exports `function describe(d: hash.Digest): string` returning `tagfmt.bracket(d.tag, \":\" .. d.score)`.\n   - `v1/titan-bundle-1.0.0-1.rockspec`: format `3.0` empty-`_ENV`-safe rockspec declaring `dependencies = { \"lua ~> 5.5\", \"titan ~> 0.6\", \"titan-tagfmt ~> 0.1\" }`, compiling `../helper.c` with `-fPIC -c -I .. -o build/helper.o` and linking `bundle.hash bundle.report -X build/helper.o` via `\"$(SCRIPTS_DIR)/titanc\"` (with `--tree src -I .. --output build`, NO `--static`!), staging ONLY `build/bundle.so` + `build/bundle.a` into `$(PREFIX)/dist/modules/` and `../helper.h` into `$(PREFIX)/dist/include/bundle/helper.h` (NEVER `dist/include/titan/`), and running `titan-install --path \"$(PREFIX)\"` in `hooks.post_install`.\n3. `v2/` — DSO binary-compatible upgrade `titan-bundle` (`2.0.0-1`):\n   - `v2/src/bundle/hash.titan` (`bundle.hash`): MUST preserve full DSO binary compatibility for an already-compiled v1 consumer (keep `Digest` public field names/types/order and `compute(a: integer, b: integer): Digest` signature including parameter names unchanged!), while exercising safe DSO-compatible changes: update `compute` to return `Digest(\"h2\", bundle_mix_hash(a, b) + 1000)` and add a new unused public export `function release_tag(): string` returning `\"v2\"`.\n   - `v2/src/bundle/report.titan` (`bundle.report`): same public contract as `v1`.\n   - `v2/titan-bundle-2.0.0-1.rockspec`: same packaging structure as `v1` with `version = \"2.0.0-1\"`.",
+      "files": [
+        "evals/files/helper.h",
+        "evals/files/helper.c"
+      ],
+      "oracle_files": [
+        "evals/oracle/setup_rock_tree.py",
+        "evals/oracle/oracle_bundle_consumer.titan",
+        "evals/oracle/oracle_pkg02.py"
+      ],
+      "expected_outputs": [
+        "base-rock/titan-tagfmt-0.1.0-1.rockspec",
+        "v1/titan-bundle-1.0.0-1.rockspec",
+        "v1/src/bundle/hash.titan",
+        "v1/src/bundle/report.titan",
+        "v2/titan-bundle-2.0.0-1.rockspec",
+        "v2/src/bundle/hash.titan",
+        "v2/src/bundle/report.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 120,
+        "commands": [
+          "python3 /verify/oracle/oracle_pkg02.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "pkg02-a1-source-only-dep-and-x-payload-staging",
+          "concept_ids": [
+            "titan-package:inv-1-rock-name-vs-logical-name-and-prefix-providers",
+            "titan-package:inv-2-no-static-on-libraries-and-external-deps",
+            "titan-package:inv-3-prefix-vs-env-dist-staging-and-titan-install",
+            "titan-package:inv-5-source-only-dependency-boundary",
+            "titan-package:staging-dist-mapping",
+            "titan-package:multi-module-providers-folder-modules-and-x-payloads",
+            "titan-package:source-only-rocks-and-cross-library-obligations"
+          ],
+          "critical": "standard",
+          "check": "Publishes source-only `titan-tagfmt` (`tagfmt.titan`) and compiled `titan-bundle` depending on `tagfmt` via ordinary `import \"tagfmt\"` (leaving `tagfmt` external for consumer single-owner compilation under `-o`), carries `-X build/helper.o` into both `bundle.so` and `bundle.a` (serving both dynamic and `--static` consumers), and stages `helper.h` under `dist/include/bundle/` (never `dist/include/titan/`)."
+        },
+        {
+          "id": "pkg02-a2-dso-abi-hot-swap-and-titan-uninstall",
+          "concept_ids": [
+            "titan-package:inv-4-removal-and-physical-ownership-titan-uninstall",
+            "titan-package:inv-6-dso-binary-compatibility",
+            "titan-package:packing-dso-compatibility-and-removal"
+          ],
+          "critical": "standard",
+          "check": "Upgrading `titan-bundle` from `1.0.0-1` to `2.0.0-1` preserves used signatures/parameter names/public `Digest` layout while adding unused `release_tag()` so an unrebuilt v1 dynamic consumer seamlessly prints `[h2]:1033` (while already-linked `--static` consumer stays `[h1]:33`); `titan-uninstall` respects LuaRocks dependency checks, preserves active `2.0.0-1` when removing inactive `1.0.0-1`, removes all published `bundle.*` and `include/bundle/helper.h` on active uninstall, removes `tagfmt.titan` cleanly, and treats absent-rock removal as a no-op."
+        }
+      ],
+      "judge_rubric": "Score `idiom_score = 3` only if `oracle_pkg02.py` exits `0` (source-only install, v1 install + outside dynamic/`--static` builds, v2 unrebuilt dynamic hot-swap to `[h2]:1033`, Lua `release_tag() == \"v2\"`, and full `titan-uninstall` lifecycle all pass) and both assertions hold. Cap at `<= 1` if `bundle.report` uses explicit `tagfmt.titan` import, `-X` fails to embed `helper.o` in `bundle.a`, `helper.h` is staged into `include/titan/`, v2 breaks DSO binary compatibility (changing param names or `Digest` fields), or `titan-bundle` omits `titan-tagfmt` from `dependencies`."
+    }
+  ]
+}

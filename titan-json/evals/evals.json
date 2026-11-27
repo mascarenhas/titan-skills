@@ -1,0 +1,124 @@
+{
+  "skill_name": "titan-json",
+  "evals": [
+    {
+      "id": "json-01-typed-schema-null-policies-unions",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-json"],
+      "candidate_expected_skills": ["titan-programmer", "titan-json"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-reflect", "titan-stdlib"],
+      "forbidden_skills": ["titan-protobuf", "titan-pegs"],
+      "prompt": "Implement a typed JSON schema encoding and decoding module `api_json.titan` (logical module `api_json`) using Titan's standard JSON and reflection modules.\n\nExport the following types and functions:\n- `record Account`:\n  - private `local version: integer`\n  - public `const id: integer`, `const name: string`, `const bio: string?`\n  - custom public `function Account.new(id: integer, name: string, bio: string?): Account` initializing `version = 2` (with parameter names matching the JSON keys so typed JSON decoding constructs `Account` through `Account.new`)\n  - public method `Account:schema_version(): integer` returning `self.version`.\n- `union ApiEvent`:\n  - `created(Account)`\n  - `renamed(id: integer, label: string)`\n  - `ping()`\n  - `local internal(secret: string)` (a private variant to verify private-variant encode rejection).\n- `function make_internal_event(secret: string): ApiEvent` returning `ApiEvent.internal(secret)`.\n- `function encode_event(ev: ApiEvent, tag_name: string?): string`: encodes `ev` to compact JSON; when `tag_name ~= nil`, applies `EncodeOption.tag_field(tag_name)`.\n- `function decode_event(text: string, tag_name: string?, ignore_unknown: boolean): ApiEvent`: decodes `text` against the nominal `api_json.ApiEvent` reflection descriptor, applying `DecodeOption.ignore_unknown_fields(ignore_unknown)` and (when `tag_name ~= nil`) `DecodeOption.tag_field(tag_name)`.\n- `function decode_const_ints(text: string): const {integer}`: decodes a JSON array using a `const` Array reflection descriptor with `integer` elements.\n- `function decode_scores(text: string): {string: integer}`: decodes a JSON object using a Map reflection descriptor from `string` to `integer`.\n- `function decode_unknown_type(text: string): value`: attempts to decode `text` against an unregistered nominal descriptor `\"nonexistent_mod.Ghost\"` (allowing the JSON decoder's `unknown_type` error to propagate).",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_json_schema.titan"
+      ],
+      "expected_outputs": [
+        "api_json.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_json_schema.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_json_schema oracle_json_schema",
+          "./oracle_json_schema"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "json01-a1-record-public-new-and-local-field-encapsulation",
+          "concept_ids": [
+            "titan-json:inv-4-records-public-new-strict-unions",
+            "titan-programmer:inv-1-exported-record-local-fields",
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "issue61_idiom",
+          "check": "`Account` keeps `version` in a `local` field with `const` public fields and a matching-parameter public `Account.new` so typed JSON decoding invokes `Account.new` and omits `version` on encode."
+        },
+        {
+          "id": "json01-a2-reflect-schemas-const-array-map-and-unknown-type",
+          "concept_ids": [
+            "titan-json:inv-3-no-generic-decode-initialized-modules",
+            "titan-json:typed-record-union-and-container-schemas",
+            "titan-json:encoding-null-and-schema-matrix"
+          ],
+          "critical": "standard",
+          "check": "Builds reflection descriptors with `reflect.NamedType(\"api_json.ApiEvent\")`, `reflect.Type.is_array(ArrayTypeConstness.is_const(), elem)` (constness first), and `reflect.Type.is_map(key, val)`, preserving exact integer decimal parsing above `2^53` and raising `unknown_type` for unregistered nominals."
+        },
+        {
+          "id": "json01-a3-union-tag-field-ignore-unknown-and-private-variant",
+          "concept_ids": [
+            "titan-json:inv-4-records-public-new-strict-unions",
+            "titan-json:typed-record-union-and-container-schemas"
+          ],
+          "critical": "standard",
+          "check": "Applies matching `tag_field` options, lets `ignore_unknown_fields(true)` apply to nested `Account` records while keeping `ApiEvent` union envelopes strict, and propagates `invalid_union` on tag collisions and `private_variant` on `local` variants."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-json` (`inv-3`, `inv-4`, `encoding-null-and-schema-matrix`, `typed-record-union-and-container-schemas`), `titan-programmer` (`inv-1`, `inv-2`). Score `idiom_score = 3` only if `oracle_json_schema` exits `0` and all three `json01-a1..a3` checks pass; cap at `<= 1` if `Account.version` is exposed publicly, `is_array` argument order is swapped, or custom manual Map parsing replaces reflection-directed `json.decode`."
+    },
+    {
+      "id": "json-02-dynamic-value-diagnostics-nesting-limits",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-json"],
+      "candidate_expected_skills": ["titan-programmer", "titan-json"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-reflect"],
+      "forbidden_skills": ["titan-pegs", "titan-protobuf"],
+      "prompt": "Implement a dynamic JSON inspection, null-policy, diagnostics, and budget-guardrail module `dyn_json.titan` (logical module `dyn_json`) using Titan's standard JSON module.\n\nExport the following record and functions:\n- `record Diagnostic` with `const` fields:\n  - `const code: string`\n  - `const path: string`\n  - `const position: integer?`\n  - `const line: integer?`\n  - `const column: integer?`\n- `function decode_default_lossy(text: string): value`: decodes `text` dynamically with default `null -> nil` behavior (no schema, no null sentinel).\n- `function roundtrip_lossless_nulls(text: string): (value, string)`: decodes `text` dynamically using a dedicated shared private `NullToken` record sentinel on `DecodeOption.null_value` (passing explicit `nil` for the schema target) and re-encodes that decoded value using the same sentinel on `EncodeOption.null_value`, returning `(decoded_value, reencoded_json)` so trailing Array nulls and `null` Map entries round-trip losslessly.\n- `function is_null_sentinel(v: value): boolean`: returns `true` iff `v` equals that shared `NullToken` sentinel instance.\n- `function inspect_number_kind(text: string): string`: decodes `text` dynamically and distinguishes exact Titan scalar kinds — returns `\"integer\"` if the decoded value is strictly a Titan `integer` (NOT a `float` such as `42.0` or `1e3`), `\"float\"` if it is strictly a Titan `float`, or `\"other\"` otherwise.\n- `function decode_with_limits(text: string, max_depth: integer, max_bytes: integer, max_nodes: integer): (value, Diagnostic?)`: decodes `text` dynamically with explicit `nil` schema target and `DecodeOption.max_depth`, `max_bytes`, and `max_nodes`; on success returns `(decoded, nil)` (including when `text == \"null\"` and `decoded == nil`!); catches `json.Error` to return `(nil, Diagnostic(err.code, err.path, err.position, err.line, err.column))` and re-raises any unrelated error with bare `raise`.\n- `function encode_checked(v: value, max_depth: integer): (string?, Diagnostic?)`: encodes `v` with `EncodeOption.max_depth(max_depth)`; on success returns `(encoded, nil)`; catches `json.Error` to return `(nil, Diagnostic(err.code, err.path, err.position, err.line, err.column))` and re-raises any unrelated error with bare `raise`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_json_dynamic.titan"
+      ],
+      "expected_outputs": [
+        "dyn_json.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_json_dynamic.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_json_dynamic oracle_json_dynamic",
+          "./oracle_json_dynamic"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "json02-a1-explicit-nil-target-and-json-error-handling",
+          "concept_ids": [
+            "titan-json:inv-1-explicit-nil-catch-json-error",
+            "titan-json:dynamic-decoding-null-sentinels-and-diagnostics"
+          ],
+          "critical": "standard",
+          "check": "Passes explicit `nil` schema placeholder before `DecodeOption`s, handles valid `\"null\"` without confusing `nil` with failure, catches `json.Error` (recording `code`, `path`, `position`, `line`, `column`), and re-raises unrelated errors via bare `raise`."
+        },
+        {
+          "id": "json02-a2-lossless-null-token-sentinel",
+          "concept_ids": [
+            "titan-json:inv-2-default-null-drops-sentinel-lossless",
+            "titan-json:dynamic-decoding-null-sentinels-and-diagnostics"
+          ],
+          "critical": "standard",
+          "check": "Uses a single shared empty `NullToken` record sentinel passed to both `DecodeOption.null_value` and `EncodeOption.null_value` to preserve trailing Array nulls and `null` Map entries losslessly."
+        },
+        {
+          "id": "json02-a3-strict-rfc8259-exact-numbers-and-budgets",
+          "concept_ids": [
+            "titan-json:inv-5-strict-rfc8259-utf8-exact-numbers",
+            "titan-json:inv-6-budgets-and-independent-peg-stack",
+            "titan-programmer:inv-6-no-subtyping-value-strict-vs-dynamic"
+          ],
+          "critical": "standard",
+          "check": "Distinguishes exact dynamic `integer` vs `float` (rejecting `42.0`/`1e3` as integers via strict `value -> T` projection rather than dynamic `is integer`), enforces RFC 8259/UTF-8 diagnostics (`duplicate_key`, `trailing_input`, `\\u0000`, non-finite float), and enforces `max_depth`/`max_bytes`/`max_nodes` (`limit_exceeded` / `invalid_option`)."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-json` (`inv-1`, `inv-2`, `inv-5`, `inv-6`, `dynamic-decoding-null-sentinels-and-diagnostics`), `titan-programmer` (`inv-6`). Score `idiom_score = 3` only if `oracle_json_dynamic` exits `0` and all three `json02-a1..a3` checks hold; cap at `<= 1` if `v is integer` misclassifies `42.0` as integer, `decode(\"null\")` is treated as failure, `NullToken` is omitted or mismatched between decode/encode, or `catch` swallows non-`json.Error` exceptions."
+    }
+  ]
+}

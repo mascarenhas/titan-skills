@@ -1,0 +1,162 @@
+{
+  "skill_name": "titan-language-server",
+  "evals": [
+    {
+      "id": "ls-01-multiroot-config-and-stdio-queries",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": [
+        "titan-language-server",
+        "titan-programmer"
+      ],
+      "candidate_expected_skills": [
+        "titan-language-server",
+        "titan-programmer"
+      ],
+      "candidate_expected_references": [],
+      "optional_skills": [
+        "titan-stdlib"
+      ],
+      "forbidden_skills": [
+        "titan-completion",
+        "titan-package"
+      ],
+      "prompt": "Author a multi-root Titan language server workspace fixture (`native_app/` and `browser_app/`) and a Python 3 stdlib-only stdio JSON-RPC client module `probe_ls.py` that launches and queries the Titan language server executable at `$TITAN_LS_BIN`.\n\n### Part 1: Multi-root workspaces and Titan modules\n1. `native_app/titan-config.lua`: workspace config using Titan's global-assignment config syntax (not `return { ... }`) setting `include = { \"./src\" }` and `source_module_roots = { \"./src\" }`. Do NOT put `compiler_root` in this tracked file.\n2. `native_app/titan-config.local.lua`: untracked local SDK override containing ONLY the global assignment `compiler_root = \"./local-sdk\"` (no `return`, no other keys).\n3. `native_app/src/counts.titan`: valid Titan module with LDoc comments (`---` / `--` continuations):\n   - Module doc comment with `@module counts` before the first token.\n   - `record Counter` documented with `@field label Counter name.` containing `const label: string` and `value: integer`.\n   - `function step(counter: Counter): integer` documented with `@param counter` and `@return`, incrementing `counter.value` by `1` and returning it.\n   - `function demo(): integer` constructing a `Counter` and calling `step` so `step` has both a definition and a call site.\n4. `browser_app/titan-config.lua`: workspace config setting `target = \"browser\"`, `include = { \"./src\" }`, and `source_module_roots = { \"./src\" }`.\n5. `browser_app/src/ok.titan`: valid browser-target Titan module exporting `function format_count(n: integer): string` with LDoc (`---`, `@param`, `@return`).\n6. `browser_app/src/broken.titan`: Titan module containing a deliberate static type error inside `function bad(): integer` (returning a `string`) so the language server reports diagnostics and `null` hover for `broken.titan` while sibling `ok.titan` continues answering.\n\n### Part 2: `probe_ls.py` (Python 3 stdlib only, `Content-Length`-framed JSON-RPC over stdio)\nExport:\n1. `build_launcher_config(sdk_root: str, server_bin: str, trusted_roots: list[str]) -> dict`:\n   - Returns an LSP configuration object `{\"servers\": {\"titan\": { ... }}}` with NO `\"env\"` field.\n   - Sets `\"command\": \"/usr/bin/env\"` and `\"args\"` unsetting `TITAN_PREFIX`, `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_SOURCE_PATH`, `LUA_PATH`, `LUA_CPATH`, `LUA_PATH_5_5`, and `LUA_CPATH_5_5` (`-u <NAME>`), setting `TITAN_ROOT=<sdk_root>`, verbatim `TITAN_LS_LUA_PATH=<sdk_root>/share/lua/5.5/?.lua;<sdk_root>/share/lua/5.5/?/init.lua` (no `;;`), verbatim `TITAN_LS_LUA_CPATH=<sdk_root>/lib/lua/5.5/?.so` (no `;;`), and ending with `server_bin`.\n   - Sets `\"fileTypes\": [\".titan\"]`, `\"languageId\": \"titan\"`, `\"rootMarkers\": [\"titan-config.lua\", \"titan-config.local.lua\", \".git\"]` (never `\".\"`), and `\"initOptions\": {\"trustedRoots\": list(trusted_roots), \"insertCallSnippets\": false}`.\n2. `class TitanLspClient`:\n   - `__init__(self, sdk_root: str, workspace_folders: list[str], trusted_roots: list[str], server_bin: str | None = None)`: defaults `server_bin` to `os.environ[\"TITAN_LS_BIN\"]`, spawns the server via `build_launcher_config(...)`'s `command` + `args`, sends LSP `initialize` (with `workspaceFolders` using `file://` URIs and `initializationOptions = {\"trustedRoots\": list(trusted_roots)}`) and `initialized`. Implements `__enter__`, `__exit__`, and `close()` (clean `shutdown` + `exit`).\n   - `workspace_status(self) -> dict`: queries `titan/workspaceStatus` and returns the JSON-RPC `result` dict (`{\"roots\": [...]}`).\n   - `pull_diagnostics(self, file_path: str, previous_result_id: str | None = None) -> dict`: queries `textDocument/diagnostic` (passing `previousResultId` when non-None). Returns `{\"ok\": True, \"result\": <result>}` on success or `{\"ok\": False, \"error\": <error>}` on JSON-RPC error (such as `-32803` for an untrusted root — never turn errors into empty diagnostics).\n   - `hover(self, file_path: str, line: int, character: int) -> str | None`: queries `textDocument/hover` at 0-based `line` and UTF-16 `character`, returning `result[\"contents\"][\"value\"]` or `None` when the server returns `null`.\n   - `preview_rename(self, file_path: str, line: int, character: int, new_name: str) -> dict`: queries `textDocument/rename` and returns the raw `WorkspaceEdit` dict strictly read-only (NEVER modify files on disk).\n   - `probe_unsupported(self, file_path: str, line: int, character: int) -> dict[str, dict]`: queries `textDocument/documentSymbol`, `textDocument/typeDefinition`, `textDocument/implementation`, and `textDocument/codeAction`; classifies JSON-RPC error code `-32601` explicitly as `{\"status\": \"unsupported\", \"code\": -32601, \"message\": <msg>}` (never treating `-32601` as empty/ok).",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_ls_queries.py"
+      ],
+      "expected_outputs": [
+        "native_app/titan-config.lua",
+        "native_app/titan-config.local.lua",
+        "native_app/src/counts.titan",
+        "browser_app/titan-config.lua",
+        "browser_app/src/ok.titan",
+        "browser_app/src/broken.titan",
+        "probe_ls.py"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "python3 /verify/oracle/oracle_ls_queries.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ls01-a1-config-compiler-root-and-trust-no-fallback",
+          "concept_ids": [
+            "titan-language-server:inv-4-compiler-root-trust-no-fallback",
+            "titan-language-server:inv-5-browser-target-config"
+          ],
+          "critical": "standard",
+          "check": "`titan-config.lua` uses global assignments (`include`, `source_module_roots`, `target = \"browser\"` on `browser_app`) with no `compiler_root`, `titan-config.local.lua` sets only `compiler_root = \"./local-sdk\"`, and untrusted roots fail with `trusted: false`, `state: \"failed\"`, `-32803`, and zero fallback to the default SDK."
+        },
+        {
+          "id": "ls01-a2-launcher-env-hygiene-and-worktree-state",
+          "concept_ids": [
+            "titan-language-server:inv-6-worktree-state-and-lsp-json-hygiene",
+            "titan-language-server:multiroot-router-and-lsp-json"
+          ],
+          "critical": "standard",
+          "check": "`build_launcher_config` omits any `env` key, invokes `/usr/bin/env` unsetting `TITAN_PREFIX`/`TITAN_PATH*`/`TITAN_SOURCE_PATH`/`LUA_*`, passes `TITAN_ROOT` and verbatim `TITAN_LS_LUA_PATH`/`TITAN_LS_LUA_CPATH` without `;;`, excludes `\".\"` from `rootMarkers`, and runs cleanly under polluted ambient environment variables."
+        },
+        {
+          "id": "ls01-a3-pull-diagnostics-readonly-rename-and-unsupported-methods",
+          "concept_ids": [
+            "titan-language-server:inv-1-saved-disk-baseline-and-unimplemented-methods",
+            "titan-language-server:inv-2-exploratory-aid-and-readonly-rename",
+            "titan-language-server:capability-matrix",
+            "titan-language-server:pre-delivery-checklist"
+          ],
+          "critical": "standard",
+          "check": "`TitanLspClient` supports pull `textDocument/diagnostic` with `previousResultId` (`full` -> `unchanged`), returns `textDocument/rename` edits strictly read-only without mutating disk files, and explicitly classifies `-32601` `MethodNotFound` on `documentSymbol`/`typeDefinition`/`implementation`/`codeAction` rather than reading them as empty."
+        },
+        {
+          "id": "ls01-a4-failed-module-isolation-and-ldoc-hover",
+          "concept_ids": [
+            "titan-language-server:inv-3-failed-modules-and-ffi-limits",
+            "titan-language-server:per-slice-sdk-omp-queries-ldoc-api"
+          ],
+          "critical": "standard",
+          "check": "`counts.titan` uses valid LDoc comments (`---`, `@module`, `@field`, `@param`, `@return`) surfaced in live `textDocument/hover`, while failed `broken.titan` emits diagnostics and `null` hover without preventing valid sibling `ok.titan` from answering hover."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-language-server` (`inv-1..inv-6`, `capability-matrix`, `multiroot-router-and-lsp-json`, `per-slice-sdk-omp-queries-ldoc-api`, `pre-delivery-checklist`), `titan-programmer` (`inv-2`). Score `idiom_score = 3` only if `oracle_ls_queries.py` exits `0` against the live staged binary and all four `ls01-a1..a4` checks hold; cap at `<= 1` if `titan-config*.lua` uses `return { ... }`, `compiler_root` leaks into `titan-config.lua`, `build_launcher_config` uses an `env` key or `;;`, `preview_rename` mutates disk files, `-32601` is treated as empty, or untrusted `-32803` errors are swallowed."
+    },
+    {
+      "id": "ls-02-unsaved-completion-hover-and-ffi-limits",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": [
+        "titan-language-server",
+        "titan-programmer"
+      ],
+      "candidate_expected_skills": [
+        "titan-language-server",
+        "titan-programmer"
+      ],
+      "candidate_expected_references": [],
+      "optional_skills": [
+        "titan-stdlib"
+      ],
+      "forbidden_skills": [
+        "titan-completion",
+        "titan-application"
+      ],
+      "prompt": "Using the provided C header `sensor.h` in the current directory, author two sibling Titan language server workspaces (`ws_main/` and `ws_ffi/`) and a Python 3 stdlib-only stdio LSP audit module `ls_unsaved_audit.py` that exercises unsaved completion-activated private hover, FFI symbol boundaries, and released sibling root worker retention against the live Titan language server executable.\n\n### Part 1: Sibling workspaces\n1. `ws_main/titan-config.lua`: global assignments `include = { \"./src\" }` and `source_module_roots = { \"./src\" }`.\n2. `ws_main/src/editor.titan`: valid saved Titan module exporting `record SavedItem` (`const id: integer`, `count: integer`) and `function read_item(item: SavedItem): integer` returning `item.count`. Do NOT declare `UnsavedDraft` in the saved file on disk.\n3. `ws_ffi/titan-config.lua`: global assignments `include = { \"./src\" }`, `source_module_roots = { \"./src\" }`, and `extra_ffi_include_dirs = { \"..\" }` so `foreign import \"sensor.h\"` resolves `sensor.h` from the parent task directory.\n4. `ws_ffi/src/bridge.titan`: valid Titan module using `foreign import \"sensor.h\"` and calling `ffi.sensor_scale` in at least two distinct call sites (e.g., `scale_once` and `scale_twice`) so in-module references return `>= 2` locations.\n\n### Part 2: `ls_unsaved_audit.py` (Python 3 stdlib only, `Content-Length`-framed JSON-RPC over stdio)\nExport `run_audit(server_bin: str, sdk_root: str, ws_main_dir: str, ws_ffi_dir: str) -> dict` which:\n1. Launches `server_bin` via `/usr/bin/env` unsetting `TITAN_PREFIX`, `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_SOURCE_PATH`, `LUA_PATH`, `LUA_CPATH`, `LUA_PATH_5_5`, and `LUA_CPATH_5_5` and setting `TITAN_ROOT=<sdk_root>`, verbatim `TITAN_LS_LUA_PATH`, and verbatim `TITAN_LS_LUA_CPATH` (no `;;`).\n2. Sends `initialize` with `workspaceFolders` = `[ws_main_dir, ws_ffi_dir]` (`file://` URIs) and `initializationOptions = {\"trustedRoots\": [ws_main_dir, ws_ffi_dir]}`, followed by `initialized`.\n3. **Saved baseline & unsaved completion -> private hover:**\n   - Pulls `textDocument/diagnostic` on saved `ws_main/src/editor.titan` and records `saved_diag_count = len(result[\"items\"])`.\n   - Sends `textDocument/didOpen` (WITHOUT writing to disk!) for `ws_main/src/editor.titan` with an unsaved modified buffer adding `local record UnsavedDraft` (containing `const tag: string`) and a function taking `d: UnsavedDraft` whose body writes `return d.` (caret immediately after `.`).\n   - Queries `textDocument/completion` right after `d.`; records `unsaved_completion_labels` (list of item `label` strings, containing `\"tag\"`) and `unsaved_completion_incomplete` (exact `bool` value of `result.get(\"isIncomplete\", False)` — never discard `isIncomplete`).\n   - Queries `textDocument/hover` on `UnsavedDraft` in that same unsaved buffer (now tracked via the active unsaved completion session) and records `unsaved_hover_markdown` (`result[\"contents\"][\"value\"]`).\n   - Verifies the saved disk file `ws_main/src/editor.titan` was not modified (`saved_file_unchanged = True`).\n4. **FFI `foreign import` hover + in-module refs only (no definition):**\n   - Pulls `textDocument/diagnostic` on `ws_ffi/src/bridge.titan` first so `ws_ffi` saved indexing is settled, then queries `ws_ffi/src/bridge.titan` at `ffi.sensor_scale`:\n     - `textDocument/hover` -> records `ffi_hover_markdown`.\n     - `textDocument/definition` -> records `ffi_definition_is_null` (`result is None`).\n     - `textDocument/references` (with `context = {\"includeDeclaration\": True}`) -> records `ffi_reference_count = len(result)` (must be `>= 2`).\n5. **Released sibling root warm worker reuse:**\n   - Queries `titan/workspaceStatus` and records `ws_ffi`'s `initial_ffi_origin` (`\"folder\"`) and `initial_ffi_worker_pid` (`int`).\n   - Sends `workspace/didChangeWorkspaceFolders` removing `ws_ffi_dir`.\n   - Queries `titan/workspaceStatus` again and records `ws_ffi`'s `released_ffi_origin` (`\"released\"`), `released_ffi_state` (`\"ready\"`), and `released_ffi_worker_pid` (same warm worker PID).\n   - Queries `textDocument/hover` on `ws_ffi/src/bridge.titan` at `ffi.sensor_scale` AFTER removal to confirm the retained warm worker still responds (`post_release_ffi_hover_ok = True`).\n6. Sends clean `shutdown` + `exit` and returns the dictionary containing all 14 keys above.",
+      "files": [
+        "evals/files/sensor.h"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_ls_unsaved.py"
+      ],
+      "expected_outputs": [
+        "ws_main/titan-config.lua",
+        "ws_main/src/editor.titan",
+        "ws_ffi/titan-config.lua",
+        "ws_ffi/src/bridge.titan",
+        "ls_unsaved_audit.py"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "python3 /verify/oracle/oracle_ls_unsaved.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "ls02-a1-unsaved-completion-activates-private-hover",
+          "concept_ids": [
+            "titan-language-server:capability-matrix",
+            "titan-language-server:inv-1-saved-disk-baseline-and-unimplemented-methods",
+            "titan-language-server:inv-2-exploratory-aid-and-readonly-rename"
+          ],
+          "critical": "standard",
+          "check": "Sends unsaved edits only via `textDocument/didOpen` without touching disk, queries `textDocument/completion` preserving `isIncomplete`, and confirms `textDocument/hover` immediately tracks the unsaved `UnsavedDraft` declaration once completion activates private per-document analysis."
+        },
+        {
+          "id": "ls02-a2-ffi-hover-and-refs-without-definition",
+          "concept_ids": [
+            "titan-language-server:inv-3-failed-modules-and-ffi-limits"
+          ],
+          "critical": "standard",
+          "check": "Configures `extra_ffi_include_dirs` in `ws_ffi/titan-config.lua` for `foreign import \"sensor.h\"` and verifies `ffi.sensor_scale` provides `textDocument/hover` signature and `>= 2` in-module `textDocument/references` while `textDocument/definition` returns `null`."
+        },
+        {
+          "id": "ls02-a3-released-sibling-root-retains-warm-worker",
+          "concept_ids": [
+            "titan-language-server:multiroot-router-and-lsp-json",
+            "titan-language-server:inv-6-worktree-state-and-lsp-json-hygiene"
+          ],
+          "critical": "standard",
+          "check": "Removes `ws_ffi` via `workspace/didChangeWorkspaceFolders`, observes `origin == \"released\"` with `state == \"ready\"` and identical `workerPid` in `titan/workspaceStatus`, and verifies post-release `textDocument/hover` continues succeeding on the warm worker."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-language-server` (`inv-1..inv-3`, `inv-6`, `capability-matrix`, `multiroot-router-and-lsp-json`), `titan-programmer` (`inv-1`, `inv-2`). Score `idiom_score = 3` only if `oracle_ls_unsaved.py` exits `0` against the live staged binary and all three `ls02-a1..a3` checks hold; cap at `<= 1` if `UnsavedDraft` is written to disk, `isIncomplete` is discarded, `extra_ffi_include_dirs` is missing or uses `return { ... }`, FFI definition is assumed non-null, or `didChangeWorkspaceFolders` release / warm worker reuse is skipped."
+    }
+  ]
+}

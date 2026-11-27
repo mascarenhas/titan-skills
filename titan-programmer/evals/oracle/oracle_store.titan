@@ -1,0 +1,106 @@
+local gc = import "gc"
+local store = import "store"
+foreign import "sync_handle.h"
+
+local function must_raise(fn: function(), label: string)
+  local raised = false
+  do
+    fn()
+  catch
+    raised = true
+  end
+  if not raised then
+    raise ("expected error: " .. label)
+  end
+end
+
+local function create_unclosed_store()
+  local s = store.open(2)
+  local i1 = s:append("ephemeral")
+  if i1 ~= 1 or s:len() ~= 1 or s:live_count() ~= 1 then
+    raise "ephemeral store append failed"
+  end
+end
+
+function main(_args: {string}): integer
+  if ffi.sync_handle_live_count() ~= 0 then return 1 end
+
+  -- 1. Reject invalid capacity
+  must_raise(function() store.open(0) end, "zero capacity")
+  must_raise(function() store.open(-3) end, "negative capacity")
+  if ffi.sync_handle_live_count() ~= 0 then return 2 end
+
+  -- 2. Deterministic lifecycle + interior/trailing tombstones + double-close idempotence
+  do
+    local s = store.open(3)
+    defer s:close()
+    if ffi.sync_handle_live_count() ~= 1 then return 3 end
+    if s:capacity() ~= 3 or s:len() ~= 0 or s:live_count() ~= 0 then return 4 end
+    if s:get(1) ~= nil then return 5 end
+
+    local i1 = s:append("alpha")
+    local i2 = s:append("beta")
+    local i3 = s:append("gamma")
+    if i1 ~= 1 or i2 ~= 2 or i3 ~= 3 then return 6 end
+    if s:len() ~= 3 or s:live_count() ~= 3 then return 7 end
+
+    -- Full capacity rejection
+    must_raise(function() s:append("overflow") end, "capacity overflow")
+
+    -- Interior tombstone keeps exact #slots == 3 while hole reads nil safely
+    s:tombstone(2)
+    if s:len() ~= 3 or s:live_count() ~= 2 then return 8 end
+    local h1? = s:get(1)
+    local h2? = s:get(2)
+    local h3? = s:get(3)
+    if h1 ~= "alpha" or h2 ~= nil or h3 ~= "gamma" then return 9 end
+
+    -- Trailing tombstone shrinks #slots across adjacent hole to 1
+    s:tombstone(3)
+    if s:len() ~= 1 or s:live_count() ~= 1 then return 10 end
+    if s:get(3) ~= nil then return 11 end
+
+    -- Appending after trailing shrink uses #slots + 1 == 2
+    local i4 = s:append("delta")
+    if i4 ~= 2 or s:len() ~= 2 or s:live_count() ~= 2 then return 12 end
+    if s:get(2) ~= "delta" then return 13 end
+
+    -- Out-of-bounds tombstone is a safe no-op
+    s:tombstone(0)
+    s:tombstone(99)
+    if s:len() ~= 2 or s:live_count() ~= 2 then return 14 end
+
+    local rel_before = ffi.sync_handle_released_count() as integer
+    s:close()
+    if ffi.sync_handle_live_count() ~= 0 then return 15 end
+    if (ffi.sync_handle_released_count() as integer) ~= rel_before + 1 then return 16 end
+
+    -- Idempotent double close
+    s:close()
+    if ffi.sync_handle_live_count() ~= 0 then return 17 end
+    if (ffi.sync_handle_released_count() as integer) ~= rel_before + 1 then return 18 end
+
+    -- Use-after-close guards
+    must_raise(function() s:capacity() end, "capacity after close")
+    must_raise(function() s:append("x") end, "append after close")
+    must_raise(function() s:get(1) end, "get after close")
+    must_raise(function() s:tombstone(1) end, "tombstone after close")
+    must_raise(function() s:len() end, "len after close")
+    must_raise(function() s:live_count() end, "live_count after close")
+  end
+
+  -- After block defer ran a third :close(), counts must still reflect single release
+  if ffi.sync_handle_live_count() ~= 0 then return 19 end
+  local rel_after_close = ffi.sync_handle_released_count() as integer
+  if rel_after_close ~= 1 then return 20 end
+
+  -- 3. Reachability finalizer fallback on unclosed Store
+  create_unclosed_store()
+  if ffi.sync_handle_live_count() ~= 1 then return 21 end
+  gc.collect()
+  gc.collect()
+  if ffi.sync_handle_live_count() ~= 0 then return 22 end
+  if (ffi.sync_handle_released_count() as integer) ~= rel_after_close + 1 then return 23 end
+
+  return 0
+end

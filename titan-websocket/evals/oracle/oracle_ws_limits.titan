@@ -1,0 +1,176 @@
+local async = import "async"
+local http = import "http"
+local str = import "string"
+local timer = import "timer"
+local websocket = import "websocket"
+local ws_limits = import "ws_limits"
+local ws_browser_client = import "ws_browser_client"
+
+local function fail(msg: string)
+  raise "oracle_ws_limits failed: " .. msg
+end
+
+local function check(cond: boolean, msg: string)
+  if not cond then fail(msg) end
+end
+
+local function oracle_handler(req: http.Request, res: http.Response)
+  local path = req.url.path
+  if path == "/oversized" then
+    local conn = websocket.accept(req, res)
+    defer conn:close()
+    -- Send 2048-byte message exceeding client's 256-byte read_limit.
+    do
+      conn:write(websocket.TEXT, str.rep("A", 2048))
+      conn:read()
+    catch
+    end
+  elseif path == "/echo" then
+    local conn = websocket.accept(req, res, websocket.AcceptOptions {
+      subprotocols = {"chat.v1"},
+    })
+    defer conn:close()
+    while true do
+      local kind?, data? = conn:read()
+      if kind == nil then break end
+      conn:write(kind, data)
+    end
+  elseif path == "/no-subproto" then
+    local conn = websocket.accept(req, res)
+    defer conn:close()
+    while true do
+      local kind?, data? = conn:read()
+      if kind == nil then break end
+      conn:write(kind, data)
+    end
+  elseif path == "/silent" then
+    -- Upgrade and do not read/echo Ping frames so a client without a reader
+    -- (or an idle peer) triggers timeout / admitted-read cancellation.
+    local conn = websocket.accept(req, res)
+    defer conn:close()
+    do
+      conn:read()
+    catch
+    end
+  elseif path == "/reject" then
+    res:set_status(403)
+    res:write("denied")
+  else
+    res:set_status(404)
+  end
+end
+
+function main(args: {string}): integer
+  local server = http.listen("127.0.0.1", oracle_handler, 0)
+  defer server:close()
+  local serving = async.run<|nil, value|>(function (): nil
+    server:serve()
+    return nil
+  end)
+  defer do
+    server:close()
+    if not serving:status():has_finished() then serving:cancel() end
+    async.join(serving)
+  end
+
+  local base = "ws://127.0.0.1:" .. server:local_address().port
+
+  -- 1. Incoming read_limit enforcement -> Error("limit", "websocket.read", ..., 1009).
+  local lim = ws_limits.enforce_read_limit(base .. "/oversized", 256)
+  check(lim.error_kind == "limit", "expected error_kind 'limit', got " .. lim.error_kind)
+  check(lim.operation == "websocket.read",
+    "expected operation 'websocket.read', got " .. lim.operation)
+  check(lim.close_code == 1009, "expected close_code 1009 on read_limit violation")
+
+  -- 2. Outgoing UTF-8 and invalid Close-code validation.
+  local utf8_kind, state_kind = ws_limits.check_utf8_and_close_codes(base .. "/echo")
+  check(utf8_kind == "utf8", "expected 'utf8' error for invalid outgoing text, got " .. utf8_kind)
+  check(state_kind == "state", "expected 'state' error for close code 1006, got " .. state_kind)
+
+  -- 3. ping() without a concurrent reader Task times out without cancelling caller.
+  local timeout_kind, caller_alive = ws_limits.ping_without_reader_timeout(base .. "/echo", 150)
+  check(timeout_kind == "timeout", "expected 'timeout' when pinging without reader, got " .. timeout_kind)
+  check(caller_alive, "ping timeout must be catchable without cancelling caller Task")
+
+  -- 4. Cancelling an admitted idle read() terminalizes the connection.
+  local was_cancelled, post_kind = ws_limits.probe_cancelled_read_terminalizes(base .. "/silent", 60)
+  check(was_cancelled, "expected child read Task to end cancelled")
+  check(post_kind == "cancelled" or post_kind == "state" or post_kind == "abnormal",
+    "expected terminalized error after admitted read cancellation, got " .. post_kind)
+
+  -- 5. Native cross-state/TransferValue handoff with read_ahead(false) + discard_transfer_payload.
+  local echoed, discard_status = ws_limits.transfer_accepted_and_discard("transferred-payload")
+  check(echoed == "transferred-payload",
+    "expected 'transferred-payload' after TransferValue handoff, got " .. echoed)
+  check(discard_status == 0,
+    "expected discard_transfer_payload close status 0, got " .. discard_status)
+
+  -- 6. Cross-target browser-compatible client validation (compiled with --target browser -c too).
+  check(ws_browser_client.is_browser_close_code(1000), "1000 must be browser-valid")
+  check(not ws_browser_client.is_browser_close_code(1001), "1001 must be rejected for browser shutdown")
+  check(not ws_browser_client.is_browser_close_code(1006), "1006 must be rejected")
+  check(not ws_browser_client.is_browser_close_code(2999), "2999 must be rejected")
+  check(ws_browser_client.is_browser_close_code(3000), "3000 must be browser-valid")
+  check(ws_browser_client.is_browser_close_code(4999), "4999 must be browser-valid")
+  check(not ws_browser_client.is_browser_close_code(5000), "5000 must be rejected")
+
+  -- Invalid browser close code rejected pre-dial with error_kind == "state".
+  local bad_code = ws_browser_client.exchange_once(
+    ws_browser_client.BrowserClientConfig {
+      endpoint = base .. "/echo",
+      subprotocols = {"chat.v1"},
+      read_limit = 65536,
+      handshake_timeout = 3000,
+    },
+    "hello",
+    1001
+  )
+  check(not bad_code.ok and bad_code.error_kind == "state",
+    "expected error_kind 'state' for non-browser close code 1001")
+
+  -- Valid exchange with negotiated subprotocol "chat.v1" and close code 3001.
+  local good = ws_browser_client.exchange_once(
+    ws_browser_client.BrowserClientConfig {
+      endpoint = base .. "/echo",
+      subprotocols = {"chat.v1"},
+      read_limit = 65536,
+      handshake_timeout = 3000,
+    },
+    "browser-portable",
+    3001
+  )
+  check(good.ok, "expected valid browser-portable exchange to succeed")
+  check(good.subprotocol == "chat.v1", "expected subprotocol 'chat.v1'")
+  check(good.reply == "browser-portable", "expected reply 'browser-portable'")
+  check(good.close_code == 3001, "expected close_code 3001")
+
+  -- Offered subprotocols unselected -> must report handshake failure matching browser semantics.
+  local unsel = ws_browser_client.exchange_once(
+    ws_browser_client.BrowserClientConfig {
+      endpoint = base .. "/no-subproto",
+      subprotocols = {"chat.v1"},
+      read_limit = 65536,
+      handshake_timeout = 3000,
+    },
+    "should-fail",
+    1000
+  )
+  check(not unsel.ok and unsel.error_kind == "handshake",
+    "expected error_kind 'handshake' when offered subprotocol is unselected")
+
+  -- HTTP 403 rejection -> must report handshake failure.
+  local rej = ws_browser_client.exchange_once(
+    ws_browser_client.BrowserClientConfig {
+      endpoint = base .. "/reject",
+      subprotocols = {},
+      read_limit = 65536,
+      handshake_timeout = 3000,
+    },
+    "should-fail",
+    1000
+  )
+  check(not rej.ok and rej.error_kind == "handshake",
+    "expected error_kind 'handshake' on HTTP 403 rejection")
+
+  return 0
+end

@@ -1,0 +1,114 @@
+local host = import "plugin_host"
+local io = import "io"
+local lua = import "lua"
+local strings = import "string"
+
+record TrackingReader
+  local const inner: io.ReaderCloser
+  closed: boolean
+end
+
+function TrackingReader:read(): string?
+  return self.inner:read()
+end
+
+function TrackingReader:read_until(delimiter: string, chop: boolean?): string?
+  return self.inner:read_until(delimiter, chop)
+end
+
+function TrackingReader:close()
+  self.closed = true
+  self.inner:close()
+end
+
+local function must_raise(label: string, fn: function())
+  local ok = true
+  do
+    fn()
+  catch
+    ok = false
+  end
+  if ok then
+    raise ("expected error for: " .. label)
+  end
+end
+
+function main(_args: {string}): integer
+  -- 1. Account creation, public vs local behavior, and Verdict union.
+  local acct = host.open_account("acct-7", 100, 4242)
+  if acct.id ~= "acct-7" or acct.balance ~= 100 then
+    raise "unexpected initial account fields"
+  end
+  if not acct:verify_pin(4242) or acct:verify_pin(9999) then
+    raise "verify_pin mismatch"
+  end
+  if acct:credit(25) ~= 125 or acct.balance ~= 125 then
+    raise "credit mismatch"
+  end
+  if acct:audit_count() < 1 then
+    raise "expected audit entry after credit"
+  end
+
+  local v_ok = host.Verdict.approved("tier1")
+  local v_bad = host.Verdict.rejected(403)
+  if host.verdict_label(v_ok) ~= "approved:tier1" then
+    raise ("unexpected approved verdict_label: " .. host.verdict_label(v_ok))
+  end
+  if host.verdict_label(v_bad) ~= "rejected:403" then
+    raise ("unexpected rejected verdict_label: " .. host.verdict_label(v_bad))
+  end
+
+  -- 2. lua.load with custom _ENV table.
+  local env: {string: value} = { ["factor"] = 7 }
+  local prod = host.eval_with_env("local x = ...; return x * factor", "=mul", env, 6)
+  if prod ~= 42 then
+    raise "eval_with_env returned wrong product"
+  end
+
+  -- 3. load_from_reader must NOT close the caller's reader.
+  local tr = TrackingReader(strings.reader("local a, b = ...; return a .. ':' .. b"), false)
+  defer tr:close()
+  local loaded = host.load_chunk_reader(tr, "=from_reader")
+  if tr.closed then
+    raise "load_chunk_reader must not close the provided io.Reader"
+  end
+  local joined = loaded("alpha", "beta")
+  if joined ~= "alpha:beta" then
+    raise "load_chunk_reader returned wrong result"
+  end
+
+  -- 4. Dynamic edge conversion on Lua callbacks vs internal strict value->integer guard.
+  local good_cb_raw = lua.load("return function(a) return a:credit(5.0) + 0.0, 0, a.id .. ':ok' end", "=good")()
+  local good_cb: function(host.Account): (integer, boolean, string) = good_cb_raw
+  local new_bal, active, tag = host.apply_dynamic_callback(acct, good_cb)
+  if new_bal ~= 130 or active ~= true or tag ~= "acct-7:ok" then
+    raise "dynamic callback conversion failed"
+  end
+
+  local bad_cb_raw = lua.load("return function(a) return 1, true, 999 end", "=bad")()
+  local bad_cb: function(host.Account): (integer, boolean, string) = bad_cb_raw
+  must_raise("number in string callback return", function()
+    local _, _, _ = host.apply_dynamic_callback(acct, bad_cb)
+  end)
+
+  local tbl_raw = lua.load("return { int_val = 42, float_val = 2.0 }", "=tbl")()
+  local tbl: {string: value} = tbl_raw
+  if host.read_strict_int_from_map(tbl, "int_val") ~= 42 then
+    raise "strict int read failed on Lua integer"
+  end
+  must_raise("strict int guard must reject integral float 2.0", function()
+    local _ = host.read_strict_int_from_map(tbl, "float_val")
+  end)
+
+  -- 5. Independent Lua state via lua.new() + TransferValue isolation.
+  local r1 = host.run_isolated("leaked = 'secret'; local s = ...; return string.upper(s) .. ':' .. #s", "hello")
+  if r1 ~= "HELLO:5" then
+    raise ("unexpected run_isolated r1: " .. r1)
+  end
+  local r2 = host.run_isolated("local s = ...; return tostring(leaked) .. ':' .. s", "next")
+  if r2 ~= "nil:next" then
+    raise ("expected fresh isolated state (leaked == nil), got: " .. r2)
+  end
+
+  return 0
+end

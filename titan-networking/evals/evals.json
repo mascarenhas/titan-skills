@@ -1,0 +1,183 @@
+{
+  "skill_name": "titan-networking",
+  "evals": [
+    {
+      "id": "networking-01-http-server-client-loopback",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-networking", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-networking", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-websocket", "titan-thread"],
+      "prompt": "Implement an ephemeral-port loopback HTTP/1.1 server, URL parser/inspector, and deadline-bounded HTTP client library in `http_loopback.titan` (logical module `http_loopback`) using Titan's standard `url`, `http`, `async`, `timer`, and `string` modules (plain HTTP/1.1 only—no WebSockets and no OS threads).\n\nExport the following public types and functions:\n- `record ParsedUrlSummary` with fields `const ok: boolean`, `const scheme: string?`, `const host: string?`, `const port: integer?`, `const target: string?`, `const host_header: string?`, and `const error_kind: string?`.\n- `function inspect_url(raw: string): ParsedUrlSummary`:\n  - Parses `raw` using `url.parse(raw)` (binding `(u?, err?)` without throwing on malformed input).\n  - On success, returns `ParsedUrlSummary(true, u.scheme, u.host, u.port, u.target, u:host_header(), nil)` (so `host` is unbracketed while `host_header` keeps brackets and explicit ports).\n  - On error, returns `ParsedUrlSummary(false, nil, nil, nil, nil, nil, err.kind)`.\n- `function describe_modes(cache: http.CacheMode, creds: http.CredentialsMode, mode: http.RequestMode, redir: http.RedirectMode): string`:\n  - Inspects all four mode union values using `case` (never union `==`) and returns `\"<cache>|<creds>|<mode>|<redir>\"` using hyphenated canonical names (`default`/`no-store`/`reload`/`no-cache`/`force-cache`/`only-if-cached`, `omit`/`same-origin`/`include`, `cors`/`no-cors`/`same-origin`, `follow`/`error`/`manual`).\n- `record LoopbackServer` storing the `http.Server`, background serving Task, and bound port in `local` fields (keeping synthesized `new` private).\n- `function start_server(idle_timeout_ms: integer?): LoopbackServer`:\n  - Listens on `\"127.0.0.1\"` with ephemeral port `0` using `http.listen(\"127.0.0.1\", handler, 0, nil, idle_timeout_ms)` (passing the handler as the 2nd argument!), configures `server:read_ahead(false)` before `serve()`, discovers the assigned port via `server:local_address().port`, and spawns `server:serve()` in a background `async.Task`.\n  - Routes requests by `req.method` and `req.url.path`:\n    - `GET /echo`: responds `200`, `Content-Type: text/plain`, explicit `Content-Length`, body `\"method=\" .. req.method .. \";path=\" .. req.url.path .. \";query=\" .. (req.url.query or \"<none>\") .. \";host=\" .. (req.headers:get(\"host\") or \"\")`.\n    - `POST /echo`: streams the request body via `for chunk in req:read do` into `strings.writer()`, responds `200`, `Content-Type: text/plain`, appends two `X-Multi` response headers (`\"a\"` and `\"b\"` via `add_header`), and writes `\"posted:\" .. body`.\n    - `GET /stream`: streams a chunked response (omitting `Content-Length`), calling `res:send_headers()` before writing `\"chunk-1\\n\"`, `\"chunk-2\\n\"`, and `\"chunk-3\\n\"`.\n    - `GET /slow`: sleeps `250` ms via `timer.sleep(250)` then writes `\"slow-ok\"`.\n    - `GET /handoff`: yields (`async.yield()`), detaches the active exchange as `http.Exchange(req, res):to_transfer_payload()`, and spawns a sibling Task that adopts it via `http.Exchange.from_transfer_payload(payload)` with `defer ex:close()`, sets header `X-Handoff: yes`, and writes `\"via-exchange\"`.\n    - Any other route: responds `404` with body `\"not-found\"`.\n- `function LoopbackServer:port(): integer` and idempotent `function LoopbackServer:close()` (closes the `http.Server`, cancels the serving Task if unfinished, and awaits `async.join` before returning).\n- `record FetchReply` with fields `const status: integer`, `const body: string`, `const multi_values: {string}`, and `const timed_out: boolean`.\n- `function fetch_with_deadline(client: http.Client, method: string, target_url: string, body: string?, timeout_ms: integer): FetchReply`:\n  - Builds `http.RequestOptions` with `CacheMode.no_store()`, `CredentialsMode.same_origin()`, `RequestMode.cors()`, `RedirectMode.manual()`, and `body` only when `method ~= \"GET\"` (using `client:get(target_url, opts)` without a body for `GET`, and `client:request(method, target_url, opts)` otherwise).\n  - Races the request Task against a `timer.sleep(timeout_ms)` Task, explicitly cancelling and joining the losing Task before returning.\n  - Always pairs `ClientResponse` with immediate `defer res:close()`, streams body bytes via `for chunk in res:read do` + `strings.writer()`, collects `res.headers:values(\"X-Multi\")`, and returns `FetchReply(0, \"\", {}, true)` on deadline timeout (re-raising non-timeout errors such as `url.Error`).",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_http_loopback.titan"
+      ],
+      "expected_outputs": [
+        "http_loopback.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "loopback",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_http_loopback.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_http_loopback oracle_http_loopback",
+          "./oracle_http_loopback"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "net01-a1-nonthrowing-url-parse-and-normalization",
+          "concept_ids": [
+            "titan-networking:inv-2-nonthrowing-url-parse-vs-throwing-http",
+            "titan-networking:urls"
+          ],
+          "critical": "standard",
+          "check": "Uses `url.parse` binding `(u?, err?)` without string-splitting, exposes unbracketed `Url.host` vs bracketed `Url:host_header()` and normalized `target`/default ports, rejects userinfo and `#fragment`, and lets `http` raise `url.Error` pre-dial."
+        },
+        {
+          "id": "net01-a2-http-server-arg-order-streaming-exchange-shutdown",
+          "concept_ids": [
+            "titan-networking:inv-1-direct-style-async-tasks-target-split",
+            "titan-networking:inv-6-http-server-exchange-idle-timeout",
+            "titan-networking:http-client-server-browser-fetch"
+          ],
+          "critical": "standard",
+          "check": "Calls `http.listen(host, handler, 0, ...)` with handler 2nd, reads ephemeral port via `local_address()`, supports `add_header`, chunked `send_headers()` streaming, `http.Exchange` handoff with `read_ahead(false)`, and clean `server:close()` + cancel + `async.join` teardown."
+        },
+        {
+          "id": "net01-a3-http-client-options-case-streaming-and-deadline",
+          "concept_ids": [
+            "titan-networking:inv-5-http-client-options-browser-vs-native",
+            "titan-networking:module-target-error-matrix"
+          ],
+          "critical": "standard",
+          "check": "Inspects all 4 `http` mode unions via `case` (never `==`), never passes `body` to `get`, pairs `ClientResponse` with `defer res:close()`, streams body via `for chunk in res:read do` + `strings.writer()`, and cancels + joins losing Tasks on deadline races."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-networking` (`inv-1`, `inv-2`, `inv-5`, `inv-6`, `module-target-error-matrix`, `urls`, `http-client-server-browser-fetch`), `titan-async` (`inv-2`), `titan-programmer` (`inv-1`, `inv-3`, `inv-5`). Score `idiom_score = 3` only if `./oracle_http_loopback` exits `0` and all three `net01-a1..a3` checks hold; cap at `<= 1` if `http.listen` swaps `handler`/`port`, `url.parse` is replaced with manual string parsing, mode unions are compared with `==`, `http.get` receives a `body`, `defer res:close()` is omitted, or timeout losers are left uncancelled/unjoined."
+    },
+    {
+      "id": "networking-02-tcp-framing-and-tls-constraints",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-networking", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-networking", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-websocket", "titan-package"],
+      "prompt": "Implement a loopback TCP and verified TLS 1.2+ line-framed RPC server/client library in `tls_rpc.titan` (logical module `tls_rpc`) using Titan's standard `net`, `ssl`, and `async` modules.\n\nExport the following public types and functions:\n- `record TcpEchoServer` storing its `net.Server`, accept loop Task, and port in `local` fields.\n- `function start_tcp_server(): TcpEchoServer`:\n  - Listens on `net.listen(\"127.0.0.1\", 0)` and spawns an accept loop Task that accepts connections and spawns a per-client Task (`defer peer:close()`) reading lines with `peer:read_until(\"\\n\", true)` (handling empty `\"\"` lines distinct from `nil` EOF), replying `\"tcp:\" .. line .. \"\\n\"`, and calling `peer:shutdown()` on EOF.\n- `function TcpEchoServer:port(): integer` and idempotent `function TcpEchoServer:close()` (closes server, cancels and joins the accept Task).\n- `function tcp_roundtrip(port: integer, lines: {string}, disable_nodelay: boolean): ({string}, net.Address, net.Address)`:\n  - Resolves `\"127.0.0.1\"` via `net.resolve(\"127.0.0.1\", port)`, opens a `net.Connection()` and dials via `conn:connect_address(addrs[1])` with immediate `defer conn:close()`, toggles `conn:set_no_delay(not disable_nodelay)`, captures `local_address()` and `peer_address()` while the connection is live (so cached snapshots remain readable even after peer EOF/close), writes each `line .. \"\\n\"`, half-closes writes via `conn:shutdown()`, reads every line with `conn:read_until(\"\\n\", true)` until `nil`, and returns `(replies, local_addr, peer_addr)`.\n- `record TlsRpcServer` storing its `ssl.Server`, accept loop Task, and port in `local` fields.\n- `function start_tls_server(cert_file: string, key_file: string?, truncate_trigger: string?): TlsRpcServer`:\n  - Opens `ssl.listen(\"127.0.0.1\", 0, cert_file, key_file)`.\n  - In the accept loop, calls `server:accept()` (TCP-only) and immediately spawns a per-client Task (`defer conn:close()`) to run `conn:handshake()` and handle I/O so a stalled TCP peer never blocks subsequent TLS clients!\n  - Inside the client Task, reads one line with `conn:read_until(\"\\n\", true)`. If `truncate_trigger ~= nil and line == truncate_trigger`, calls `conn:abort()` (dropping TCP without `close_notify`); otherwise writes `\"tls:\" .. line .. \"\\n\"` and calls `conn:shutdown()` (sending authenticated `close_notify`).\n- `function TlsRpcServer:port(): integer` and idempotent `function TlsRpcServer:close()`.\n- `function tls_call_connect(host: string, port: integer, ca_file: string, message: string): string`:\n  - Connects via `ssl.connect(host, port, ca_file)` with immediate `defer conn:close()`, writes `message .. \"\\n\"`, reads the reply line via `conn:read_until(\"\\n\", true)`, verifies the subsequent `conn:read()` returns `nil` (clean authenticated `close_notify` EOF), and returns the reply (do not call `conn:shutdown()` before reading the reply, since a truncating server drops TCP before replying).\n- `function tls_call_adopted_sni(ip: string, port: integer, sni_host: string, ca_file: string, message: string): string`:\n  - Dials TCP to numeric `ip` via `net.connect(ip, port)`, adopts it with `ssl.client(transport, sni_host, ca_file)` and immediate `defer tls_conn:close()`, runs `tls_conn:handshake()`, writes `message .. \"\\n\"`, reads the reply line, verifies clean EOF (`nil`), and returns the reply.\n- `function classify_tls_call(host: string, port: integer, ca_file: string, message: string): (boolean, string)`:\n  - Calls `tls_call_connect(host, port, ca_file, message)`, returning `(true, reply)` on success or `(false, err.name)` when an `ssl.Error` is raised (such as `\"CERTIFICATE_VERIFY_FAILED\"` or `\"TLS_TRUNCATED_EOF\"`), re-raising non-`ssl.Error` failures.\n- `record TlsConfigRequest` with fields `const ca_file: string?`, `const insecure_skip_verify: boolean`, `const ca_dir: string?`, `const encrypted_key_passphrase: string?`, `const alpn_protocols: {string}?`, and `const client_cert_file: string?`.\n- `function validate_tls_config(cfg: TlsConfigRequest): string?`:\n  - Returns `nil` when `cfg` uses only capabilities supported by Titan's strict `ssl` library, or a non-empty descriptive error string rejecting any unsupported option: `insecure_skip_verify == true`, `ca_dir ~= nil`, `encrypted_key_passphrase ~= nil`, `alpn_protocols ~= nil and #alpn_protocols > 0`, or `client_cert_file ~= nil`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_tls_rpc.titan"
+      ],
+      "expected_outputs": [
+        "tls_rpc.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "loopback",
+        "timeout_sec": 60,
+        "commands": [
+          "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout server_key.pem -out server_cert.pem -days 1 -subj '/CN=localhost' -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,digitalSignature,keyCertSign' -addext 'extendedKeyUsage=serverAuth' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' 2>/dev/null",
+          "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout untrusted_key.pem -out untrusted_ca.pem -days 1 -subj '/CN=untrusted-ca' -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,digitalSignature,keyCertSign' 2>/dev/null",
+          "cp /verify/oracle/oracle_tls_rpc.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_tls_rpc oracle_tls_rpc",
+          "./oracle_tls_rpc server_cert.pem server_key.pem untrusted_ca.pem"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "net02-a1-tcp-resolve-connect-nodelay-framing-addresses",
+          "concept_ids": [
+            "titan-networking:inv-3-net-ownership-nodelay-deadlines",
+            "titan-networking:tcp-and-dns"
+          ],
+          "critical": "standard",
+          "check": "Uses `net.listen(\"127.0.0.1\", 0)`, `net.resolve` + `net.Connection()` + `connect_address`, `set_no_delay`, `read_until(\"\\n\", true)` preserving empty `\"\"` lines distinct from `nil`, `shutdown()`, cached `local_address()`/`peer_address()`, and immediate `defer :close()`."
+        },
+        {
+          "id": "net02-a2-tls-per-client-handshake-sni-and-error-semantics",
+          "concept_ids": [
+            "titan-networking:inv-4-ssl-tls12-strict-limits",
+            "titan-networking:verified-tls"
+          ],
+          "critical": "standard",
+          "check": "Moves `ssl.Connection:handshake()` into a per-client Task so stalled TCP peers never block `accept()`, supports `ssl.connect` and `ssl.client` SNI adoption with explicit `ca_file`, and surfaces `CERTIFICATE_VERIFY_FAILED` and `TLS_TRUNCATED_EOF` via `ssl.Error.name`."
+        },
+        {
+          "id": "net02-a3-strict-tls-capability-boundaries",
+          "concept_ids": [
+            "titan-networking:inv-4-ssl-tls12-strict-limits",
+            "titan-networking:verified-tls"
+          ],
+          "critical": "standard",
+          "check": "Explicitly rejects all unsupported `ssl` options (`insecure_skip_verify`, `ca_dir`, `encrypted_key_passphrase`, `alpn_protocols`, `client_cert_file`) while accepting valid explicit `ca_file` configurations."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-networking` (`inv-3`, `inv-4`, `tcp-and-dns`, `verified-tls`), `titan-async` (`inv-2`), `titan-programmer` (`inv-1`, `inv-3`). Score `idiom_score = 3` only if `./oracle_tls_rpc` exits `0` and all three `net02-a1..a3` checks hold; cap at `<= 1` if `handshake()` runs inline in the `ssl.Server:accept()` loop, `TLS_TRUNCATED_EOF` is treated as clean EOF, `defer :close()` is omitted on sockets/servers, or unsupported TLS features (ALPN/mTLS/insecure mode/CA dir/encrypted keys) are silently accepted."
+    },
+    {
+      "id": "networking-03-ref-http-redirects-upgrades-tls-deadlines",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-networking", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-networking", "titan-async"],
+      "candidate_expected_references": ["titan-networking/references/http-and-tls-details.md"],
+      "optional_skills": ["titan-stdlib", "titan-thread"],
+      "forbidden_skills": ["titan-websocket", "titan-json"],
+      "prompt": "Implement an HTTPS dual-origin redirect, `Expect: 100-continue`, raw HTTP protocol upgrade, TLS deadline-abort, handoff-discard, and policy-guard library in `gateway.titan` (logical module `gateway`) using Titan's `http`, `ssl`, `net`, `async`, `timer`, and `string` modules (raw HTTP upgrades only—not WebSockets).\n\nExport the following public types and functions:\n- `record GatewayPair` storing two HTTPS `http.Server` instances (origin A and origin B), their serving Tasks, and their ephemeral ports in `local` fields.\n- `function start_gateway(cert_file: string, key_file: string): GatewayPair`:\n  - Starts two HTTPS servers via `http.listen_tls(\"127.0.0.1\", cert_file, handler, key_file, 0)` on separate ephemeral ports (`port_a` and `port_b`).\n  - Origin A routes:\n    - `POST /redir-302`: responds `302` with `Location: /land` and `Content-Length: 0`.\n    - `POST /redir-307`: responds `307` with `Location: /land` and `Content-Length: 0`.\n    - `GET /redir-xorigin`: responds `302` with `Location: https://127.0.0.1:<port_b>/inspect-auth` and `Content-Length: 0`.\n    - `POST /upload`: verifies `not res:is_committed()` before writing, reads the full request body via `for chunk in req:read do`, sets `Content-Type: text/plain` and exact `Content-Length`, writes `\"uploaded:\" .. body`, and verifies `res:is_committed()` after writing (note Titan's HTTP/1.1 server handles valid `Expect: 100-continue` and invalid `Expect` -> `417` automatically pre-handler).\n    - `GET /proto`: if request header `X-Reject-Upgrade` equals `\"yes\"`, rejects via `res:reject_upgrade(req, 403, nil)`; otherwise upgrades via `local stream = res:upgrade(req, \"custom-rpc/1\", nil)` with immediate `defer stream:close()`, reads one `\\n`-terminated frame via `stream:read_until(\"\\n\", true)`, and writes `\"upgraded:\" .. (frame or \"\") .. \"\\n\"`.\n    - `GET /land` and `POST /land`: reads body, responds `200` with `req.method .. \"|\" .. body .. \"|\" .. (req.headers:get(\"content-type\") or \"<none>\")`.\n  - Origin B routes:\n    - `GET /inspect-auth`: responds `200` with `\"auth=\" .. (req.headers:get(\"authorization\") or \"<stripped>\")`.\n- `function GatewayPair:port_a(): integer`, `function GatewayPair:port_b(): integer`, and idempotent `function GatewayPair:close()` (closes both servers, cancels and joins both serving Tasks).\n- `record RedirectResult` with fields `const status: integer`, `const body: string`, `const redirected: boolean`, and `const final_url: string?`.\n- `function send_with_redirect(client: http.Client, method: string, target: string, ca_file: string, mode: http.RedirectMode, body: string?, auth_header: string?, content_type: string?): RedirectResult`:\n  - Builds `http.Headers` (setting `Authorization` if `auth_header ~= nil` and `Content-Type` if `content_type ~= nil`) and `http.RequestOptions { headers = h, body = body, ca_file = ca_file, redirect = mode }`.\n  - Sends `client:request(method, target, opts)`, pairs `defer res:close()`, reads full body via `strings.writer()`, and returns `RedirectResult(res.status, text, res.redirected, res.url)`.\n- `function run_https_upgrade(port: integer, ca_file: string, path: string, payload: string, extra_headers: http.Headers?): (integer, string)`:\n  - Opens `local conn = ssl.connect(\"127.0.0.1\", port, ca_file)` and sends a raw upgrade via `http.request_upgrade_on(conn, conn:abort, \"https://127.0.0.1:\" .. port .. path, \"custom-rpc/1\", extra_headers)` (passing `conn:abort`, not `conn:close`, as the abort callback!), paired with `defer res:close()`.\n  - If `res.status ~= 101`, reads any body and returns `(res.status, body)`.\n  - On `101`, claims the raw stream once via `local stream = res:take_upgrade()` with `defer stream:close()`, writes `payload .. \"\\n\"`, reads the reply line via `stream:read_until(\"\\n\", true)`, and returns `(101, reply or \"\")`.\n- `function tls_read_with_abort_deadline(conn: ssl.Connection, timeout_ms: integer): (boolean, string?)`:\n  - Races a child Task calling `conn:read_until(\"\\n\", true)` against a `timer.sleep(timeout_ms)` Task.\n  - On timeout, cancels the reader Task and calls `conn:abort()` **before** `async.join(reader)` (so blocked TLS I/O unwinds with `TLS_INTERRUPTED` without deadlocking exclusive `close()`), joins the reader, and returns `(true, nil)`.\n  - On reader completion, cancels and joins the deadline Task and returns `(false, line)` (re-raising non-timeout reader errors).\n- `function raw_https_expect_probe(port: integer, ca_file: string, expect_value: string, body: string): (boolean, integer, string)`:\n  - Opens `ssl.connect(\"127.0.0.1\", port, ca_file)` (`defer conn:close()`), writes raw HTTP/1.1 `POST /upload` headers with `Host: 127.0.0.1:<port>`, `Expect: <expect_value>`, `Content-Length: <#body>`, and `Connection: close`.\n  - Reads the first header block up to `\\r\\n\\r\\n`. If its status is `100`, sets `saw_100 = true`, writes `body`, then reads the final response header block and body; otherwise sets `saw_100 = false` and reads any remaining body for the first response.\n  - Parses the final status integer and returns `(saw_100, final_status, final_body)`.\n- `record PolicyCheck` with fields `const alpn: string?`, `const mtls_client_ca: string?`, `const browser_header: string?`, and `const browser_ca_file: string?`.\n- `function validate_gateway_policy(req: PolicyCheck): string?`:\n  - Returns `nil` if valid, or a non-empty error reason string rejecting: unsupported TLS `alpn` (`req.alpn ~= nil`), unsupported mTLS (`req.mtls_client_ca ~= nil`), browser `ca_file` (`req.browser_ca_file ~= nil`), or browser-forbidden Fetch request headers (case-insensitively matching `cookie`, `cookie2`, `origin`, `referer`, `connection`, `host`, `keep-alive`, `dnt`, `date`, `te`, `trailer`, `upgrade`, `via`, `accept-charset`, `accept-encoding`, `set-cookie`, `access-control-request-headers`, `access-control-request-method`, or any `proxy-*` / `sec-*` prefix).\n- `function verify_tls_handoff_discard(port: integer, ca_file: string): (integer, boolean)`:\n  - Connects TCP (`net.connect(\"127.0.0.1\", port)`), disables read-ahead (`tcp:read_ahead(false)`), adopts via `ssl.client(tcp, \"localhost\", ca_file)` (`defer tls_conn:close()`), completes `tls_conn:handshake()`, calls `async.yield()`, detaches `local payload = tls_conn:to_transfer_payload()`, disposes of it with `local rc = ssl.Connection.discard_transfer_payload(payload)`, confirms a write on the detached `tls_conn` raises (`detached_rejected = true`), and returns `(rc, detached_rejected)`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_gateway.titan"
+      ],
+      "expected_outputs": [
+        "gateway.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "loopback",
+        "timeout_sec": 60,
+        "commands": [
+          "openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout gw_key.pem -out gw_cert.pem -days 1 -subj '/CN=localhost' -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,digitalSignature,keyCertSign' -addext 'extendedKeyUsage=serverAuth' -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1' 2>/dev/null",
+          "cp /verify/oracle/oracle_gateway.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_gateway oracle_gateway",
+          "./oracle_gateway gw_cert.pem gw_key.pem"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "net03-a1-http-redirect-modes-and-cross-origin-stripping",
+          "concept_ids": [
+            "titan-networking:inv-7-http-and-tls-details-reference-gate",
+            "titan-networking:ref-native-http-redirects-pools-drains"
+          ],
+          "critical": "standard",
+          "check": "Uses `http.RedirectMode.follow()`, `manual()`, and `error()` (never nonexistent `RedirectPolicy`), preserving `302` `POST`->bodyless `GET` (`Content-*` stripped), `307` body preservation, and cross-origin `Authorization` stripping with `ca_file` across HTTPS hops."
+        },
+        {
+          "id": "net03-a2-expect-100-continue-and-raw-http-upgrade",
+          "concept_ids": [
+            "titan-networking:ref-http-server-framing-coalescing-expect-upgrades"
+          ],
+          "critical": "standard",
+          "check": "Verifies `Response:is_committed()`, `Expect: 100-continue` vs `417`, `http.request_upgrade_on` with `conn:abort` and `take_upgrade()`, and server `Response:upgrade` / `Response:reject_upgrade` with immediate `defer stream:close()`."
+        },
+        {
+          "id": "net03-a3-tls-abort-deadline-handoff-discard-and-policy-limits",
+          "concept_ids": [
+            "titan-networking:ref-tls-deadlines-state-close-static-linking",
+            "titan-networking:ref-cross-state-handoff",
+            "titan-networking:ref-browser-fetch-edge-cases"
+          ],
+          "critical": "standard",
+          "check": "Calls `ssl.Connection:abort()` before `async.join` on blocked TLS deadline timeout, uses `read_ahead(false)` + `async.yield()` + `to_transfer_payload()` + `discard_transfer_payload()` for clean manual-handoff disposal, and explicitly rejects unsupported ALPN/mTLS and browser-forbidden Fetch options/headers."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-networking` (`inv-4`, `inv-7`, `ref-native-http-redirects-pools-drains`, `ref-browser-fetch-edge-cases`, `ref-http-server-framing-coalescing-expect-upgrades`, `ref-tls-deadlines-state-close-static-linking`, `ref-cross-state-handoff`), `titan-async` (`inv-2`). Score `idiom_score = 3` only if `./oracle_gateway` exits `0` and all three `net03-a1..a3` checks hold; cap at `<= 1` if `RedirectMode.follow()` is misspelled or misconfigured, `request_upgrade_on` passes `conn:close` instead of `conn:abort`, `conn:abort()` is omitted before `async.join` on TLS timeout, `discard_transfer_payload` or `read_ahead(false)` is mishandled, or unsupported ALPN/mTLS/browser-forbidden headers are silently accepted."
+    }
+  ]
+}

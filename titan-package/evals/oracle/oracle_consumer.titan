@@ -1,0 +1,13 @@
+local core = import "metric.core"
+local fmt = import "metric.format"
+local io = import "io"
+
+function main(_args: {string}): integer
+  local s = core.make_sample("cpu", 7)
+  local rendered = fmt.render(s, 3)
+  if rendered ~= "cpu=21" then
+    raise "unexpected rendered output: " .. rendered
+  end
+  io.print(rendered)
+  return 0
+end

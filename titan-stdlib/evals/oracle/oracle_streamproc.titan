@@ -1,0 +1,144 @@
+local gc = import "gc"
+local io = import "io"
+local streamproc = import "streamproc"
+local strings = import "string"
+
+record FailingWriter
+  local writes: integer
+  local const fail_on: integer
+end
+
+function FailingWriter.new(fail_on: integer): FailingWriter
+  return { writes = 0, fail_on = fail_on }
+end
+
+function FailingWriter:write(data: string)
+  self.writes = self.writes + 1
+  if self.writes >= self.fail_on then
+    raise "sink write failure"
+  end
+end
+
+local function populate_transient_memo(memo: streamproc.WeakMemo)
+  local _ = memo:get_or_compute("ephemeral", function (k: string): string return "val:" .. k end)
+end
+
+local function populate_transient_ephemeron(ephem: streamproc.EphemeronCache)
+  local tmp = streamproc.KeyTag(999)
+  ephem:put(tmp, "gone")
+end
+
+function main(args: {string}): integer
+  -- 1. ChunkStream structural io.ReaderCloser + delimiter semantics
+  local cs = streamproc.open_chunks({ "hel", "lo\n\nwor", "ld\ntail" })
+  local empty_delim_raised = false
+  do cs:read_until("", true) catch empty_delim_raised = true end
+  if not empty_delim_raised then raise "empty delimiter must raise while unread bytes remain" end
+
+  local l1? = cs:read_until("\n", true)
+  local l2? = cs:read_until("\n", true)
+  local l3? = cs:read_until("\n", true)
+  local l4? = cs:read_until("\n", true)
+  local l5? = cs:read_until("\n", true)
+  if l1 ~= "hello" or l2 ~= "" or l3 ~= "world" or l4 ~= "tail" or l5 ~= nil then
+    raise "ChunkStream read_until boundary mismatch"
+  end
+  cs:close()
+  cs:close()
+  if not cs:is_closed() or cs:read() ~= nil then
+    raise "ChunkStream idempotent close/EOF mismatch"
+  end
+
+  -- 2. Structural copy_stream across ChunkStream + StringWriter (binary/NUL safe)
+  local bin_src = streamproc.open_chunks({ "ab\0", "cd\255" })
+  defer bin_src:close()
+  local bin_dst = strings.writer()
+  defer bin_dst:close()
+  local copied = streamproc.copy_stream(bin_src, bin_dst)
+  if copied ~= 6 or bin_dst:drain() ~= "ab\0cd\255" then
+    raise "copy_stream binary mismatch"
+  end
+
+  -- 3. io.lines ownership transfer: single close on normal completion and on error
+  local line_src = streamproc.open_chunks({ "ok:1\n", "\n", "skip\nok:2\n", "ok:3" })
+  local line_dst = strings.writer()
+  defer line_dst:close()
+  local matched = streamproc.filter_lines(line_src, line_dst, "ok:")
+  if matched ~= 3 or line_dst:drain() ~= "ok:1\nok:2\nok:3\n" then
+    raise "filter_lines output mismatch"
+  end
+  if not line_src:is_closed() or line_src:close_calls() ~= 2 then
+    raise "filter_lines must let io.lines own closing src (2 calls on EOF, no extra defer close), got " .. line_src:close_calls()
+  end
+
+  local err_src = streamproc.open_chunks({ "ok:a\nok:b\nok:c\n" })
+  local bad_dst = FailingWriter(2)
+  local saw_err = false
+  do
+    streamproc.filter_lines(err_src, bad_dst, "ok:")
+  catch
+    saw_err = true
+  end
+  if not saw_err or not err_src:is_closed() or err_src:close_calls() ~= 1 then
+    raise "filter_lines must close src once on writer error"
+  end
+
+  -- 4. Sparse Array hole-safe iteration + const? Array loop + boolean-key Map pairs/next
+  local slots: {string} = { "alpha", "beta", "gamma", "delta" }
+  slots[2] = nil
+  slots[4] = nil -- trailing nil shrinks #slots to 3
+  local summary = streamproc.summarize_sparse(slots)
+  if summary.high_water ~= 3 or summary.present ~= 2 or summary.holes ~= 1
+     or summary.joined ~= "alpha,gamma" then
+    raise "summarize_sparse mismatch"
+  end
+
+  local const_view: const {string} = slots as const {string}
+  if streamproc.count_const_present(const_view) ~= 2 then
+    raise "count_const_present mismatch"
+  end
+
+  local empty_map: {boolean: integer} = {}
+  local is_emp, cnt0, sum0 = streamproc.sum_flag_map(empty_map)
+  if not is_emp or cnt0 ~= 0 or sum0 ~= 0 then raise "empty flag map mismatch" end
+
+  local flags: {boolean: integer} = { [false] = 10, [true] = 5 }
+  local is_emp2, cnt2, sum2 = streamproc.sum_flag_map(flags)
+  if is_emp2 or cnt2 ~= 2 or sum2 ~= 15 then raise "boolean-key flag map mismatch" end
+
+  local only_false: {boolean: integer} = { [false] = 7 }
+  local is_emp3, cnt3, sum3 = streamproc.sum_flag_map(only_false)
+  if is_emp3 or cnt3 ~= 1 or sum3 ~= 7 then raise "false-only flag map mismatch" end
+
+  -- 5. gc.weak memo cache + gc.ephemeron cache
+  local memo = streamproc.new_memo()
+  local compute_calls = 0
+  local kept = memo:get_or_compute("pinned", function (k: string): string
+    compute_calls = compute_calls + 1
+    return "computed:" .. k
+  end)
+  local kept_again = memo:get_or_compute("pinned", function (k: string): string
+    compute_calls = compute_calls + 1
+    return "should-not-run"
+  end)
+  if compute_calls ~= 1 or kept.payload ~= "computed:pinned" or kept_again.payload ~= "computed:pinned" then
+    raise "WeakMemo hit mismatch"
+  end
+  populate_transient_memo(memo)
+  gc.collect()
+  gc.collect()
+  if memo:peek("ephemeral") ~= nil then raise "WeakMemo did not collect unreferenced value" end
+  if memo:peek("pinned") == nil then raise "WeakMemo dropped pinned value" end
+
+  local ephem = streamproc.new_ephemeron()
+  local k_keep = streamproc.KeyTag(1)
+  ephem:put(k_keep, "alive")
+  populate_transient_ephemeron(ephem)
+  gc.collect()
+  gc.collect()
+  if ephem:get(k_keep) ~= "alive" or ephem:count() ~= 1 then
+    raise "EphemeronCache did not collect transient key or lost pinned key"
+  end
+
+  return 0
+end

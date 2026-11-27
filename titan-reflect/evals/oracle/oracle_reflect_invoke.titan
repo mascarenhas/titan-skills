@@ -1,0 +1,191 @@
+foreign import "native_sample.h"
+
+local invoke = import "invoke_reflect"
+local lua = import "lua"
+local reflect = import "reflect"
+
+interface Greeter
+  name: string
+  function z_prefix(p: string): string
+  function a_suffix(s: string): string
+end
+
+record Person
+  local secret_code: integer
+  const name: string
+  score: integer
+end
+
+function Person.new(name: string, score: integer): Person
+  return { secret_code = 1234, name = name, score = score }
+end
+
+function Person:z_prefix(p: string): string
+  return p .. ":" .. self.name .. ":" .. self.score
+end
+
+function Person:a_suffix(s: string): string
+  return self.name .. ":" .. s
+end
+
+local function Person:hidden_reset()
+  self.score = 0
+end
+
+union Command
+  add(integer)
+  noop()
+end
+
+function Command:apply(base: integer): integer
+  case self
+  when add(delta) then return base + delta
+  when noop() then return base
+  end
+end
+
+record NativeSample
+  local hidden_pad: integer
+  const high_u64: foreign uint64_t
+  pair: foreign sample_pair_t
+end
+
+function NativeSample.new(high_u64: foreign uint64_t, tag: integer, mask: foreign uint64_t): NativeSample
+  local p = ffi.make_sample_pair(tag as foreign int32_t, mask)
+  return { hidden_pad = 9, high_u64 = high_u64, pair = p }
+end
+
+local function fixed_fn(a: integer, b: string): integer
+  return a + #b
+end
+
+local function zero_ret_fn(x: integer)
+  local _ = x
+end
+
+local function variadic_flex_fn(head: integer, ...: string): (integer, ...: string)
+  return head + #..., ...
+end
+
+function main(args: {string}): integer
+  -- 1. Callable inspection (aliasing reserved `type` in is_titan_function / is_lua_function)
+  local s1 = invoke.inspect_callable(fixed_fn)
+  if s1.kind ~= "titan" or s1.param_count ~= 2 or s1.is_vararg
+     or s1.return_count ~= 1 or s1.has_flexret then
+    raise "fixed_fn summary mismatch"
+  end
+
+  local s2 = invoke.inspect_callable(zero_ret_fn)
+  if s2.kind ~= "titan" or s2.param_count ~= 1 or s2.return_count ~= 0 or s2.has_flexret then
+    raise "zero_ret_fn summary mismatch"
+  end
+
+  local s3 = invoke.inspect_callable(variadic_flex_fn)
+  if s3.kind ~= "titan" or s3.param_count ~= 1 or not s3.is_vararg
+     or s3.return_count ~= 1 or not s3.has_flexret then
+    raise "variadic_flex_fn summary mismatch"
+  end
+
+  local lua_fn = lua.load("return function(a, b) return a + b end", "chunk")()
+  local s4 = invoke.inspect_callable(lua_fn)
+  if s4.kind ~= "lua" or s4.param_count ~= 2 or s4.is_vararg then
+    raise "lua_fn summary mismatch"
+  end
+
+  -- 2. Dynamic method invocation on Record, Union, and Interface (passing Interface wrapper receiver!)
+  local p = Person("Ada", 10)
+  local r_rec: string = invoke.invoke_method(p, "z_prefix", "hi")
+  if r_rec ~= "hi:Ada:10" then raise "record invoke_method mismatch: " .. r_rec end
+
+  -- Hidden local method must NOT be invocable
+  local hidden_called = false
+  do
+    invoke.invoke_method(p, "hidden_reset")
+    hidden_called = true
+  catch
+  end
+  if hidden_called then raise "local method must not be visible/invocable" end
+
+  local cmd = Command.add(15)
+  local r_union: integer = invoke.invoke_method(cmd, "apply", 27)
+  if r_union ~= 42 then raise "union invoke_method mismatch" end
+
+  local g: Greeter = p
+  p.score = 99 -- mutates concrete owner while Interface snapshot keeps const name
+  local r_iface: string = invoke.invoke_method(g, "z_prefix", "yo")
+  if r_iface ~= "yo:Ada:99" then raise "interface invoke_method mismatch: " .. r_iface end
+
+  -- 3. Member ordering: record methods are name-sorted, Interface methods keep declaration order!
+  local r_fields, r_methods = invoke.list_member_names(p)
+  if #r_fields ~= 2 or r_fields[1] ~= "name" or r_fields[2] ~= "score" then
+    raise "record public fields mismatch (local secret_code must be omitted)"
+  end
+  if #r_methods ~= 2 or r_methods[1] ~= "a_suffix" or r_methods[2] ~= "z_prefix" then
+    raise "record methods must be name-sorted"
+  end
+
+  local i_fields, i_methods = invoke.list_member_names(g)
+  if #i_fields ~= 1 or i_fields[1] ~= "name" then
+    raise "interface fields mismatch"
+  end
+  if #i_methods ~= 2 or i_methods[1] ~= "z_prefix" or i_methods[2] ~= "a_suffix" then
+    raise "interface methods must preserve declaration order"
+  end
+
+  -- 4. Interface view inspection (.type.name, wrapped concrete type name, snapshot fields)
+  local iname, cname, snap = invoke.inspect_interface_view(g)
+  if iname ~= "oracle_reflect_invoke.Greeter"
+     or cname ~= "oracle_reflect_invoke.Person"
+     or (snap["name"] as string) ~= "Ada" then
+    raise "inspect_interface_view mismatch"
+  end
+
+  -- 5. Runtime enforcement of local fields, const fields, type checks, and read-only interfaces
+  local ok_mut, err_mut? = invoke.try_set_field(p, "score", 42.0) -- Lua-boundary integral float -> integer
+  if not ok_mut or err_mut ~= nil or p.score ~= 42 then
+    raise "try_set_field mutable integral float conversion failed"
+  end
+
+  local ok_bad, err_bad? = invoke.try_set_field(p, "score", "not-a-number")
+  if ok_bad or err_bad == nil or p.score ~= 42 then
+    raise "try_set_field bad type must fail and leave prior value intact"
+  end
+
+  local ok_const, err_const? = invoke.try_set_field(p, "name", "Changed")
+  if ok_const or err_const == nil or p.name ~= "Ada" then
+    raise "try_set_field must reject const field"
+  end
+
+  local ok_local, err_local? = invoke.try_set_field(p, "secret_code", 0)
+  if ok_local or err_local == nil then
+    raise "try_set_field must reject hidden local field"
+  end
+
+  local ok_iface, err_iface? = invoke.try_set_field(g, "name", "Nope")
+  if ok_iface or err_iface == nil then
+    raise "try_set_field must reject interface wrapper"
+  end
+
+  -- 6. Native projection (1-based public ordinal across local field gap, u64 > INT64_MAX -> negative int, C struct -> const {value})
+  local max_u64: foreign uint64_t = (0 as foreign uint64_t) - (1 as foreign uint64_t)
+  local mask_u64: foreign uint64_t = (0 as foreign uint64_t) - (2 as foreign uint64_t)
+  local ns = NativeSample(max_u64, 7, mask_u64)
+  local proj = invoke.project_fields(ns)
+  if proj["hidden_pad"] ~= nil then raise "project_fields must omit local field" end
+  if (proj["high_u64"] as integer) ~= -1 then
+    raise "u64 0xffffffffffffffff must project to signed integer -1"
+  end
+  local pair_arr: const {value} = proj["pair"]
+  if #pair_arr ~= 2 or (pair_arr[1] as integer) ~= 7 or (pair_arr[2] as integer) ~= -2 then
+    raise "projected C struct fields mismatch"
+  end
+
+  -- 7. Rooted callable pair
+  local call_fn, root_ref = invoke.root_callable(fixed_fn)
+  local call_out: integer = call_fn(10, "abcd")
+  if call_out ~= 14 or root_ref ~= fixed_fn then
+    raise "root_callable invocation or root identity mismatch"
+  end
+
+  return 0
+end

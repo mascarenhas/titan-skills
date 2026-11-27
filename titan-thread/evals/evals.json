@@ -1,0 +1,126 @@
+{
+  "skill_name": "titan-thread",
+  "evals": [
+    {
+      "id": "thread-01-worker-group-channels-closure-transfer",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-thread"],
+      "candidate_expected_skills": ["titan-programmer", "titan-thread"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-async", "titan-networking"],
+      "prompt": "Implement a multi-threaded CPU batch hasher and cross-thread channel/transfer verification module in `hashpool.titan` (logical module `hashpool`) using Titan's OS `thread` and `transfer` modules (plus `string` for byte inspection; do not import `async` or networking modules—size result channels cleanly so workers complete without needing an async collector Task).\n\nExport the following public types and functions:\n- `record HashInput` with fields `const id: integer` and `const chunks: {string}` (wrapping the Array inside a public record so it can cross threads cleanly).\n- `record HashOutput` with fields `const id: integer`, `const digest: integer`, and `const salt_used: integer`.\n- `record HashJob` with fields `const input: HashInput` and `const reply: thread.Sender<|HashOutput|>`.\n- `function fnv1a_chunks(chunks: const? {string}, salt: integer): integer`:\n  - Computes a deterministic 32-bit masked FNV-1a digest over `chunks`: start with `h = salt & 0xffffffff`; for `i = 1, #chunks`, if `i > 1` mix separator `0xff` via `h = ((h ~ 0xff) * 16777619) & 0xffffffff`, then for every byte `b` in `chunks[i]` (`strings.byte(chunk, j)`) update `h = ((h ~ b) * 16777619) & 0xffffffff`; return `h`.\n- `function hash_batch(inputs: {HashInput}, workers: integer, seed_salt: integer): {HashOutput}`:\n  - Validates `workers > 0` (raising otherwise).\n  - Creates a bounded job channel `jobs_tx, jobs_rx = thread.channel<|HashJob|>(workers)` and a result channel `res_tx, res_rx = thread.channel<|HashOutput|>(#inputs > 0 and #inputs or 1)`.\n  - Declares a mutable local `local salt = seed_salt`, spawns `workers` OS workers in `thread.group(workers, true)` (`propagate_errors = true`) whose closure captures `salt`, iterates `jobs_rx:incoming()`, computes `fnv1a_chunks(job.input.chunks, salt)`, and sends `HashOutput(job.input.id, digest, salt)` to `job.reply`.\n  - Immediately after spawning workers, mutates `salt = seed_salt + 9999` in the caller (demonstrating that closure upvalue snapshots isolate each worker's mutable cell from subsequent caller mutations).\n  - Sends every `HashJob(inputs[i], res_tx)`, calls `jobs_tx:close()` (preserving buffered jobs), retires the worker pool via `local errs = pool:wait()` **before** closing the shared `res_tx`, re-raises `errs[1]:raise()` if `#errs > 0`, calls `res_tx:close()`, drains `res_rx:incoming()` into an Array sorted in ascending `id` order, and returns it.\n- `record SnapshotCheck` with fields `const worker_value: integer`, `const caller_value: integer`, `const direct_array_rejected: boolean`, and `const standalone_endpoint_rejected: boolean`.\n- `function verify_transfer_rules(initial: integer): SnapshotCheck`:\n  - Declares mutable `local counter = initial`, spawns a standalone OS thread via `thread.spawn_one` closing over `counter` that increments `counter = counter + 10` and returns `counter`, immediately sets `counter = initial + 1000` in the caller, retires the worker via `worker:join()`, and extracts the returned value via `case` on `ThreadStatus` (`succeeded(v)`).\n  - Verifies `transfer.TransferValue.from_value({ 1, 2, 3 })` raises (`direct_array_rejected = true`) because top-level Arrays are rejected directly.\n  - Verifies `transfer.TransferValue.from_value(tx)` (for a `thread.Sender<|integer|>`) raises outside a packet scope (`standalone_endpoint_rejected = true`).\n  - Returns `SnapshotCheck`.\n- `record ChannelSemanticsReport` with fields `const sender_close_preserved: {integer}`, `const receiver_close_discarded: boolean`, `const try_send_full_false: boolean`, `const nil_items_received: integer`, and `const non_nil_sum: integer`.\n- `function verify_channel_semantics(): ChannelSemanticsReport`:\n  - Verifies `Sender:close()` preserves buffered items: sends `101` and `202` into a cap-2 channel, calls `tx:close()`, drains via `rx:receive_result()` (`case` `message(v)` / `closed()`) confirming `{101, 202}` arrive before `closed()`.\n  - Verifies `try_send` on a full channel returns `false` (`try_send_full_false = true`), and `Receiver:close()` discards buffered items and causes a subsequent `tx:try_send` to raise `\"channel is closed\"` (`receiver_close_discarded = true`).\n  - Verifies `thread.channel<|integer?|>(4)` carrying `nil` payloads (`10`, `nil`, `20`, `nil`, then `tx:close()`) iterated via `for _, msg? in rx:incoming() do`, counting `nil_items_received = 2` and `non_nil_sum = 30`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_hashpool.titan"
+      ],
+      "expected_outputs": [
+        "hashpool.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_hashpool.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_hashpool oracle_hashpool",
+          "./oracle_hashpool"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "thr01-a1-group-pool-os-retirement-and-fanin-close-order",
+          "concept_ids": [
+            "titan-thread:inv-1-native-only-os-isolation",
+            "titan-thread:inv-6-os-retirement-group-vs-thread",
+            "titan-thread:choosing-concurrency-primitive",
+            "titan-thread:standalone-threads-task-group"
+          ],
+          "critical": "standard",
+          "check": "Uses `thread.group(workers, true)` + `pool:wait()` and `thread.spawn_one` + `worker:join()` for full OS thread retirement, closes shared reply `Sender` only after `pool:wait()`, and stays free of unnecessary `async`/locking machinery."
+        },
+        {
+          "id": "thr01-a2-transfervalue-wrapper-closure-snapshot-and-scope",
+          "concept_ids": [
+            "titan-thread:inv-2-transfervalue-closure-snapshots",
+            "titan-thread:inv-5-exact-top-scope-finalizer-first-hooks"
+          ],
+          "critical": "standard",
+          "check": "Wraps Arrays in public `record` (`HashInput`), demonstrates independent closure upvalue snapshots on mutable locals, confirms top-level Arrays and standalone `TransferValue.from_value(sender)` outside packet scopes raise."
+        },
+        {
+          "id": "thr01-a3-mpmc-channel-close-drain-and-optional-incoming",
+          "concept_ids": [
+            "titan-thread:inv-3-mpmc-close-drain-cycles",
+            "titan-thread:bounded-mpmc-channels"
+          ],
+          "critical": "standard",
+          "check": "Demonstrates `Sender:close()` preserving buffered items (`receive_result()` via `case`), `Receiver:close()` discarding unread items and raising `\"channel is closed\"` on send, `try_send` returning `false` when full, and `for _, msg? in rx:incoming() do` preserving `nil` payloads."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-thread` (`inv-1`, `inv-2`, `inv-3`, `inv-5`, `inv-6`, `choosing-concurrency-primitive`, `bounded-mpmc-channels`, `standalone-threads-task-group`), `titan-programmer` (`inv-2`, `inv-5`). Score `idiom_score = 3` only if `./oracle_hashpool` exits `0` and all three `thr01-a1..a3` checks hold; cap at `<= 1` if shared `res_tx` is closed before `pool:wait()`, `Thread` handles are left unjoined, top-level Arrays are sent directly, `incoming()` omits `?` on optional `nil` messages, or blocking `uv.mutex_t` is used instead of channels."
+    },
+    {
+      "id": "thread-02-async-thread-bridge-and-native-handoff",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-thread", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-thread", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-ffi"],
+      "forbidden_skills": ["titan-sqlite3", "titan-websocket"],
+      "prompt": "Implement an async-to-OS-thread coordinator and custom manual-handoff transfer library in `offload.titan` (logical module `offload`) using Titan's `thread`, `transfer`, `async`, `timer`, and `string` modules.\n\nExport the following public types and functions:\n- `record WorkToken` (a public record holding `tag: string`, `seq: integer`, and `detached: boolean` in `local` fields so synthesized `new` stays private):\n  - `function WorkToken.new(tag: string, seq: integer): WorkToken`: constructs a live (`detached = false`) token.\n  - `function WorkToken:tag_name(): string` and `function WorkToken:seq_num(): integer`: return `tag` / `seq`, raising if `self.detached` is `true`.\n  - `function WorkToken:is_detached(): boolean`: returns `self.detached`.\n  - `function WorkToken:to_transfer_payload(): string`: synchronous, non-yielding custom transfer hook; raises if already detached; marks `self.detached = true` (detach before delivery!) and packs magic `\"WTK1\"` plus `strings.pack(\"<i8s4\", self.seq, self.tag)`.\n  - `function WorkToken.from_transfer_payload(payload: string): WorkToken`: synchronous, non-yielding custom decoder; validates the `\"WTK1\"` magic prefix (raising on invalid payload), unpacks `(seq, tag)`, and returns a fresh live `WorkToken(tag, seq)`.\n  - `function WorkToken.discard_transfer_payload(payload: string): integer`: synchronous manual disposer requiring no Runtime or Task; validates the `\"WTK1\"` magic prefix and unpacks `(seq, tag)` (raising on malformed payload) and returns `0`.\n- `record OffloadResult` with fields `const timed_out: boolean`, `const label: string?`, `const worker_cancelled: boolean`, and `const source_detached: boolean`.\n- `function offload_with_deadline(token: WorkToken, work_ms: integer, timeout_ms: integer): OffloadResult`:\n  - Spawns an OS worker via `thread.spawn_one` receiving `token`. Inside the worker's root Task, spawns a child Task sleeping `work_ms` (`timer.sleep(work_ms)`) and installs a lexical `defer` in the root Task that cancels and joins the child Task (since `Thread:cancel` cancels only the worker's root Task!), then returns `t:tag_name() .. \"#\" .. t:seq_num()`.\n  - Captures `source_detached = token:is_detached()` immediately after spawning.\n  - Races `worker:task()` against a `timer.sleep(timeout_ms)` Task using `async.any_two`.\n  - On `first(label)`: cancels and joins the deadline Task, awaits terminal retirement of `worker:task()` (or `worker:join()`), and returns `OffloadResult(false, label, false, source_detached)`.\n  - On `second()`: cancels `worker` (`worker:cancel(async.CancellationReason.simple(\"deadline\"))`), retires the OS thread via `worker:join()`, checks `has_cancelled()`, and returns `OffloadResult(true, nil, was_cancelled, source_detached)`.\n- `function stream_coalesced_progress(steps: integer): {integer}`:\n  - Validates `steps >= 1`, creates a coalescing cross-state `rx = async.receiver()` with immediate `defer rx:close()`, and spawns an OS worker via `thread.spawn` capturing `rx:handle()` (`foreign *void`) and `steps` (or passing the handle inside a public wrapper record / `TransferValue`).\n  - The worker sends progress integers `1..steps` via `async.send(handle, i)` (coalescing rapid bursts; briefly sleeping `1` ms on the final step or sending in order so the receiver observes monotonically increasing progress ending with `steps`).\n  - The caller loops calling `rx:wait()`, collecting received integers until it observes `steps`.\n  - Crucially, retires the OS worker via `worker:join()` **before** closing `rx` so all senders have stopped prior to `rx:close()`.\n  - Returns the collected progress Array.\n- `record SafetyAudit` with fields `const discard_rc: integer`, `const raw_roundtrip_label: string`, and `const cycle_broken: boolean`.\n- `function audit_handoff_and_packets(token: WorkToken): SafetyAudit`:\n  - **Failed-delivery manual recovery:** Detaches `local payload = token:to_transfer_payload()`, opens a `thread.channel<|string|>(1)`, closes its receiver so `tx:send(payload)` raises `\"channel is closed\"`, and in `catch` explicitly recovers by calling `local rc = WorkToken.discard_transfer_payload(payload)`.\n  - **Raw native message packet:** Encodes a fresh `WorkToken(\"pkt\", 42)` via `local raw = transfer.encode_message(fresh)` with immediate `defer transfer.discard_message(raw)`, decodes via `local restored: WorkToken = transfer.decode_message(raw)` (relying on `decode_message` clearing `raw` so deferred `discard_message` is a safe no-op), and computes `raw_roundtrip_label = restored:tag_name() .. \"#\" .. restored:seq_num()`.\n  - **Endpoint cycle break:** Creates `local ctx, crx = thread.channel<|value|>(1)`, sends `crx` into `ctx` (forming a queued attachment cycle outside GC), and explicitly calls `crx:close()` to drain and break the cycle in C, recording `cycle_broken = (crx:is_closed() and ctx:is_closed())`.\n  - Returns `SafetyAudit(rc, raw_roundtrip_label, cycle_broken)`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_offload.titan"
+      ],
+      "expected_outputs": [
+        "offload.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_offload.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_offload oracle_offload",
+          "./oracle_offload"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "thr02-a1-thread-task-deadline-cancel-child-defer-and-retirement",
+          "concept_ids": [
+            "titan-thread:inv-6-os-retirement-group-vs-thread",
+            "titan-thread:standalone-threads-task-group",
+            "titan-async:inv-2-explicit-loser-cancel-teardown"
+          ],
+          "critical": "standard",
+          "check": "Uses `Thread:task()` with `async.any_two` deadline racing, cancels and joins child Tasks inside the worker root Task's `defer`, cancels and joins losing Tasks/workers for full OS retirement before returning."
+        },
+        {
+          "id": "thr02-a2-custom-handoff-hooks-detach-and-discard-recovery",
+          "concept_ids": [
+            "titan-thread:inv-4-packet-attachments-vs-manual-handoff",
+            "titan-thread:inv-5-exact-top-scope-finalizer-first-hooks",
+            "titan-thread:transfervalue-closures-custom-hooks-handoff"
+          ],
+          "critical": "standard",
+          "check": "Implements synchronous `to_transfer_payload` (detaching source), `from_transfer_payload`, and `discard_transfer_payload` on a public record with `local` fields, recovers failed channel sends via explicit `discard_transfer_payload`, and guards `transfer.encode_message`/`decode_message` with immediate `defer transfer.discard_message(raw)`."
+        },
+        {
+          "id": "thr02-a3-receiver-stop-senders-before-close-and-cycle-break",
+          "concept_ids": [
+            "titan-thread:inv-3-mpmc-close-drain-cycles",
+            "titan-async:inv-3-channel-vs-receiver-vs-thread-channel",
+            "titan-async:timer-channel-streams-receiver"
+          ],
+          "critical": "standard",
+          "check": "Bridges cross-thread coalescing wakes via `async.Receiver` (`rx:handle()`) retiring the sender OS worker via `worker:join()` strictly before `rx:close()`, and breaks self-queued channel endpoint cycles via explicit `Receiver:close()`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-thread` (`inv-3`, `inv-4`, `inv-5`, `inv-6`, `standalone-threads-task-group`, `transfervalue-closures-custom-hooks-handoff`), `titan-async` (`inv-2`, `inv-3`, `timer-channel-streams-receiver`), `titan-programmer` (`inv-1`, `inv-3`). Score `idiom_score = 3` only if `./oracle_offload` exits `0` and all three `thr02-a1..a3` checks hold; cap at `<= 1` if `WorkToken:to_transfer_payload` fails to detach the source, failed channel delivery omits `discard_transfer_payload`, `decode_message` lacks `defer transfer.discard_message(raw)`, `rx:close()` runs before `worker:join()`, worker child Tasks lack `defer` cancel, or `Thread` handles are left unjoined."
+    }
+  ]
+}

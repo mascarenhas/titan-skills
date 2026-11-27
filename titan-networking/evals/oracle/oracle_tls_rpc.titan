@@ -1,0 +1,122 @@
+local async = import "async"
+local net = import "net"
+local rpc = import "tls_rpc"
+local ssl = import "ssl"
+local timer = import "timer"
+
+local function fail(msg: string)
+  raise "oracle_tls_rpc: " .. msg
+end
+
+function main(args: {string}): integer
+  if #args < 3 then fail("usage: oracle_tls_rpc <cert> <key> <untrusted_ca>") end
+  local cert_file = args[1]
+  local key_file = args[2]
+  local untrusted_ca = args[3]
+
+  -- 1. Plain TCP framed echo (empty line preserved, nodelay toggle, cached addresses)
+  local tcp_srv = rpc.start_tcp_server()
+  defer tcp_srv:close()
+  local tport = tcp_srv:port()
+  if tport <= 0 then fail("invalid TCP port") end
+
+  local replies, laddr, paddr = rpc.tcp_roundtrip(tport, { "alpha", "", "omega" }, true)
+  if #replies ~= 3 or replies[1] ~= "tcp:alpha" or replies[2] ~= "tcp:" or replies[3] ~= "tcp:omega" then
+    fail("tcp_roundtrip replies mismatch: count=" .. #replies)
+  end
+  if laddr.ip ~= "127.0.0.1" or paddr.ip ~= "127.0.0.1" or paddr.port ~= tport or paddr.ipv6 then
+    fail("tcp address snapshot mismatch")
+  end
+  tcp_srv:close()
+  tcp_srv:close()
+
+  -- 2. Verified TLS 1.2+ server & client (connect + adopted SNI + stalled peer isolation)
+  local tls_srv = rpc.start_tls_server(cert_file, key_file, "DROP_NOW")
+  defer tls_srv:close()
+  local sport = tls_srv:port()
+  if sport <= 0 then fail("invalid TLS port") end
+
+  -- Open a stalled raw TCP connection that NEVER sends ClientHello!
+  -- If server ran handshake() inline inside accept(), the subsequent TLS call will hang/timeout!
+  local stalled = net.connect("127.0.0.1", sport)
+  defer stalled:close()
+  timer.sleep(20)
+
+  local tls_call = async.run(function (): string
+    return rpc.tls_call_connect("127.0.0.1", sport, cert_file, "ping")
+  end)
+  local guard = async.run(function (): nil timer.sleep(1500); return nil end)
+  local got_ping = ""
+  case async.any_two(tls_call, guard)
+  when first(res) then
+    guard:cancel()
+    async.join(guard)
+    got_ping = res
+  when second() then
+    tls_call:cancel()
+    stalled:close()
+    async.join(tls_call)
+    fail("TLS server accept loop blocked on stalled peer handshake!")
+  when none() then
+    guard:cancel()
+    async.join(guard)
+    fail("tls_call_connect failed")
+  end
+  if got_ping ~= "tls:ping" then fail("tls_call_connect got: " .. got_ping) end
+  stalled:close()
+
+  -- Adopted SNI (dial 127.0.0.1, verify cert for DNS:localhost)
+  local got_sni = rpc.tls_call_adopted_sni("127.0.0.1", sport, "localhost", cert_file, "sni-test")
+  if got_sni ~= "tls:sni-test" then fail("tls_call_adopted_sni got: " .. got_sni) end
+
+  -- Hostname mismatch via adopted SNI must raise ssl.Error CERTIFICATE_VERIFY_FAILED
+  local bad_sni_err = ""
+  do
+    rpc.tls_call_adopted_sni("127.0.0.1", sport, "wrong.example", cert_file, "nope")
+  catch
+    bad_sni_err = "caught"
+    if error is ssl.Error then
+      local se: ssl.Error = error
+      bad_sni_err = se.name
+    end
+  end
+  if bad_sni_err ~= "CERTIFICATE_VERIFY_FAILED" then
+    fail("expected CERTIFICATE_VERIFY_FAILED on wrong SNI, got: " .. bad_sni_err)
+  end
+
+  -- Untrusted CA fails with CERTIFICATE_VERIFY_FAILED
+  local ok_bad_ca, name_bad_ca = rpc.classify_tls_call("127.0.0.1", sport, untrusted_ca, "x")
+  if ok_bad_ca or name_bad_ca ~= "CERTIFICATE_VERIFY_FAILED" then
+    fail("untrusted CA expected CERTIFICATE_VERIFY_FAILED, got: " .. name_bad_ca)
+  end
+
+  -- Unauthenticated TCP abort without close_notify raises TLS_TRUNCATED_EOF
+  local ok_trunc, name_trunc = rpc.classify_tls_call("127.0.0.1", sport, cert_file, "DROP_NOW")
+  if ok_trunc or name_trunc ~= "TLS_TRUNCATED_EOF" then
+    fail("truncated peer expected TLS_TRUNCATED_EOF, got: " .. name_trunc)
+  end
+
+  -- 3. Strict TLS capability policy checks
+  if rpc.validate_tls_config(rpc.TlsConfigRequest(cert_file, false, nil, nil, nil, nil)) ~= nil then
+    fail("valid TLS config was rejected")
+  end
+  if rpc.validate_tls_config(rpc.TlsConfigRequest(cert_file, true, nil, nil, nil, nil)) == nil then
+    fail("insecure_skip_verify was not rejected")
+  end
+  if rpc.validate_tls_config(rpc.TlsConfigRequest(nil, false, "/etc/ssl/certs", nil, nil, nil)) == nil then
+    fail("ca_dir was not rejected")
+  end
+  if rpc.validate_tls_config(rpc.TlsConfigRequest(cert_file, false, nil, "secret", nil, nil)) == nil then
+    fail("encrypted_key_passphrase was not rejected")
+  end
+  if rpc.validate_tls_config(rpc.TlsConfigRequest(cert_file, false, nil, nil, { "h2" }, nil)) == nil then
+    fail("alpn_protocols was not rejected")
+  end
+  if rpc.validate_tls_config(rpc.TlsConfigRequest(cert_file, false, nil, nil, nil, "client.pem")) == nil then
+    fail("client_cert_file (mTLS) was not rejected")
+  end
+
+  tls_srv:close()
+  tls_srv:close()
+  return 0
+end

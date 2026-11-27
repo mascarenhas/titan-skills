@@ -1,0 +1,103 @@
+local qp = import "query_peg"
+
+local function expect_ok(input: string, expected_sexpr: string)
+  local expr?, err? = qp.parse_query(input)
+  if err ~= nil then
+    raise ("expected success for [" .. input .. "], got error [" .. err.label .. "] at L" .. err.line .. ":C" .. err.column)
+  end
+  if expr == nil then
+    raise ("expected non-nil Expr for [" .. input .. "]")
+  end
+  local got = qp.format_expr(expr)
+  if got ~= expected_sexpr then
+    raise ("AST mismatch for [" .. input .. "]: expected " .. expected_sexpr .. ", got " .. got)
+  end
+end
+
+local function expect_err(input: string, expected_label: string, expected_line: integer, expected_col: integer?)
+  local expr?, err? = qp.parse_query(input)
+  if expr ~= nil then
+    raise ("expected error [" .. expected_label .. "] for [" .. input .. "], got Expr: " .. qp.format_expr(expr))
+  end
+  if err == nil then
+    raise ("expected ParseError for [" .. input .. "]")
+  end
+  if err.label ~= expected_label then
+    raise ("label mismatch for [" .. input .. "]: expected " .. expected_label .. ", got " .. err.label)
+  end
+  if err.line ~= expected_line then
+    raise ("line mismatch for [" .. input .. "]: expected " .. expected_line .. ", got " .. err.line)
+  end
+  if expected_col ~= nil and err.column ~= expected_col then
+    raise ("column mismatch for [" .. input .. "]: expected " .. expected_col .. ", got " .. err.column)
+  end
+  if err.position < 1 or err.position > #input + 1 then
+    raise ("out-of-range byte position " .. err.position .. " for [" .. input .. "]")
+  end
+end
+
+function main(_args: {string}): integer
+  -- 1. Valid comparisons, negative integers, strings, operator precedence, left-associativity, negation.
+  expect_ok("status == \"ok\"", "(== status \"ok\")")
+  expect_ok("delta >= -10", "(>= delta -10)")
+  expect_ok("!(age < 21)", "(not (< age 21))")
+  expect_ok("!!flag != 0", "(not (not (!= flag 0)))")
+
+  -- Precedence: `and` binds tighter than `or`.
+  expect_ok(
+    "a == 1 or b == 2 and c != \"x\"",
+    "(or (== a 1) (and (== b 2) (!= c \"x\")))"
+  )
+
+  -- Left-associativity via fold capture `~>`.
+  expect_ok(
+    "a == 1 and b == 2 and c == 3",
+    "(and (and (== a 1) (== b 2)) (== c 3))"
+  )
+  expect_ok(
+    "a == 1 or b == 2 or c == 3",
+    "(or (or (== a 1) (== b 2)) (== c 3))"
+  )
+
+  -- Parentheses override precedence; keyword prefixes on identifiers (`order`, `android`) stay identifiers.
+  expect_ok(
+    "(order == 1 or android == \"v2\") and !done <= 0",
+    "(and (or (== order 1) (== android \"v2\")) (not (<= done 0)))"
+  )
+
+  -- Multi-line whitespace including CRLF and LF.
+  expect_ok("x == 1\r\n  and\n  y == \"a b\"", "(and (== x 1) (== y \"a b\"))")
+
+  -- 2. Labeled syntax errors with accurate line/column/position diagnostics.
+  expect_err("   ", "expected_expr", 1, nil)
+  expect_err("status 42", "expected_op", 1, 8)
+  expect_err("status ==\n  ", "expected_value", 2, 3)
+  expect_err("status ==\r\n  @", "expected_value", 2, 3)
+  expect_err("a == \"unclosed", "unterminated_string", 1, 15)
+  expect_err("(a == 1", "expected_rparen", 1, 8)
+  expect_err("a == 1 and ", "expected_rhs", 1, 12)
+  expect_err("a == 1 extra", "trailing_input", 1, 8)
+
+  -- 3. Labeled recovery in parse_batch + fresh per-match state (no leaked mutable fold accumulator).
+  local batch1 = qp.parse_batch("a == 1; ???bad; b == \"ok\"; c == ; d <= 9;")
+  if #batch1.items ~= 3 or batch1.skipped ~= 2 then
+    raise ("unexpected batch1 counts: items=" .. #batch1.items .. ", skipped=" .. batch1.skipped)
+  end
+  if qp.format_expr(batch1.items[1]) ~= "(== a 1)" or
+     qp.format_expr(batch1.items[2]) ~= "(== b \"ok\")" or
+     qp.format_expr(batch1.items[3]) ~= "(<= d 9)" then
+    raise "unexpected batch1 parsed items"
+  end
+
+  local batch2 = qp.parse_batch("x == 7")
+  if #batch2.items ~= 1 or batch2.skipped ~= 0 or qp.format_expr(batch2.items[1]) ~= "(== x 7)" then
+    raise ("batch2 leaked prior state or misparsed: items=" .. #batch2.items .. ", skipped=" .. batch2.skipped)
+  end
+
+  local batch_empty = qp.parse_batch("   ")
+  if #batch_empty.items ~= 0 or batch_empty.skipped ~= 0 then
+    raise "expected empty batch on whitespace-only input"
+  end
+
+  return 0
+end

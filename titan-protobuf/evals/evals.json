@@ -1,0 +1,128 @@
+{
+  "skill_name": "titan-protobuf",
+  "evals": [
+    {
+      "id": "protobuf-01-proto3-records-oneof-and-wire",
+      "baseline_anchor": true,
+      "baseline_specialist_available": false,
+      "baseline_expected_skills": ["titan-programmer"],
+      "candidate_expected_skills": ["titan-programmer", "titan-protobuf"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-reflect", "titan-stdlib"],
+      "forbidden_skills": ["titan-json", "titan-pegs"],
+      "prompt": "Implement a Titan module `telemetry_pb.titan` (logical module `telemetry_pb`) using Titan's standard Protocol Buffers module and reflection descriptors to serialize, deserialize, and describe Proto3 wire messages.\n\nExport the following all-public nominal types with exact field/variant declaration order (so field tags are deterministic 1-based Proto3 numbers):\n- `record Metric` with fields (in order 1..4):\n  1. `const seq: integer`\n  2. `const ok: boolean`\n  3. `const raw: string` (arbitrary raw bytes, including NUL and non-UTF-8 bytes)\n  4. `const note: string?`\n- `record Batch` with fields (in order 1..2):\n  1. `const labels: {string}` (mutable Array that may contain interior `nil` holes)\n  2. `const items: const {Metric}`\n- `record Node` (recursive linked node) with fields (in order 1..2):\n  1. `const id: integer`\n  2. `const next: Node?`\n- `union Packet` with variants (in order 1..3):\n  1. `metric(Metric)`\n  2. `batch(Batch)`\n  3. `heartbeat(ts: integer, label: string?)`\n\nExport the following public functions:\n- `encode_packet(p: Packet): string`: encodes `p` to Proto3 wire bytes.\n- `decode_packet(bytes: string): Packet`: decodes `bytes` to `Packet` using a reflection `NamedType` descriptor for `telemetry_pb.Packet`.\n- `decode_packet_nominal(bytes: string): Packet`: decodes `bytes` to `Packet` via nominal lookup (`\"telemetry_pb.Packet\"`, union = `true`).\n- `packet_schema(): string`: returns the generated Proto3 schema string for `telemetry_pb.Packet`.\n- `encode_envelope(seq: integer, payload: string?, tag: string?): string`: encodes the 3-element anonymous tuple `[integer, string?, string?]` without a wrapper record, preserving explicit interior and trailing `nil`s.\n- `decode_envelope(bytes: string): (integer, string?, string?)`: decodes the 3-element anonymous tuple back to `(integer, string?, string?)`.\n- `build_chain(depth: integer): Node`: builds a linked chain of `depth` `Node` records (`depth <= 1` returns `Node(1, nil)`; `depth = k` nests `k` total `Node` records).\n- `encode_chain(n: Node): string`: serializes `n` to Proto3 wire bytes (allowing the standard 128-level nesting guard to enforce the limit).",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_pb_wire.titan"
+      ],
+      "expected_outputs": [
+        "telemetry_pb.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_pb_wire.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_pb_wire oracle_pb_wire",
+          "./oracle_pb_wire"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "pb01-a1-all-public-decl-order-wire-and-schema",
+          "concept_ids": [
+            "titan-protobuf:inv-1-decl-order-wire-tags-no-new",
+            "titan-protobuf:api-selection-proto3-wire-mapping"
+          ],
+          "critical": "standard",
+          "check": "Defines all-public `Metric`, `Batch`, `Node`, and `Packet` in exact declaration order so Proto3 wire vectors match byte-for-byte, and wires `serialize`, `deserialize` (via `reflect.NamedType`), `deserialize_nominal`, and `schema` cleanly."
+        },
+        {
+          "id": "pb01-a2-raw-bytes-zero-scalars-holes-and-anonymous-tuple",
+          "concept_ids": [
+            "titan-protobuf:inv-2-raw-bytes-and-present-scalars",
+            "titan-protobuf:inv-6-initialized-types-generated-codecs-hooks",
+            "titan-protobuf:nominal-codecs-anonymous-tuples-and-diagnostics"
+          ],
+          "critical": "standard",
+          "check": "Handles ZigZag `sint64`, raw NUL/non-UTF-8 byte strings, explicit zero-scalar emission, interior Array `nil` holes, and anonymous tuple `serialize_fields`/`deserialize_fields` preserving interior and trailing `nil`s."
+        },
+        {
+          "id": "pb01-a3-nesting-limit-and-const-fields",
+          "concept_ids": [
+            "titan-protobuf:inv-5-nesting-limit-and-2gib",
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "standard",
+          "check": "Defaults immutable record fields to `const`, preserves the standard 128-level nesting limit (accepting 127-node chains and rejecting 128-node chains with `nesting exceeds 128 levels`), and avoids Maps/unsupported types in Protobuf schemas."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-protobuf` (`inv-1`, `inv-2`, `inv-5`, `inv-6`, `api-selection-proto3-wire-mapping`), `titan-programmer` (`inv-2`). Score `idiom_score = 3` only if `oracle_pb_wire` exits `0` (including byte-exact Proto3 vectors, interior hole roundtrip, anonymous tuple trailing `nil`s, and 127/128 depth boundary) and `pb01-a1..a3` hold; cap at `<= 1` if field declaration order breaks wire vectors, wrapper records replace `serialize_fields`/`deserialize_fields`, or `local` fields break ordinary `serialize`/`deserialize`/`schema`."
+    },
+    {
+      "id": "protobuf-02-portable-browser-peer-and-anonymous",
+      "baseline_anchor": false,
+      "baseline_specialist_available": false,
+      "baseline_expected_skills": ["titan-programmer", "titan-ffi"],
+      "candidate_expected_skills": ["titan-programmer", "titan-protobuf", "titan-ffi"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-reflect", "titan-application", "titan-stdlib"],
+      "forbidden_skills": ["titan-json", "titan-sqlite3"],
+      "prompt": "Implement a cross-runtime portable Protocol Buffers codec and browser JavaScript bridge across three files in the current directory (`codec.titan`, `app.titan`, and `bridge.mjs`):\n\n1. `codec.titan` (target-neutral module `codec`, compiling on both native and browser targets):\n   - `record Reading` with private `local calibration: integer` and public fields `const sensor: string`, `const sample: integer`, `const payload: string`.\n     - Define custom public `function Reading.new(sensor: string, sample: integer, payload: string): Reading` initializing `calibration = 10` (with parameter names matching the public fields so portable decoding reconstructs `Reading` through `Reading.new`).\n     - Define public method `Reading:calibration_offset(): integer` returning `self.calibration`.\n   - `record Note` with `const tag: string`.\n   - `record Unlisted` with `const code: integer` (intentionally omitted from the portable codec's dynamic allowlist).\n   - `function make_codec(): protobuf.PortableCodec`: builds a portable codec with:\n     - `fields`: `[codec.Reading, value]`\n     - `dynamic`: `[codec.Note]` (omitting `codec.Unlisted`)\n     - `text` paths: `\"codec.Reading.sensor\"` and `\"codec.Note.tag\"` (leaving `codec.Reading.payload` unmarked as raw bytes).\n   - `function roundtrip_native(r: Reading, extra: value): (Reading, value)`: encodes `(r, extra)` with `make_codec()`, decodes the wire bytes, and returns both decoded values.\n\n2. `app.titan` (browser entrypoint module `app` importing `codec` and `browser`):\n   - Export `function main(args: {string}): integer` that:\n     - Builds `c = codec.make_codec()` and `desc = c:describe()`, encodes `codec.Reading(\"roof\", 9007199254740993, \"raw\\x00\\xff\")` and `codec.Note(\"live\")` via `c:encode(...)`.\n     - Looks up JS binding `\"transform_wire\"` (closing the handle deterministically with `defer`), calls it with `(is_string(desc), is_bytes(wire))`, decodes the returned bytes back via `c:decode(...)`, and verifies `sensor == \"roof:ack\"`, `sample == 9007199254740994`, `payload == \"raw\\x00\\xff~\"`, `calibration_offset() == 10`, and `extra` is `codec.Note` with `tag == \"live:js\"`.\n     - Looks up JS binding `\"reject_plain\"` (with `defer` close) and calls it with `is_string(desc)`; catches the resulting `BrowserError`, passes `is_handle(failure.thrown)` to JS binding `\"inspect_error\"` (with `defer` close on both the binding handle and `failure`), verifies the returned report string equals `\"type_mismatch:$[1]\"`, and exits `0`.\n\n3. `bridge.mjs` (ES module for the browser host):\n   - Assume the deployment/verification step copies the browser SDK's portable Protobuf `.mjs` peer module from `$PREFIX/lib/titan-browser/0.6/` into the working directory under its standard SDK filename alongside `bridge.mjs`; import `portable` from that relative sibling `./<filename>` path.\n   - Export `function createBindings()` returning `{ transform_wire(description, encodedBytes), reject_plain(description), inspect_error(thrown) }`:\n     - `transform_wire(description, encodedBytes)`: creates `const codec = portable(description)`, decodes `[reading, extra] = codec.decode(encodedBytes)`, constructs new nominal instances via `codec.types[\"codec.Reading\"]` and `codec.types[\"codec.Note\"]` (using 64-bit `BigInt` `reading.sample + 1n`, UTF-8 string `reading.sensor + \":ack\"`, raw `Uint8Array` appending byte `0x7e`, and `extra.tag + \":js\"`), and returns `codec.encode(nextReading, nextNote)`.\n     - `reject_plain(description)`: calls `portable(description).encode({ sensor: \"bad\", sample: 1n, payload: new Uint8Array([1]) }, null)` so the peer throws its `TypeError` with `code === \"type_mismatch\"` and `path === \"$[1]\"`.\n     - `inspect_error(thrown)`: returns `` `${thrown.code}:${thrown.path}` ``.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_pb_portable.titan",
+        "evals/oracle/oracle_pb_browser.mjs"
+      ],
+      "expected_outputs": [
+        "codec.titan",
+        "app.titan",
+        "bridge.mjs"
+      ],
+      "verify": {
+        "target": "browser",
+        "network": "none",
+        "timeout_sec": 90,
+        "commands": [
+          "cp /verify/oracle/oracle_pb_portable.titan /verify/oracle/oracle_pb_browser.mjs .",
+          "titanc -q --tree . -o build_native --exe oracle_pb_portable oracle_pb_portable",
+          "./oracle_pb_portable",
+          "cp \"$(titanc --print-root)/lib/titan-browser/0.6/titan-protobuf.mjs\" .",
+          "TITAN_BUILD_PROFILE=validation titanc -q --target browser --tree . -o build_browser --exe build_browser/app.mjs app",
+          "\"$(titanc --print-root)/lib/titan-browser/0.6/titan-browser-run\" --js-test --root . oracle_pb_browser.mjs"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "pb02-a1-portable-local-fields-public-new-and-dynamic-allowlist",
+          "concept_ids": [
+            "titan-protobuf:inv-3-upfront-validated-portable",
+            "titan-programmer:inv-1-exported-record-local-fields"
+          ],
+          "critical": "issue61_idiom",
+          "check": "`Reading` keeps `calibration` in a `local` field with a matching-name public `Reading.new` so `protobuf.portable` decodes it via `Reading.new`, enforces the closed `dynamic` allowlist (rejecting `Unlisted`), and marks only `sensor` and `Note.tag` in `text_paths`."
+        },
+        {
+          "id": "pb02-a2-browser-mjs-peer-types-and-errors",
+          "concept_ids": [
+            "titan-protobuf:inv-4-browser-mjs-peer",
+            "titan-protobuf:portable-codecs-browser-mjs-peer"
+          ],
+          "critical": "standard",
+          "check": "`bridge.mjs` imports `portable` from `./titan-protobuf.mjs`, uses `BigInt` for 64-bit `integer`, `Uint8Array` for unmarked `payload`, UTF-8 `string` for `text` fields, and `codec.types[fqtn]` class instances (never plain objects), and propagates `TypeError` `.code`/`.path` cleanly."
+        },
+        {
+          "id": "pb02-a3-browser-bridge-handle-and-error-lifecycle",
+          "concept_ids": [
+            "titan-ffi:browser-javascript-bridge",
+            "titan-programmer:inv-3-sync-finalizable-defer-close"
+          ],
+          "critical": "issue61_idiom",
+          "check": "`app.titan` uses `browser.binding` + `BrowserValue.is_string`/`is_bytes`/`is_handle`, pairs every acquired `BrowserHandle` and caught `BrowserError` with `defer ...:close()`, and catches `BrowserError` without leaking handles."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-protobuf` (`inv-3`, `inv-4`, `portable-codecs-browser-mjs-peer`), `titan-ffi` (`browser-javascript-bridge`), `titan-programmer` (`inv-1`, `inv-3`). Score `idiom_score = 3` only if both native `oracle_pb_portable` and browser `titan-browser-run --js-test` (`oracle_pb_browser.mjs`) exit `0` and all three `pb02-a1..a3` checks hold; cap at `<= 1` if `calibration` is made public, `BigInt` precision above `2^53` is truncated to JS `Number`, plain objects are passed instead of `codec.types[fqtn]`, or `BrowserHandle`/`BrowserError` values are not closed with `defer`."
+    }
+  ]
+}

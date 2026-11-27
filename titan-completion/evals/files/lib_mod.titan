@@ -1,0 +1,19 @@
+--- Library module for visibility checks.
+-- @module lib_mod
+
+local secret = 7
+
+local record Private
+  hidden: integer
+end
+
+--- Exported record.
+record Public
+  visible: integer
+end
+
+type Alias = integer
+
+function exported_fn(): integer
+  return secret
+end
