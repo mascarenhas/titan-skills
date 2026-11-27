@@ -1,0 +1,131 @@
+{
+  "skill_name": "titan-sqlite3",
+  "evals": [
+    {
+      "id": "sqlite3-01-async-prepared-transactions-mapping",
+      "baseline_anchor": true,
+      "baseline_specialist_available": false,
+      "baseline_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-sqlite3", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-reflect"],
+      "forbidden_skills": ["titan-json", "titan-networking"],
+      "prompt": "Implement an asynchronous embedded SQLite ledger library in `ledger_db.titan` (logical module `ledger_db`) using Titan's standard `sqlite3` module.\n\nExport the following public types and functions:\n- `record LedgerEntry` (immutable `const` fields, mapped via a typed factory function—not `Row:fill`): `const id: integer`, `const account: string`, `const amount: integer`, `const settled: boolean`, `const receipt: sqlite3.Blob?`, `const memo: string?`.\n- `record AccountSummary` (mutable fields, mapped via `Row:fill(target)`): `name: string`, `balance: integer`, `active: boolean`, `note: string?`.\n- `record Ledger` encapsulating the `sqlite3.Connection` and closed flag in `local` fields (leaving synthesized `new` private).\n- `function open(db_path: string): Ledger`: connects to `db_path`, ensures the following two tables exist (closing DDL statements with LIFO `defer`, and closing the connection on setup error), and returns `Ledger`:\n  - `accounts(name TEXT PRIMARY KEY, balance INTEGER NOT NULL CHECK(balance >= 0), active INTEGER NOT NULL, note TEXT)`\n  - `entries(id INTEGER PRIMARY KEY AUTOINCREMENT, account TEXT NOT NULL REFERENCES accounts(name), amount INTEGER NOT NULL, settled INTEGER NOT NULL, receipt BLOB, memo TEXT)`\n- `function Ledger:close()`: idempotent async close of the underlying connection.\n- `function Ledger:create_account(name: string, balance: integer, active: boolean, note: string?)`: inserts a row into `accounts` using a prepared statement with exact positional bindings and `defer` close.\n- `function Ledger:record_entry(account: string, amount: integer, settled: boolean, receipt_bytes: string?, memo: string?): integer`: inserts a row into `entries` using `INSERT INTO entries(account, amount, settled, receipt, memo) VALUES (?, ?, ?, ?, ?) RETURNING id`, executing via `query(...)` (since `RETURNING` produces a row), wrapping non-`nil` `receipt_bytes` in `sqlite3.Blob(receipt_bytes)` so binary/NUL bytes and empty `\"\"` store as `BLOB` while `nil` binds `NULL`, closing cursor and statement in LIFO `defer` order, and returning the generated `id`.\n- `function Ledger:transfer_with_savepoint(from_acct: string, to_acct: string, amount: integer, audit_memo: string?): boolean`:\n  - Begins an explicit transaction (`set_autocommit(false)`) with an outer `catch` guard (`if not db:get_autocommit() then db:rollback() end; raise`).\n  - Inserts an outer audit entry into `entries` (`account = from_acct`, `amount = 0`, `settled = false`, `receipt = nil`, `memo = \"attempt:\" .. (audit_memo or \"\")`) before opening a SQL savepoint.\n  - Opens `SAVEPOINT sp_transfer`, debits `from_acct` (`UPDATE accounts SET balance = balance - ? WHERE name = ?`), and credits `to_acct` (`UPDATE accounts SET balance = balance + ? WHERE name = ?`).\n  - If the debit/credit raises a `sqlite3.Error` (such as the `CHECK(balance >= 0)` constraint violation) OR either `UPDATE` affects `0` rows: rolls back to `SAVEPOINT sp_transfer`, releases `sp_transfer`, commits the outer transaction (so the `\"attempt:...\"` audit row persists while balances stay untouched), and returns `false`.\n  - Otherwise inserts the settled transfer entry (`account = from_acct`, `amount = -amount`, `settled = true`, `receipt = nil`, `memo = audit_memo`), releases `sp_transfer`, commits the outer transaction, and returns `true`.\n- `function Ledger:list_entries(account: string): {LedgerEntry}`: queries `SELECT id, account, amount, settled, receipt, memo FROM entries WHERE account = ? ORDER BY id`, streams via `for row in cursor:fetch do`, maps each row to `LedgerEntry` via a typed factory using `row:get(i)` and `#row.columns`, and returns the list.\n- `function Ledger:get_account(name: string): AccountSummary?`: queries `SELECT name, balance, active, note FROM accounts WHERE name = ?`, returns `nil` if absent, otherwise populates a fresh `AccountSummary` via `row:fill(summary)` and returns it.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_sqlite_ledger.titan"
+      ],
+      "expected_outputs": [
+        "ledger_db.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_sqlite_ledger.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_sqlite_ledger oracle_sqlite_ledger",
+          "./oracle_sqlite_ledger"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "sql01-a1-lifo-defer-and-local-connection",
+          "concept_ids": [
+            "titan-sqlite3:inv-1-native-only-async-task",
+            "titan-sqlite3:inv-2-single-inflight-cursor-locks",
+            "titan-sqlite3:inv-3-lifo-defer-close",
+            "titan-sqlite3:connections-statements-cursors-errors-cancellation",
+            "titan-programmer:inv-1-exported-record-local-fields"
+          ],
+          "critical": "issue61_idiom",
+          "check": "`Ledger` stores `sqlite3.Connection` in a `local` field with public `open` factory, pairs every `Connection`/`Statement`/`Cursor` with LIFO `defer :close()` (closing cursors before transaction changes and statements before `db:close()`), and implements idempotent `Ledger:close()`."
+        },
+        {
+          "id": "sql01-a2-returning-query-blob-binding-and-row-mapping",
+          "concept_ids": [
+            "titan-sqlite3:inv-4-exact-positional-binding-blob-utf8",
+            "titan-sqlite3:inv-5-execute-vs-query-row-snapshots",
+            "titan-sqlite3:inv-6-typed-factories-vs-row-fill",
+            "titan-sqlite3:binding-storage-transactions",
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "standard",
+          "check": "Uses `query` (not `execute`) for `INSERT ... RETURNING id`, binds exact positional args wrapping non-`nil` binary/empty `receipt_bytes` in `sqlite3.Blob(bytes)` distinct from `NULL`, maps `const`-field `LedgerEntry` with a typed factory (`row:get(i)`, `#row.columns`), and maps mutable `AccountSummary` with `row:fill(summary)`."
+        },
+        {
+          "id": "sql01-a3-transactions-savepoints-and-rollback-guard",
+          "concept_ids": [
+            "titan-sqlite3:binding-storage-transactions",
+            "titan-sqlite3:connections-statements-cursors-errors-cancellation"
+          ],
+          "critical": "standard",
+          "check": "Uses `set_autocommit(false)` + SQL `SAVEPOINT`/`ROLLBACK TO SAVEPOINT`/`RELEASE SAVEPOINT` + `commit()` with outer `catch` rollback guard (`if not db:get_autocommit() then db:rollback() end; raise`), leaving balances unchanged on `CHECK` constraint or zero-row failures while persisting the outer audit entry."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-sqlite3` (`inv-1..inv-6`, `binding-storage-transactions`, `connections-statements-cursors-errors-cancellation`), `titan-programmer` (`inv-1`, `inv-2`). Score `idiom_score = 3` only if `./oracle_sqlite_ledger` exits `0` and all three `sql01-a1..a3` checks hold; cap at `<= 1` if `execute` is called on `RETURNING`, `Row:fill` is misused on `const`-field `LedgerEntry`, `Blob(\"\")` is collapsed to `NULL`, cursors/statements leak before `db:close()` or tx changes, or the outer `catch` rollback guard is missing."
+    },
+    {
+      "id": "sqlite3-02-cancellation-and-cross-thread-handoff",
+      "baseline_anchor": false,
+      "baseline_specialist_available": false,
+      "baseline_expected_skills": ["titan-programmer", "titan-async", "titan-thread"],
+      "candidate_expected_skills": ["titan-programmer", "titan-sqlite3", "titan-async", "titan-thread"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-reflect"],
+      "forbidden_skills": ["titan-networking", "titan-websocket"],
+      "prompt": "Implement a SQLite contention, Task-cancellation, and cross-thread connection handoff library in `sqlite_handoff.titan` (logical module `sqlite_handoff`) using Titan's standard `sqlite3`, `async`, `timer`, `thread`, and `transfer` modules.\n\nExport the following public types and functions:\n- `record HandoffSummary` with fields `const committed_count: integer`, `const rows: const {string}`, `const source_rejected_after_detach: boolean`, and `const worker_saw_open_tx: boolean`.\n- `function probe_busy_lock(db_path: string, timeout_ms: integer, release_after_ms: integer?): (boolean, integer?)`:\n  - Opens two independent connections (`db1`, `db2`) to `db_path` (with LIFO `defer :close()`), ensures `CREATE TABLE IF NOT EXISTS lock_kv(k TEXT PRIMARY KEY, v TEXT)` exists, and configures `PRAGMA busy_timeout = <timeout_ms>` on `db2` (noting that `PRAGMA busy_timeout = N` returns a row and must therefore use `query` with a closed cursor).\n  - Starts an immediate write transaction (`BEGIN IMMEDIATE`) on `db1` and writes a row to hold the file write lock.\n  - When `release_after_ms ~= nil`, starts a sibling async Task that sleeps `release_after_ms` ms via `timer.sleep` and rolls back `db1` (if not already in autocommit).\n  - Attempts `INSERT OR REPLACE INTO lock_kv VALUES ('contender', '2')` on `db2`. If `sqlite3.Error` is raised (no manual retry loop), cleans up `db1`/sibling task and returns `(true, err.code)`; if it succeeds, joins any sibling task, ensures `db1` is clean, and returns `(false, nil)`.\n- `function verify_cancellation_cleanup(): (boolean, boolean)`:\n  - Returns `(pending_ok, inflight_ok)` verifying both SQLite cancellation paths:\n    1. `pending_ok`: spawns a Task that opens `:memory:` DB with `defer db:close()`, cancels it with reason `\"pre-cancelled\"` before submitting new query work, joins the Task, and confirms the Task ended cancelled with reason `\"pre-cancelled\"` and clean close.\n    2. `inflight_ok`: spawns a Task that opens `:memory:` DB (`defer db:close()`), prepares a non-trivial query (`defer stmt:close()`), repeatedly runs it in a bounded loop while the caller sleeps briefly and cancels the Task with reason `\"inflight-cancel\"`, joins the Task via `async.join`, and confirms cancellation arrived with reason `\"inflight-cancel\"` and all `defer` closes completed cleanly.\n- `function handoff_in_memory_to_worker(seed_items: const? {string}, extra_item: string): HandoffSummary`:\n  - In the caller's async Task: opens a private `\":memory:\"` connection (`defer db:close()`), creates `items(seq INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)`, starts an uncommitted transaction (`db:set_autocommit(false)`), inserts every string from `seed_items`, and closes **all** statements and cursors before detaching.\n  - Transfers the idle connection (with its `:memory:` database and open transaction intact) via `transfer.TransferValue.from_value(db)` to an OS worker thread spawned with `thread.spawn_one` (implementing explicit failed-delivery adopt-and-close recovery if spawning fails).\n  - Verifies on the caller side that the detached source connection now behaves as closed and rejects `db:prepare(\"SELECT 1\")` with `sqlite3.Error` (`source_rejected_after_detach = true`), while `defer db:close()` remains an idempotent no-op.\n  - Inside the OS worker thread: adopts the `sqlite3.Connection` (`defer wdb:close()`), checks `not wdb:get_autocommit()` (`worker_saw_open_tx`), inserts `extra_item`, calls `wdb:commit()`, reads all `label` values ordered by `seq` (wrapping the Array inside a public `record` to cross the thread boundary cleanly), closes all statements/cursors, and returns the result.\n  - Retires the worker OS thread via `worker:join()` (or `async.join(worker:task())`) before returning `HandoffSummary`.\n- `function verify_failed_handoff_recovery(): (boolean, boolean)`:\n  - Returns `(open_stmt_rejected, failed_send_recovered)`:\n    1. Opens `:memory:` DB (`defer db:close()`), prepares an open statement, verifies `transfer.TransferValue.from_value(db)` raises `sqlite3.Error` while the statement is open (`open_stmt_rejected = true`) and leaves `db` usable once the statement closes.\n    2. Closes the statement, detaches `local carrier = transfer.TransferValue.from_value(db)`, creates a `thread.channel<|transfer.TransferValue|>(1)`, closes the receiver, attempts `tx:send(carrier)` so delivery fails, and in `catch` recovers the detached connection locally via `carrier:to_value()` + `:close()` (`failed_send_recovered = true`).",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_sqlite_handoff.titan"
+      ],
+      "expected_outputs": [
+        "sqlite_handoff.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_sqlite_handoff.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_sqlite_handoff oracle_sqlite_handoff",
+          "./oracle_sqlite_handoff"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "sql02-a1-busy-timeout-and-cancellation",
+          "concept_ids": [
+            "titan-sqlite3:connections-statements-cursors-errors-cancellation",
+            "titan-sqlite3:inv-5-execute-vs-query-row-snapshots",
+            "titan-async:inv-2-explicit-loser-cancel-teardown"
+          ],
+          "critical": "standard",
+          "check": "Uses `query` (with closed cursor) for `PRAGMA busy_timeout`, surfaces `SQLITE_BUSY` directly via `sqlite3.Error` without hidden retries, and handles both pending and in-flight Task cancellation cleanly while LIFO `defer :close()` completes during unwind."
+        },
+        {
+          "id": "sql02-a2-idle-connection-thread-handoff",
+          "concept_ids": [
+            "titan-sqlite3:inv-7-manual-handoff-connection-transfer",
+            "titan-sqlite3:transferring-connections",
+            "titan-thread:inv-2-transfervalue-closure-snapshots",
+            "titan-thread:inv-6-os-retirement-group-vs-thread"
+          ],
+          "critical": "standard",
+          "check": "Closes all cursors and statements before detaching `:memory:` `Connection`, transfers it with its open uncommitted transaction into a `thread.spawn_one` worker (wrapping returned Arrays in a public `record`), confirms detached source rejects new `prepare` while `close()` stays a no-op, and retires the OS thread via `join()`/`task()`."
+        },
+        {
+          "id": "sql02-a3-failed-delivery-adopt-and-close-recovery",
+          "concept_ids": [
+            "titan-sqlite3:inv-7-manual-handoff-connection-transfer",
+            "titan-sqlite3:transferring-connections",
+            "titan-thread:inv-4-packet-attachments-vs-manual-handoff"
+          ],
+          "critical": "standard",
+          "check": "Confirms open-statement detach raises `sqlite3.Error` leaving connection usable, and explicitly recovers failed `thread.channel` delivery of a detached `Connection` carrier by adopting once (`carrier:to_value()`) and closing locally instead of abandoning or double-adopting."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-sqlite3` (`inv-5`, `inv-7`, `connections-statements-cursors-errors-cancellation`, `transferring-connections`), `titan-async` (`inv-2`), `titan-thread` (`inv-2`, `inv-4`, `inv-6`). Score `idiom_score = 3` only if `./oracle_sqlite_handoff` exits `0` and all three `sql02-a1..a3` checks hold; cap at `<= 1` if `execute` is called on `PRAGMA busy_timeout`, statements remain open across detach, failed delivery leaks or double-adopts the detached `Connection`, top-level Arrays cross `thread.spawn`, or the worker `Thread` is left unjoined."
+    }
+  ]
+}

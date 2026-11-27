@@ -1,0 +1,138 @@
+local sc = import "scanner_peg"
+
+local function must_raise(label: string, fn: function())
+  local ok = true
+  do
+    fn()
+  catch
+    ok = false
+  end
+  if ok then
+    raise ("expected error for: " .. label)
+  end
+end
+
+function main(_args: {string}): integer
+  -- 1. Dynamic nested block combinators + empty-delimiter guard (prevents nullable loops).
+  must_raise("empty open_delim", function()
+    local _ = sc.build_nested_block("", ">>")
+  end)
+  must_raise("empty close_delim", function()
+    local _ = sc.build_nested_block("<<", "")
+  end)
+
+  local pat = sc.build_nested_block("<<", ">>")
+
+  -- Nested blocks with LF and embedded NUL bytes (byte-oriented matching).
+  local nested = "<<a<<b\nc>>d>>"
+  local m_nested? = sc.match_block_anchored(pat, nested, 1)
+  if m_nested ~= nested then
+    raise "failed to match nested multiline block"
+  end
+
+  local bin_block = "<<" .. "hi\0\1bye" .. ">>"
+  local m_bin? = sc.match_block_anchored(pat, bin_block, 1)
+  if m_bin ~= bin_block then
+    raise "failed to match binary NUL-bearing block"
+  end
+
+  -- 2. Anchored Pattern:match vs unanchored searching peg.match + init == 0 normalization.
+  local hay = "prefix <<ok>> suffix"
+  local anch_fail? = sc.match_block_anchored(pat, hay, 1)
+  if anch_fail ~= nil then
+    raise "anchored match at init=1 must NOT scan forward past 'prefix '"
+  end
+
+  local anch_ok? = sc.match_block_anchored(pat, hay, 8)
+  if anch_ok ~= "<<ok>>" then
+    raise "anchored match at init=8 should match <<ok>>"
+  end
+
+  local srch? = sc.search_block(pat, hay, 1)
+  if srch == nil or srch.first ~= 8 or srch.last ~= 13 or srch.value ~= "<<ok>>" then
+    raise "search_block failed to find <<ok>> at 8..13"
+  end
+
+  -- init == 0 normalizes to #subject + 1 (after last byte), unlike regex where 0 clamps to 1.
+  local anch_zero? = sc.match_block_anchored(pat, "<<ok>>", 0)
+  if anch_zero ~= nil then
+    raise "init=0 must start after last byte, not byte 1 (anchored)"
+  end
+  local srch_zero? = sc.search_block(pat, "<<ok>>", 0)
+  if srch_zero ~= nil then
+    raise "init=0 must start after last byte, not byte 1 (search)"
+  end
+
+  -- Negative init (-6 on "<<ok>>" starts at byte 1).
+  local anch_neg? = sc.match_block_anchored(pat, "<<ok>>", -6)
+  if anch_neg ~= "<<ok>>" then
+    raise "negative init -6 should start at byte 1"
+  end
+
+  -- 3. Matching backreference (=tag) with possessive scan across LF and mismatched close tags.
+  local frame_in = "noise [hdr]one[/wrong]\ntwo[/hdr] tail"
+  local frame? = sc.search_tagged_frame(frame_in, 1)
+  if frame == nil or frame.first ~= 7 or frame.last ~= 32 or
+     frame.tag ~= "hdr" or frame.body ~= "one[/wrong]\ntwo" then
+    raise "search_tagged_frame mismatch on nested mismatched closing tag"
+  end
+
+  local bad_frame? = sc.search_tagged_frame("[open]body[/other]", 1)
+  if bad_frame ~= nil then
+    raise "mismatched closing tag must not match"
+  end
+
+  -- 4. Fixed-width look-behind (peg.behind) + 255-byte limit validation.
+  local hit? = sc.find_after_prefix("x=1 key=alpha_9 tail", "key=", 1)
+  if hit == nil or hit.first ~= 9 or hit.last ~= 15 or hit.value ~= "alpha_9" then
+    raise "find_after_prefix mismatch (behind must not consume prefix)"
+  end
+  local miss? = sc.find_after_prefix("other=alpha_9", "key=", 1)
+  if miss ~= nil then
+    raise "find_after_prefix should return nil when prefix absent"
+  end
+
+  must_raise("empty prefix for behind", function()
+    local _ = sc.find_after_prefix("abc", "", 1)
+  end)
+  local long_prefix = ""
+  for _ = 1, 256 do long_prefix = long_prefix .. "a" end
+  must_raise("256-byte prefix exceeds 255B behind limit", function()
+    local _ = sc.find_after_prefix(long_prefix .. "x", long_prefix, 1)
+  end)
+
+  -- 5. UTF-8 codepoint range counting via peg.utf_range.
+  -- Subject: "a" (0x61), "é" (0xE9), "€" (0x20AC), "😀" (0x1F600), "b" (0x62)
+  local utf_subj = "a\xc3\xa9\xe2\x82\xac\xf0\x9f\x98\x80b"
+  if sc.count_utf8_codepoints_in_range(utf_subj, 0x61, 0x7A) ~= 2 then
+    raise "ASCII range utf_range count mismatch"
+  end
+  if sc.count_utf8_codepoints_in_range(utf_subj, 0x80, 0xFF) ~= 1 then
+    raise "Latin-1 Supplement utf_range count mismatch"
+  end
+  if sc.count_utf8_codepoints_in_range(utf_subj, 0x2000, 0x2FFF) ~= 1 then
+    raise "BMP symbol utf_range count mismatch"
+  end
+  if sc.count_utf8_codepoints_in_range(utf_subj, 0x1F600, 0x1F64F) ~= 1 then
+    raise "Supplementary emoji utf_range count mismatch"
+  end
+
+  -- 6. Extra match arguments via peg.argument(1).
+  local tagged = sc.tag_tokens_with_arg("alpha 123 beta!", "id")
+  if #tagged ~= 2 or tagged[1] ~= "id:alpha" or tagged[2] ~= "id:beta" then
+    raise "tag_tokens_with_arg mismatch"
+  end
+
+  -- 7. peg.gsub global whole-match replacement.
+  local redacted = sc.redact_digits_peg("id=42 port=8080 ok")
+  if redacted ~= "id=#2 port=#4 ok" then
+    raise ("redact_digits_peg mismatch: " .. redacted)
+  end
+
+  -- 8. Private LPegLabel engine version & set_max_stack.
+  if sc.engine_info() ~= "LPegLabel 1.6.1" then
+    raise ("unexpected engine_info: " .. sc.engine_info())
+  end
+
+  return 0
+end

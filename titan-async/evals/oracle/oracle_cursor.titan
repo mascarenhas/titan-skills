@@ -1,0 +1,72 @@
+local cursor = import "cursor"
+local strings = import "string"
+
+local function fail(msg: string)
+  raise "oracle_cursor: " .. msg
+end
+
+function main(args: {string}): integer
+  -- 1. Nested tagged yield skipping intermediate coroutine ("suspended" / "stacked" / "dead")
+  local tr = cursor.run_nested_cursor({ "a", "b", "c" })
+  if tr.first_yield ~= "a" then fail("first_yield=" .. tr.first_yield) end
+  if tr.outer_mid_status ~= "suspended" then fail("outer_mid_status=" .. tr.outer_mid_status) end
+  if tr.inner_mid_status ~= "stacked" then fail("inner_mid_status=" .. tr.inner_mid_status) end
+  if not tr.saw_running_self then fail("inner did not observe coroutine.running() == inner") end
+  if not tr.yieldable_outer or tr.yieldable_other then fail("is_yieldable flags wrong") end
+  if #tr.all_outputs ~= 3 or tr.all_outputs[1] ~= "a" or tr.all_outputs[2] ~= "b" or tr.all_outputs[3] ~= "c" then
+    fail("all_outputs mismatch")
+  end
+  if tr.final_result ~= "outer(inner:a=ok,b=ok,c=ok)" then
+    fail("final_result=" .. tr.final_result)
+  end
+  if tr.outer_end_status ~= "dead" or tr.inner_end_status ~= "dead" then
+    fail("end statuses not dead")
+  end
+
+  -- 2. Coroutine:error(err, tag) triggers defer and catch recovery
+  local er = cursor.run_error_injection("abort-now")
+  if er.first_yield ~= "armed" or er.returned ~= "caught:abort-now"
+     or not er.defer_ran or er.final_status ~= "dead" then
+    fail("error injection mismatch: ret=" .. er.returned .. " st=" .. er.final_status)
+  end
+
+  -- 3. Non-raising Coroutine:transfer distinguishing false, nil, yield vs return, and uncaught error
+  local steps = cursor.run_transfer_sequence()
+  if #steps ~= 5 then fail("transfer step count=" .. #steps) end
+
+  -- Step 1: yielded false
+  if steps[1].failed or steps[1].payload_kind ~= "false" or steps[1].payload_text ~= "false"
+     or steps[1].has_trace or steps[1].status_after ~= "suspended" then
+    fail("transfer step 1 (false yield) mismatch")
+  end
+  -- Step 2: yielded nil
+  if steps[2].failed or steps[2].payload_kind ~= "nil" or steps[2].payload_text ~= "nil"
+     or steps[2].has_trace or steps[2].status_after ~= "suspended" then
+    fail("transfer step 2 (nil yield) mismatch")
+  end
+  -- Step 3: raised "boom" (Titan string raises include source location prefix)
+  if not steps[3].failed or steps[3].payload_kind ~= "string"
+     or strings.find(steps[3].payload_text, "boom", 1, true) == nil
+     or not steps[3].has_trace or steps[3].status_after ~= "dead" then
+    fail("transfer step 3 (uncaught boom) mismatch: text=" .. steps[3].payload_text)
+  end
+  -- Step 4: yielded "mid"
+  if steps[4].failed or steps[4].payload_kind ~= "string" or steps[4].payload_text ~= "mid"
+     or steps[4].has_trace or steps[4].status_after ~= "suspended" then
+    fail("transfer step 4 (mid yield) mismatch")
+  end
+  -- Step 5: returned "done"
+  if steps[5].failed or steps[5].payload_kind ~= "string" or steps[5].payload_text ~= "done"
+     or steps[5].has_trace or steps[5].status_after ~= "dead" then
+    fail("transfer step 5 (done return) mismatch")
+  end
+
+  -- 4. Abandoned coroutine unwind runs defer and is uncatchable by catch
+  local defer_ran, catch_ran = cursor.verify_abandoned_unwind()
+  if not defer_ran or catch_ran then
+    fail("abandoned unwind mismatch: defer=" .. (defer_ran and "true" or "false")
+         .. " catch=" .. (catch_ran and "true" or "false"))
+  end
+
+  return 0
+end

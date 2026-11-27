@@ -1,0 +1,173 @@
+{
+  "skill_name": "titan-tester",
+  "evals": [
+    {
+      "id": "tester-01-native-subtests-cleanup-and-async",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-tester"],
+      "candidate_expected_skills": ["titan-programmer", "titan-tester"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-async"],
+      "forbidden_skills": ["titan-package", "titan-application"],
+      "prompt": "Using the provided bounded queue module `queue_under_test.titan` (treat it as read-only and do NOT modify it), author a native and browser-portable Titan test suite in `queue_test.titan` (logical module `queue_test`).\n\nRequirements:\n1. Use public top-level `test_*(context: test.Context)` cases only (keep all helper functions `local`; do not define `main`, and fail strictly via `test.assert` or `raise`, never by returning `false`).\n2. `test_whitebox_and_errors(context: test.Context)`:\n   - White-box import `queue_under_test.titan` directly so you can test its module-private helper `normalize_capacity` without changing its visibility (`normalize_capacity(-5) == 1`, `normalize_capacity(100) == 64`, `normalize_capacity(8) == 8`).\n   - Verify that a module-level `do ... end` initializer observes `test.testing() == false`, while inside the test case `test.testing() == true`.\n   - Verify that `q:enqueue(\"\")` raises `\"empty item\"` using an isolated `do ... catch` helper that asserts the error was caught and checks the error message without swallowing failed assertions.\n3. `test_subtests_and_cleanup_order(context: test.Context)`:\n   - Open a shared `JobQueue` (`open(3)`) and a shared trace array `{string}`.\n   - Register a block-local `defer` inside the parent body (recording `\"defer\"`) AND register two `context:cleanup(...)` callbacks that prove LIFO execution strictly AFTER all descendant subtests finish: the second registered cleanup verifies the queue is still open and closes it (recording `\"cleanup2\"`), and the first registered cleanup asserts `q:is_closed()` and that `\"cleanup2\"` already ran (recording `\"cleanup1\"`). Never call `test.skip` inside cleanup.\n   - Register at least three `context:run(...)` subtests (`\"fifo_order\"`, `\"capacity_full\"`, `\"idempotent_close_check\"`) that verify: `defer` already ran before subtests began, `not q:is_closed()` holds during children, `child:name()` matches `\"queue_test.test_subtests_and_cleanup_order.<subname>\"`, FIFO ordering (`dequeue` returns items in exact enqueue order), capacity bound (4th enqueue on capacity-3 queue returns `false` and `len()` stays accurate), and idempotent `:close()` on a separate local queue.\n4. `test_async_drain(context: test.Context)`:\n   - Suspend directly under the default async test bootstrap (NEVER call `async.loop()`).\n   - Test `drain_async({\"alpha\", \"beta\", \"gamma\"}, 2)` returns all three items in exact FIFO order and `drain_async({}, -1)` raises `\"negative delay\"`.\n   - Register an async `context:cleanup` callback (e.g., yielding/sleeping briefly and closing a test channel) and an async `context:run(\"concurrent_producer\", ...)` subtest synchronizing deterministically via an `async.channel` and `async.join` (no sleep-only races).\n5. `test_skip_mechanism(context: test.Context)`:\n   - Register a `context:run(\"conditional_skip\", ...)` subtest that calls `test.skip(\"intentional skip check\")` (without catching/swallowing `test.Skip`) alongside a passing sibling `context:run(\"sibling_runs\", ...)` so sibling isolation and clean zero exit status are verified.",
+      "files": [
+        "evals/files/queue_under_test.titan"
+      ],
+      "oracle_files": [
+        "evals/oracle/mutant_queue_fifo.titan",
+        "evals/oracle/mutant_queue_async.titan",
+        "evals/oracle/oracle_tester01.py"
+      ],
+      "expected_outputs": [
+        "queue_test.titan"
+      ],
+      "verify": {
+        "target": "both",
+        "network": "none",
+        "timeout_sec": 90,
+        "commands": [
+          "python3 /verify/oracle/oracle_tester01.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "test01-a1-discovery-whitebox-and-errors",
+          "concept_ids": [
+            "titan-tester:inv-1-discovery-signature-and-naming",
+            "titan-tester:inv-2-build-and-execute",
+            "titan-tester:inv-3-source-first-vs-local-visibility",
+            "titan-tester:inv-5-assertions-catch-and-runner-state"
+          ],
+          "critical": "standard",
+          "check": "`queue_test.titan` exports only public `test_*(context: test.Context)` functions (helpers `local`, no `main`, fails only via `test.assert`/`raise`), white-box imports `queue_under_test.titan` to test `local` `normalize_capacity`, verifies `test.testing()` false in module init vs true in test, isolates `enqueue(\"\")` in `do ... catch`, and kills both seeded FIFO and async mutants."
+        },
+        {
+          "id": "test01-a2-subtests-defer-vs-lifo-cleanup",
+          "concept_ids": [
+            "titan-tester:inv-4-deferred-subtests-and-cleanup",
+            "titan-tester:choosing-test-structure-lifetime-and-build-mode",
+            "titan-tester:api-subtests-errors-and-cleanup"
+          ],
+          "critical": "standard",
+          "check": "Demonstrates `defer` running before deferred `context:run` subtests while two `context:cleanup` callbacks execute in LIFO order strictly after all descendants complete (without calling `test.skip` in cleanup), and exercises sibling-isolated `test.skip` without swallowing `test.Skip`."
+        },
+        {
+          "id": "test01-a3-async-bootstrap-and-browser-portability",
+          "concept_ids": [
+            "titan-tester:inv-6-async-bootstrap-vs-no-uv-bootstrap",
+            "titan-tester:asynchronous-tests-native-and-browser"
+          ],
+          "critical": "standard",
+          "check": "`test_async_drain` suspends directly under automatic async bootstrap without calling `async.loop()`, uses channel/join synchronization rather than sleep races, and passes both natively and under browser `--test` execution (`titan-browser-run`) with identical ran counts."
+        }
+      ],
+      "judge_rubric": "Score `idiom_score = 3` only if `oracle_tester01.py` exits `0` (native run, filtered run, browser `--test` run, and both mutant-kill checks pass) and `test01-a1..a3` all hold cleanly. Cap at `<= 1` if `queue_test.titan` modifies `queue_under_test.titan`, calls `async.loop()`, closes the shared queue in `defer` instead of `context:cleanup`, uses `return false` to signal failure, swallows `test.Skip`/`test.assert` in a broad `catch`, or fails to kill either mutant."
+    },
+    {
+      "id": "tester-02-test-dir-filtering-and-coverage",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-tester"],
+      "candidate_expected_skills": ["titan-programmer", "titan-tester"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-application", "titan-package"],
+      "prompt": "Create a small multi-folder Titan library and test harness with automatic `--test-dir` discovery, `--test-exclude`, Lua-pattern filtering, and native `--coverage` reporting.\n\nCreate these files:\n1. Production library modules under `src/mathx/`:\n   - `src/mathx/stats.titan` (logical module `mathx.stats`): exports `clamp(v: integer, lo: integer, hi: integer): integer`, `sum_int(values: {integer}): integer`, and `mean_int(values: {integer}): integer` (raises `\"empty values\"` when `#values == 0`, otherwise returns `sum_int(values) // #values`).\n   - `src/mathx/fmt.titan` (logical module `mathx.fmt`): imports `mathx.stats`, exports `format_band(v: integer, lo: integer, hi: integer): string` returning `\"low\"` when `v < lo`, `\"high\"` when `v > hi`, and `\"ok\"` otherwise.\n2. Test modules under `tests/` (discovered using `--tree \"src;tests\" --test-dir tests` so discovered modules have top-level logical names `stats_test`, `fmt_test`, and `slow_spec`):\n   - `tests/stats_test.titan`: public `test_clamp(context: test.Context)` and `test_mean(context: test.Context)` exercising all branches of `mathx.stats` (including the empty-array error check).\n   - `tests/fmt_test.titan`: public `test_bands(context: test.Context)` registering three `context:run` subtests named `\"low\"`, `\"ok\"`, and `\"high\"` covering all three branches of `format_band`.\n   - `tests/slow_spec.titan`: public `test_must_be_excluded(context: test.Context)` that unconditionally calls `test.assert(false, \"slow_spec must be excluded\")` so any build that forgets `--test-exclude slow_spec` fails loudly.\n3. POSIX shell runner `run_tests.sh`:\n   - Default invocation (`sh run_tests.sh`): compiles incrementally with `titanc -q --incremental --test --tree \"src;tests\" --test-dir tests --test-exclude slow_spec -o build --exe build/suite` and executes `./build/suite`. When the environment variable `TITAN_FILTER` is non-empty, forward it explicitly to the standalone test binary via `--filter=\"$TITAN_FILTER\"` (do NOT expect the standalone binary to read `TITAN_FILTER` automatically).\n   - Coverage invocation (`sh run_tests.sh --coverage`): compiles serially into a separate `-o build-cov` directory using `titanc -q --test --coverage --tree \"src;tests\" --test-dir tests --test-exclude slow_spec -o build-cov --exe build-cov/suite`, runs `./build-cov/suite` serially so `build-cov/.coverage/report/coverage.gcov` is produced over production modules only (excluding test modules), and preserves the `.coverage/` artifacts.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_tester02.py"
+      ],
+      "expected_outputs": [
+        "src/mathx/stats.titan",
+        "src/mathx/fmt.titan",
+        "tests/stats_test.titan",
+        "tests/fmt_test.titan",
+        "tests/slow_spec.titan",
+        "run_tests.sh"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 90,
+        "commands": [
+          "python3 /verify/oracle/oracle_tester02.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "test02-a1-test-dir-prefix-and-exclude",
+          "concept_ids": [
+            "titan-tester:inv-1-discovery-signature-and-naming",
+            "titan-tester:inv-2-build-and-execute",
+            "titan-tester:discovery-filtering-browser-runs-and-coverage"
+          ],
+          "critical": "standard",
+          "check": "`run_tests.sh` discovers `tests/` via `--tree \"src;tests\" --test-dir tests` (yielding top-level `stats_test` / `fmt_test`), excludes the actively failing `tests/slow_spec.titan` via `--test-exclude slow_spec`, and runs the compiled suite with non-zero reported cases."
+        },
+        {
+          "id": "test02-a2-standalone-filter-and-native-coverage",
+          "concept_ids": [
+            "titan-tester:inv-7-browser-test-and-native-coverage",
+            "titan-tester:discovery-filtering-browser-runs-and-coverage"
+          ],
+          "critical": "standard",
+          "check": "`run_tests.sh` maps non-empty `TITAN_FILTER` to standalone `--filter=...` (supporting escaped Lua-pattern parent+subtest matching like `^fmt_test[.]test_bands`), and `--coverage` runs serially in `build-cov` producing `build-cov/.coverage/report/coverage.gcov` instrumenting `src/mathx/stats.titan` and `src/mathx/fmt.titan` (>= 80% lines hit) with zero test modules instrumented."
+        }
+      ],
+      "judge_rubric": "Score `idiom_score = 3` only if `oracle_tester02.py` exits `0` across unfiltered, filtered (`^fmt_test[.]test_bands`), slow_spec-exclusion, and `--coverage` gcov checks, and both assertions hold. Cap at `<= 1` if `run_tests.sh` fails to pass `--filter` for `TITAN_FILTER`, mixes coverage into `build` without separating `-o build-cov`, omits `--test-dir`/`--test-exclude`, or deletes/fails to generate `build-cov/.coverage/report/coverage.gcov`."
+    },
+    {
+      "id": "tester-03-ref-titan-repo-validation-suites",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-tester"],
+      "candidate_expected_skills": ["titan-tester"],
+      "candidate_expected_references": ["titan-tester/references/titan-repo-suites.md"],
+      "optional_skills": ["titan-programmer"],
+      "forbidden_skills": ["titan-completion", "titan-language-server"],
+      "prompt": "A contributor opened a change against the Titan compiler and standard-library repository (`contributor-diff.patch`, provided read-only in the workspace). It modifies `titan-compiler/checker.lua`, adds `spec/checker/method_call_spec.lua`, updates `titan/url.titan`, and updates `titan/os.browser.titan`.\n\nAuthor TWO repository validation deliverables for this change:\n\n1. `validation-plan.json` containing the exact JSON structure below, populated according to the Titan compiler/stdlib repository's test-layer, environment, native-aggregate, and CI-gate rules:\n   - `regression_layers`: object with four keys:\n     - `compiler_checker`: `{ \"owning_layer\": string, \"helper_or_contract\": string, \"in_luacov\": boolean }`\n     - `stdlib_public_api`: `{ \"owning_layer\": string, \"manifest_var\": string, \"in_luacov\": boolean }`\n     - `browser_stdlib_shim`: `{ \"manifest_var\": string, \"variant_contract\": string }`\n     - `new_compiler_spec_registration`: `{ \"timing_file\": string, \"format_or_note\": string }`\n   - `affected_linux_ci_jobs`: array of exact job names from `ci.yml` covering compiler, native coverage, browser stdlib, and browser Playwright lanes.\n   - `clean_env_unset`: array of ALL environment variable names that must be unset before canonical full repository test runs.\n   - `sdk_policy`: `{ \"lua_version\": string, \"repo_test_profile\": string, \"default_profile\": string, \"rocks_tree_equals_prefix\": boolean, \"separate_profile_prefixes\": boolean, \"concurrent_build_isolation\": string }`.\n   - `native_aggregate_rules`: `{ \"uv_bootstrap_flag\": string, \"async_wrapper\": string, \"runtime_cleanup_helpers\": [string, ...], \"parallel_rejects_titan_filter\": boolean, \"timing_guarded_owners\": [string, ...], \"skip_prefixes\": { \"platform\": \"allowed\"|\"fails_validation\", \"capability\": \"allowed\"|\"fails_validation\", \"unsupported\": \"allowed\"|\"fails_validation\", \"portability\": \"allowed\"|\"fails_validation\" } }`.\n   - `browser_and_platform_gates`: `{ \"require_toolchain_env\": string, \"require_deployment_env\": string, \"required_tool_envs\": [string, ...], \"macos_manual_full_requires_maintainer_approval\": boolean, \"windows_makefile\": string, \"windows_local_ntfs_required\": boolean }`.\n\n2. `validation-commands.sh` (POSIX `/bin/sh` script supporting two inspection flags without modifying the host repo):\n   - `--print-clean-env`: actually `unset`s every canonical dirty environment variable in the running shell, then invokes `env` so a caller running under poisoned env vars can verify all of them are cleared.\n   - `--emit-commands`: prints the exact sequence of repository validation commands from the repo root for this diff:\n     1. Fast checkout compiler spec check on `spec/checker/method_call_spec.lua` without reinstalling the rock (using `$PREFIX`, disabling the probe cache, and `--run=checkout`).\n     2. Installed compiler Busted filtered run for `method_call`.\n     3. Serial filtered reuse of the native stdlib aggregate for the `url` owner with an escaped Lua pattern (respecting that the parallel stdlib target rejects `TITAN_FILTER`).\n     4. Fail-closed browser stdlib suite run requiring the real browser toolchain.\n     5. Serial native coverage lane (without parallel `-j`).\n     6. Canonical full reinstall and mixed suite run.",
+      "files": [
+        "evals/files/contributor-diff.patch"
+      ],
+      "oracle_files": [
+        "evals/oracle/oracle_tester03.py"
+      ],
+      "expected_outputs": [
+        "validation-plan.json",
+        "validation-commands.sh"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "python3 /verify/oracle/oracle_tester03.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "test03-a1-layer-placement-and-clean-env",
+          "concept_ids": [
+            "titan-tester:inv-8-titan-compiler-repo-suites-reference-gate",
+            "titan-tester:ref-regression-layer-placement",
+            "titan-tester:ref-isolated-sdks-profiles-and-clean-env"
+          ],
+          "critical": "standard",
+          "check": "Correctly places `checker.lua` in `spec/checker/` (`helpers.run_checker`, in LuaCov), `url.titan` in `spec/stdlib/titan/` (`TITAN_STDLIB_TEST_ROOTS`, outside LuaCov), `os.browser.titan` in `TITAN_STDLIB_BROWSER_TEST_ROOTS` (`.browser.titan` contributors), and new specs in `spec/support/ci_compiler_test_groups.txt`; lists and actively unsets all 12 canonical env vars (`ROCKS_TREE`, `TITAN_ROOT`, `TITANC`, `TITAN_PATH_0_6`, `TITAN_PATH`, `TITAN_EXTRA_CPPFLAGS`, `TITAN_TARGET`, `TITAN_NO_LINE_DIRECTIVES`, `LUA_PATH`, `LUA_CPATH`, `LUA_PATH_5_5`, `LUA_CPATH_5_5`) and records Lua `5.5.1`, `validation` vs `production` profiles, and worktree isolation."
+        },
+        {
+          "id": "test03-a2-make-busted-aggregate-and-ci-lanes",
+          "concept_ids": [
+            "titan-tester:ref-repository-make-and-busted-commands",
+            "titan-tester:ref-native-aggregate-conventions-fixtures-busted",
+            "titan-tester:ref-browser-validation-windows-and-ci-lanes"
+          ],
+          "critical": "standard",
+          "check": "Records `--no-uv-bootstrap`, `support.runtime.run`, `support.runtime.cleanup`/`support.async.cleanup_task`, all 6 `timing_guarded_owners`, `portability` failing validation while `platform`/`capability`/`unsupported` pass, `TITAN_REQUIRE_BROWSER_TOOLCHAIN`/`DEPLOYMENT`, macOS manual full approval, and Windows `Makefile.win`/NTFS; emits exact `busted --run=checkout` (`TITAN_PROBE_CACHE_DISABLE=1`), `make busted-test BUSTED_FILTER=...`, `make titan-stdlib-test-run TITAN_FILTER='^url[.]tests[.]'` (never parallel+filter), `TITAN_REQUIRE_BROWSER_TOOLCHAIN=1 make titan-stdlib-browser-test`, serial `make titan-native-coverage`, and `make test`."
+        }
+      ],
+      "judge_rubric": "Score `idiom_score = 3` only if `oracle_tester03.py` exits `0` (all schema fields, live poisoned-env clearing, and exact emitted commands verified) and both assertions hold. Cap at `<= 1` if any of the 12 clean-env variables are missed, `portability` is marked allowed, `TITAN_FILTER` is paired with `titan-stdlib-test-run-parallel`, `titan-native-coverage` is run with `-j`, `stdlib` tests are placed in Busted/LuaCov, or checkout Busted omits `TITAN_PROBE_CACHE_DISABLE=1` / `TITAN_ROOT`."
+    }
+  ]
+}

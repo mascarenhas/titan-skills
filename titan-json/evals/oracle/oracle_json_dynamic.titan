@@ -1,0 +1,86 @@
+local dyn = import "dyn_json"
+
+function main(_args: {string}): integer
+  -- 1. JSON "null" succeeds cleanly (nil result, nil Diagnostic)
+  local null_val, null_diag? = dyn.decode_with_limits("null", 8, 1024, 100)
+  if null_val ~= nil or null_diag ~= nil then return 1 end
+
+  -- 2. Default lossy null policy: trailing Array nulls dropped, interior holes kept, null Map entries dropped
+  local lossy_arr: {value} = dyn.decode_default_lossy("[1,null,null]")
+  if #lossy_arr ~= 1 or lossy_arr[1] ~= 1 then return 2 end
+
+  local hole_arr: {value} = dyn.decode_default_lossy("[1,null,3]")
+  if #hole_arr ~= 3 or hole_arr[1] ~= 1 or hole_arr[2] ~= nil or hole_arr[3] ~= 3 then return 3 end
+
+  local lossy_map: {string: value} = dyn.decode_default_lossy('{"x":null,"y":2}')
+  if lossy_map["x"] ~= nil or lossy_map["y"] ~= 2 then return 4 end
+
+  -- 3. Lossless NullToken sentinel preserves trailing Array nulls and null Map entries on roundtrip
+  local sent_arr_v, sent_arr_json = dyn.roundtrip_lossless_nulls("[1,null,null]")
+  local sent_arr: {value} = sent_arr_v
+  if #sent_arr ~= 3 or sent_arr[1] ~= 1 then return 5 end
+  if not dyn.is_null_sentinel(sent_arr[2]) or not dyn.is_null_sentinel(sent_arr[3]) then return 6 end
+  if sent_arr_json ~= "[1,null,null]" then return 7 end
+
+  local sent_map_v, sent_map_json = dyn.roundtrip_lossless_nulls('{"x":null}')
+  local sent_map: {string: value} = sent_map_v
+  if not dyn.is_null_sentinel(sent_map["x"]) then return 8 end
+  if sent_map_json ~= '{"x":null}' then return 9 end
+
+  -- 4. Exact dynamic number kind distinction (integer vs float)
+  if dyn.inspect_number_kind("42") ~= "integer" then return 10 end
+  if dyn.inspect_number_kind("9007199254740993") ~= "integer" then return 11 end
+  if dyn.inspect_number_kind("42.0") ~= "float" then return 12 end
+  if dyn.inspect_number_kind("1e3") ~= "float" then return 13 end
+  if dyn.inspect_number_kind("true") ~= "other" then return 14 end
+
+  -- 5. Strict RFC 8259 diagnostics (byte position, line, column, path)
+  local _, d_comma? = dyn.decode_with_limits('{"a":1,}', 8, 1024, 100)
+  if d_comma == nil then return 15 end
+  if d_comma.code == "" or d_comma.path ~= "$" then return 16 end
+  if d_comma.position ~= 8 or d_comma.line ~= 1 or d_comma.column ~= 8 then return 17 end
+
+  local _, d_ml? = dyn.decode_with_limits('{\n  "a": 1,\n  "b": ]}', 8, 1024, 100)
+  if d_ml == nil then return 18 end
+  if d_ml.line ~= 3 or d_ml.column ~= 8 or d_ml.position ~= 20 then return 19 end
+
+  local _, d_dup? = dyn.decode_with_limits('{"a":1,"\\u0061":2}', 8, 1024, 100)
+  if d_dup == nil then return 20 end
+  if d_dup.code ~= "duplicate_key" or d_dup.path ~= "$" or d_dup.position ~= 8 then return 21 end
+
+  local _, d_trail? = dyn.decode_with_limits("123 456", 8, 1024, 100)
+  if d_trail == nil or d_trail.code ~= "trailing_input" then return 22 end
+
+  -- NUL round-trip as \u0000
+  local nul_s: string = dyn.decode_default_lossy('"a\\u0000b"')
+  if nul_s ~= "a\x00b" then return 23 end
+  local enc_nul?, enc_nul_diag? = dyn.encode_checked("a\x00b", 8)
+  if enc_nul_diag ~= nil or enc_nul ~= '"a\\u0000b"' then return 24 end
+
+  -- Non-finite float nested encode error reports JSON path with nil position/line/column
+  local nan_v: float = 0.0 / 0.0
+  local bad_obj: {string: value} = { ["nested"] = ({ nan_v } as {value}) }
+  local enc_nan?, d_nan? = dyn.encode_checked(bad_obj, 8)
+  if enc_nan ~= nil or d_nan == nil then return 25 end
+  if d_nan.path ~= '$["nested"][1]' or d_nan.position ~= nil or d_nan.line ~= nil or d_nan.column ~= nil then
+    return 26
+  end
+
+  -- 6. Budgets (max_depth, max_bytes, max_nodes) and invalid_option pre-parse check
+  local ok_d2, d_ok2? = dyn.decode_with_limits("[[1]]", 2, 1024, 100)
+  if d_ok2 ~= nil or ok_d2 == nil then return 27 end
+
+  local _, d_depth? = dyn.decode_with_limits("[[[1]]]", 2, 1024, 100)
+  if d_depth == nil or d_depth.code ~= "limit_exceeded" then return 28 end
+
+  local _, d_bytes? = dyn.decode_with_limits("[1,2,3]", 8, 5, 100)
+  if d_bytes == nil or d_bytes.code ~= "limit_exceeded" then return 29 end
+
+  local _, d_nodes? = dyn.decode_with_limits("[1,2,3]", 8, 1024, 3)
+  if d_nodes == nil or d_nodes.code ~= "limit_exceeded" then return 30 end
+
+  local _, d_opt? = dyn.decode_with_limits("1", 0, 1024, 100)
+  if d_opt == nil or d_opt.code ~= "invalid_option" then return 31 end
+
+  return 0
+end

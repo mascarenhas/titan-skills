@@ -1,0 +1,5 @@
+local bad = import "rules.eval"
+
+function main(_args: {string}): integer
+  return 0
+end

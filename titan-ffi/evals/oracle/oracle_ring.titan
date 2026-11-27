@@ -1,0 +1,199 @@
+local gc = import "gc"
+local lua = import "lua"
+local ring = import "ring"
+foreign import "lua.h"
+
+local function must_raise(label: string, fn: function())
+  local ok = true
+  do
+    fn()
+  catch
+    ok = false
+  end
+  if ok then
+    raise ("expected error for: " .. label)
+  end
+end
+
+local function assert_top(label: string, expected: integer, actual: integer)
+  if actual ~= expected then
+    raise ("Lua stack imbalance after " .. label .. ": expected " .. expected .. ", got " .. actual)
+  end
+end
+
+local function populate_ring_stress(
+  r: ring.ValueRing,
+  make_tbl: function(integer): {string: value},
+  weak_watch: {value: value}
+)
+  for i = 1, 160 do
+    local t = make_tbl(i)
+    weak_watch[i] = t
+    r:push(t)
+    if (i % 7) == 0 then
+      gc.step(1)
+    end
+    if (i % 31) == 0 then
+      gc.collect()
+    end
+  end
+end
+
+local function verify_tail_and_drain(r: ring.ValueRing)
+  for idx = 1, 4 do
+    local expected_k = 156 + idx
+    local peeked, ok = r:peek(idx)
+    if not ok or peeked == nil then
+      raise ("missing surviving item at peek " .. idx)
+    end
+    local tbl = peeked as {string: value}
+    if tbl["tag"] ~= ("item-" .. expected_k) or tbl["n"] ~= expected_k then
+      raise ("corrupted surviving item at peek " .. idx)
+    end
+  end
+  for _ = 1, 4 do
+    local _, ok = r:pop()
+    if not ok then raise "expected pop during cleanup" end
+  end
+end
+
+function main(_args: {string}): integer
+  local base_top = ffi.lua_gettop(L) as integer
+  -- 1. Invalid capacity must raise and leave stack balanced.
+  must_raise("open(0)", function()
+    local _ = ring.open(0)
+  end)
+  assert_top("open(0) error", base_top, ffi.lua_gettop(L) as integer)
+
+  must_raise("open(-2)", function()
+    local _ = ring.open(-2)
+  end)
+  assert_top("open(-2) error", base_top, ffi.lua_gettop(L) as integer)
+
+  -- 2. FIFO + wrap-around overwrite + peek + pop + empty pop.
+  local r = ring.open(3)
+  assert_top("open(3)", base_top, ffi.lua_gettop(L) as integer)
+
+  if r:capacity() ~= 3 or r:len() ~= 0 then
+    raise "unexpected initial capacity/len"
+  end
+  assert_top("stats", base_top, ffi.lua_gettop(L) as integer)
+
+  local empty_v, empty_ok = r:pop()
+  if empty_ok or empty_v ~= nil then
+    raise "expected empty pop to return (nil, false)"
+  end
+  assert_top("empty pop", base_top, ffi.lua_gettop(L) as integer)
+
+  r:push("a")
+  r:push("b")
+  r:push("c")
+  r:push("d") -- overwrites "a"
+  r:push("e") -- overwrites "b"
+  assert_top("pushes", base_top, ffi.lua_gettop(L) as integer)
+
+  if r:len() ~= 3 then
+    raise ("expected len 3 after wrap, got " .. r:len())
+  end
+
+  local p1, ok1 = r:peek(1)
+  local p2, ok2 = r:peek(2)
+  local p3, ok3 = r:peek(3)
+  local p4, ok4 = r:peek(4)
+  assert_top("peeks", base_top, ffi.lua_gettop(L) as integer)
+  if not ok1 or p1 ~= "c" or not ok2 or p2 ~= "d" or not ok3 or p3 ~= "e" or ok4 then
+    raise "unexpected peek results after wrap-around"
+  end
+
+  local v1, b1 = r:pop()
+  local v2, b2 = r:pop()
+  local v3, b3 = r:pop()
+  local v4, b4 = r:pop()
+  assert_top("pops", base_top, ffi.lua_gettop(L) as integer)
+  if not b1 or v1 ~= "c" or not b2 or v2 ~= "d" or not b3 or v3 ~= "e" or b4 or v4 ~= nil then
+    raise "unexpected pop drain sequence"
+  end
+
+  -- 3. Lua 5.5 generational + incremental GC write-barrier & reclamation stress.
+  local old_ring = ring.open(4)
+  gc.collect()
+  gc.collect() -- Promote old_ring userdata into old generation!
+
+  local make_tbl_raw = lua.load("return function(k) return { tag = 'item-' .. tostring(k), n = k } end", "=mk")()
+  local make_tbl: function(integer): {string: value} = make_tbl_raw
+  local weak_watch: {value: value} = {}
+  gc.weak(weak_watch)
+
+  populate_ring_stress(old_ring, make_tbl, weak_watch)
+  assert_top("gc stress pushes", base_top, ffi.lua_gettop(L) as integer)
+
+  -- Verify the 4 newest items (157..160) survived old-gen write barriers intact,
+  -- then pop them inside a helper frame so no caller frame slot retains item 160.
+  verify_tail_and_drain(old_ring)
+
+  -- Evicted items (1..156) and popped items (157..160) must all be collectable.
+  gc.collect()
+  gc.collect()
+  local still_alive = 0
+  for i = 1, 150 do
+    if weak_watch[i] ~= nil then
+      still_alive = still_alive + 1
+    end
+  end
+  if still_alive > 0 then
+    raise ("evicted ring items were not released for GC: " .. still_alive .. " leaked")
+  end
+  gc.collect()
+  for i = 157, 160 do
+    if weak_watch[i] ~= nil then
+      raise ("popped ring item " .. i .. " was not cleared from uservalue slot")
+    end
+  end
+  assert_top("gc reclamation", base_top, ffi.lua_gettop(L) as integer)
+
+  -- 4. format_value via luaL_tolstring (including __tostring metamethod + raising __tostring).
+  if ring.format_value(12345) ~= "12345" then
+    raise "format_value failed on integer"
+  end
+  local meta_obj = lua.load("return setmetatable({}, { __tostring = function() return 'meta-ok' end })", "=mt")()
+  if ring.format_value(meta_obj) ~= "meta-ok" then
+    raise "format_value did not invoke __tostring metamethod"
+  end
+  assert_top("format_value ok", base_top, ffi.lua_gettop(L) as integer)
+
+  local bad_meta = lua.load("return setmetatable({}, { __tostring = function() error('boom-tostring') end })", "=badmt")()
+  must_raise("raising __tostring", function()
+    local _ = ring.format_value(bad_meta)
+  end)
+  assert_top("format_value error unwind", base_top, ffi.lua_gettop(L) as integer)
+
+  -- 5. eval_with_optional_env via luaL_loadbufferx + lua_setupvalue (incl. 0-upvalue binary chunk!).
+  local custom_env: {string: value} = { ["k"] = 7 }
+  local res1 = ring.eval_with_optional_env("return k * 6", custom_env)
+  if res1 ~= 42 then
+    raise "eval_with_optional_env with custom env failed"
+  end
+  assert_top("eval custom env", base_top, ffi.lua_gettop(L) as integer)
+
+  local res2 = ring.eval_with_optional_env("return 10 + 5", nil)
+  if res2 ~= 15 then
+    raise "eval_with_optional_env with nil env failed"
+  end
+  assert_top("eval nil env", base_top, ffi.lua_gettop(L) as integer)
+
+  -- Binary chunk with 0 upvalues: lua_setupvalue returns NULL and pops NOTHING!
+  local bin_chunk_raw = lua.load("return string.dump(function() return 77 end)", "=dump")()
+  local bin_chunk = bin_chunk_raw as string
+  local res3 = ring.eval_with_optional_env(bin_chunk, custom_env)
+  if res3 ~= 77 then
+    raise "eval_with_optional_env on 0-upvalue binary chunk failed"
+  end
+  assert_top("eval 0-upvalue binary chunk", base_top, ffi.lua_gettop(L) as integer)
+
+  must_raise("syntax error chunk", function()
+    local _ = ring.eval_with_optional_env("return 1 +", nil)
+  end)
+  assert_top("eval syntax error", base_top, ffi.lua_gettop(L) as integer)
+
+  return 0
+end

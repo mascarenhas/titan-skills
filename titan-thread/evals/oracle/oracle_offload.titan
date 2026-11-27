@@ -1,0 +1,65 @@
+local offload = import "offload"
+
+local function fail(msg: string)
+  raise "oracle_offload: " .. msg
+end
+
+function main(args: {string}): integer
+  -- 1. WorkToken custom hooks + detach semantics + malformed payload rejection
+  local t_fast = offload.WorkToken("job", 7)
+  if t_fast:tag_name() ~= "job" or t_fast:seq_num() ~= 7 or t_fast:is_detached() then
+    fail("fresh WorkToken state mismatch")
+  end
+
+  local bad_discard = false
+  do
+    offload.WorkToken.discard_transfer_payload("BAD!payload")
+  catch
+    bad_discard = true
+  end
+  if not bad_discard then fail("malformed discard_transfer_payload should raise") end
+
+  -- 2. Offload succeeding before deadline; source token detached and rejects post-detach reads
+  local r1 = offload.offload_with_deadline(t_fast, 15, 600)
+  if r1.timed_out or r1.label ~= "job#7" or r1.worker_cancelled or not r1.source_detached then
+    fail("offload fast mismatch: label=" .. (r1.label or "nil"))
+  end
+  if not t_fast:is_detached() then fail("source token not detached after spawn") end
+  local post_detach_rejected = false
+  do
+    t_fast:tag_name()
+  catch
+    post_detach_rejected = true
+  end
+  if not post_detach_rejected then fail("detached WorkToken:tag_name() should raise") end
+
+  -- 3. Offload hitting deadline cancels worker + child Task and retires OS thread
+  local t_slow = offload.WorkToken("slow", 9)
+  local r2 = offload.offload_with_deadline(t_slow, 500, 30)
+  if not r2.timed_out or r2.label ~= nil or not r2.worker_cancelled or not r2.source_detached then
+    fail("offload timeout mismatch")
+  end
+
+  -- 4. Coalescing async.Receiver progress stream (run twice to verify safe join-before-close)
+  for round = 1, 2 do
+    local prog = offload.stream_coalesced_progress(40)
+    if #prog < 1 or prog[#prog] ~= 40 then
+      fail("stream_coalesced_progress round " .. round .. " missing final step")
+    end
+    for i = 2, #prog do
+      if prog[i] <= prog[i - 1] then
+        fail("stream_coalesced_progress not strictly increasing")
+      end
+    end
+  end
+
+  -- 5. Manual failed-send discard recovery + raw encode_message/decode_message + endpoint cycle break
+  local t_aud = offload.WorkToken("rec", 3)
+  local aud = offload.audit_handoff_and_packets(t_aud)
+  if aud.discard_rc ~= 0 or aud.raw_roundtrip_label ~= "pkt#42" or not aud.cycle_broken then
+    fail("audit_handoff_and_packets mismatch: rc=" .. aud.discard_rc .. " lbl=" .. aud.raw_roundtrip_label)
+  end
+  if not t_aud:is_detached() then fail("audit token should be detached") end
+
+  return 0
+end

@@ -1,0 +1,178 @@
+local gc = import "gc"
+local reflect = import "reflect"
+local spatial = import "spatial_index"
+foreign import "spatial.h"
+
+local function must_raise(label: string, fn: function())
+  local ok = true
+  do
+    fn()
+  catch
+    ok = false
+  end
+  if ok then
+    raise ("expected error for: " .. label)
+  end
+end
+
+local function create_and_abandon()
+  local idx = spatial.open(2)
+  idx:add(99, 1, 2, "temp:item")
+end
+
+function main(_args: {string}): integer
+  -- 1. Verify SpatialIndex keeps raw C handles private (no public foreign/userdata fields).
+  local probe = spatial.open(2)
+  defer probe:close()
+  local rv = reflect.inspect(probe)
+  case rv
+  when is_record(rec) then
+    if rec.type.all_public then
+      raise "SpatialIndex must keep raw handle and internal state in local fields (all_public == true)"
+    end
+    local fields = rec.type.fields
+    for i = 1, #fields do
+      local ft = fields[i].type
+      case ft
+      when is_foreign_pointer(_) then
+        raise ("SpatialIndex leaked public foreign pointer field: " .. fields[i].name)
+      when is_foreign_struct(_) then
+        raise ("SpatialIndex leaked public foreign struct field: " .. fields[i].name)
+      when is_foreign_named(_) then
+        raise ("SpatialIndex leaked public foreign named field: " .. fields[i].name)
+      when is_foreign_typedef(_) then
+        raise ("SpatialIndex leaked public foreign typedef field: " .. fields[i].name)
+      when is_owned_foreign_pointer(_) then
+        raise ("SpatialIndex leaked public owned foreign pointer field: " .. fields[i].name)
+      when is_owned_foreign_array(_) then
+        raise ("SpatialIndex leaked public owned foreign array field: " .. fields[i].name)
+      else
+      end
+    end
+  else
+    raise "expected SpatialIndex to be a Titan record"
+  end
+  probe:close()
+
+  if ffi.spatial_active_handles() ~= 0 then
+    raise "expected 0 active handles after probe close"
+  end
+
+  -- 2. Invalid capacities must raise.
+  must_raise("open(0)", function()
+    local _ = spatial.open(0)
+  end)
+  must_raise("open(-4)", function()
+    local _ = spatial.open(-4)
+  end)
+
+  -- 3. Populate index, verify capacity overflow, format_summary, and k-NN + tie-break + filters.
+  local idx = spatial.open(4)
+  defer idx:close()
+
+  if ffi.spatial_active_handles() ~= 1 then
+    raise "expected 1 active handle"
+  end
+
+  -- Empty nearest returns empty array.
+  local empty_res = idx:nearest(0, 0, 3, nil, nil)
+  if #empty_res ~= 0 then
+    raise "expected empty nearest on empty index"
+  end
+
+  idx:add(10, 0, 0, "sensor:a")
+  idx:add(30, -3, -4, "node:c")
+  idx:add(20, 3, 4, "sensor:b")
+  idx:add(40, 10, 0, "sensor:d")
+
+  if idx:count() ~= 4 then
+    raise ("expected count 4, got " .. idx:count())
+  end
+
+  must_raise("capacity overflow", function()
+    idx:add(50, 1, 1, "overflow")
+  end)
+
+  local summary = idx:format_summary("grid")
+  if summary ~= "grid:count=4" then
+    raise ("unexpected format_summary: " .. summary)
+  end
+
+  local zero_k = idx:nearest(0, 0, 0, nil, nil)
+  if #zero_k ~= 0 then
+    raise "expected empty array for k=0"
+  end
+  must_raise("negative k", function()
+    local _ = idx:nearest(0, 0, -1, nil, nil)
+  end)
+
+  local sort_before = ffi.spatial_sort_calls() as integer
+  local top3 = idx:nearest(0, 0, 3, nil, nil)
+  local sort_after = ffi.spatial_sort_calls() as integer
+  if sort_after <= sort_before then
+    raise "expected nearest() to invoke spatial_sort_entries C callback"
+  end
+
+  if #top3 ~= 3 then
+    raise ("expected 3 neighbors, got " .. #top3)
+  end
+  if top3[1].id ~= 10 or top3[1].dist_sq ~= 0 or top3[1].tag ~= "sensor:a" then
+    raise "unexpected top3[1]"
+  end
+  if top3[2].id ~= 20 or top3[2].dist_sq ~= 25 or top3[2].tag ~= "sensor:b" then
+    raise "unexpected top3[2] (tie-break by ascending id failed)"
+  end
+  if top3[3].id ~= 30 or top3[3].dist_sq ~= 25 or top3[3].tag ~= "node:c" then
+    raise "unexpected top3[3]"
+  end
+
+  -- Filtered nearest: max_dist_sq = 25 and prefix "sensor:" -> only ids 10, 20.
+  local filtered = idx:nearest(0, 0, 5, 25, "sensor:")
+  if #filtered ~= 2 then
+    raise ("expected 2 filtered neighbors, got " .. #filtered)
+  end
+  if filtered[1].id ~= 10 or filtered[2].id ~= 20 then
+    raise "unexpected filtered neighbor ids"
+  end
+
+  -- Query from shifted origin (10, 0): id=40 is closest (0), id=20 next (49+16=65).
+  local near_east = idx:nearest(10, 0, 2, nil, nil)
+  if #near_east ~= 2 or near_east[1].id ~= 40 or near_east[1].dist_sq ~= 0 or
+     near_east[2].id ~= 20 or near_east[2].dist_sq ~= 65 then
+    raise "unexpected shifted-origin nearest results"
+  end
+
+  -- 4. Deterministic close idempotence and post-close guards.
+  local destroys_before = ffi.spatial_destroy_calls() as integer
+  idx:close()
+  idx:close()
+  local destroys_after = ffi.spatial_destroy_calls() as integer
+  if destroys_after ~= destroys_before + 1 then
+    raise "double close must be idempotent (exactly one destroy call)"
+  end
+  if ffi.spatial_active_handles() ~= 0 then
+    raise "expected 0 active handles after close"
+  end
+
+  must_raise("count after close", function() local _ = idx:count() end)
+  must_raise("add after close", function() idx:add(1, 0, 0, "x") end)
+  must_raise("nearest after close", function() local _ = idx:nearest(0, 0, 1, nil, nil) end)
+  must_raise("format_summary after close", function() local _ = idx:format_summary("x") end)
+
+  -- 5. Finalizer fallback releases abandoned handles synchronously on GC.
+  local destroys_pre_gc = ffi.spatial_destroy_calls() as integer
+  create_and_abandon()
+  if ffi.spatial_active_handles() ~= 1 then
+    raise "expected 1 active handle before GC"
+  end
+  gc.collect()
+  gc.collect()
+  if ffi.spatial_active_handles() ~= 0 then
+    raise "expected finalizer to release abandoned handle"
+  end
+  if (ffi.spatial_destroy_calls() as integer) ~= destroys_pre_gc + 1 then
+    raise "expected exactly one finalizer destroy call"
+  end
+
+  return 0
+end

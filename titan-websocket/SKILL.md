@@ -1,242 +1,131 @@
 ---
 name: titan-websocket
-description: Write, review, and test Titan WebSocket clients (native and browser) and HTTP/TLS upgrade handlers with message framing, origin/subprotocol policy, Ping/Close, cancellation, and owned session cleanup. Use for titan.websocket work; ordinary TCP/TLS/HTTP uses titan-networking.
+description: Use when writing Titan WebSocket clients or HTTP/TLS upgrade handlers (websocket, ws/wss, RFC 6455 framing). Covers DialOptions/AcceptOptions, Origin/subprotocol policy, reader duty, Ping/Pong/Close, browser WebSocket, and session handoff; use titan-networking for ordinary URL/TCP/TLS/HTTP, titan-async for Tasks/timers, titan-stdlib for fs/io.
 ---
 
 # Titan WebSocket
 
-Load `titan-programmer` before any .titan work. Add `titan-networking` for
-opening/TCP/TLS/HTTP, `titan-async` for lifecycle/concurrency, `titan-tester` for
-native tests and `titan-ffi` when changing the synchronous crypto/byte boundary.
+Message-oriented RFC 6455 (v13) over HTTP/1.1 (`local websocket = import "websocket"`; Lua `require "titan.websocket"`). Native provides `ws`/`wss` clients and HTTP/TLS upgrades; `--target browser` provides the host-`WebSocket` client. Pair with `skill://titan-programmer`, `skill://titan-networking`, `skill://titan-async`, `skill://titan-thread`, and `skill://titan-tester`.
 
-The module is message-oriented, direct Task-blocking RFC 6455 version 13 over
-HTTP/1.1. Import `websocket`; never substitute a Node event emitter, LuaSocket
-API or private UV/HTTP/TLS fields. Ordinary `http.Handler` owns routing/auth
-before `websocket.accept`; the same handler works in `http.listen_tls`. On
-`--target browser` only the client exists, over the host `WebSocket`; read
-[the browser client](#browser-client) first.
+## Non-negotiable invariants
 
-## Public contract
+1. **Immediate `defer conn:close()` & upgrade handoff:** Always `defer conn:close()` after `connect`/`accept` (even with `shutdown()`). Auth/route in `http.Handler` before `websocket.accept(req, res, opts?)` (works under `http.listen` and `http.listen_tls`). Closing `http.Server` never closes sessions; `Connection:close()` needs a Task (warns during abandoned Lua-state unwind).
+2. **Reader duty (`ping` requires a concurrent `read()`):** No background reader Task or decoded-message queue exists. `conn:read()` services incoming Ping (auto-Pong), Pong, and Close. **`conn:ping()` times out unless another Task calls `read()`**; write-only clients must run a reader Task.
+3. **Duplex, 16 KiB framing & shutdown takeover:** One reader + one writer run concurrently on `ws`/`wss` (duplicate same-kind ops raise). Outgoing data fragments at **16 KiB** with control priority (Close > Pong > Ping > data; data never interleaves); text checks UTF-8 both ways. `shutdown(code?, reason?, timeout_ms?)` stops writes, lets an active `read()` finish one message/Close, then takes receive ownership (new `read()` raises `state`).
+4. **Clean EOF vs loss:** `local kind?, data? = conn:read()` returns `(nil, nil)` **only** after valid peer Close + reciprocal reply (`""` valid; binary keeps NULs). Transport loss raises `Error("abnormal", ...)` with `close_status() == (nil, nil)`—never synthesize `1006`.
+5. **Browser subset (`--target browser`):** `accept`, `AcceptOptions`, `ping`, and transfer hooks are absent at compile time. `connect` rejects non-empty `headers` or any `ca_file`, fails if offered `subprotocols` go unselected (native allows `nil`), maps pre-open failures to `HandshakeError(msg, nil, nil)`, and permits only `1000` and `3000..4999` in `shutdown`.
+6. **Fairness & memory caveats:** Native buffered work yields every **64 KiB** or **32** control/empty frames and between **16 KiB** outgoing fragments—**no generic starvation bound**. `read_limit` (default **1 MiB**) caps decoded bytes, not `net` receive buffers or browser unread queues.
 
-```text
-union MessageType: text(), binary()
-const TEXT, BINARY: MessageType
-record Connection -- opaque; no public constructor
--- native only: AcceptOptions, accept, Connection:ping, the three transfer hooks
-DialOptions(headers:http.Headers?, ca_file:string?, subprotocols:({string})?,
-            read_limit:integer?, handshake_timeout:integer?)
-AcceptOptions(subprotocols:({string})?, allowed_origins:({string})?,
-              read_limit:integer?, handshake_timeout:integer?)
-connect(source_url:string, options:DialOptions?):Connection
-accept(request:http.Request,response:http.Response,options:AcceptOptions?):Connection
-Connection:read():(MessageType?,string?)
-Connection:write(kind:MessageType,data:string)
-Connection:ping(timeout_ms:integer?)
-Connection:shutdown(code:integer?,reason:string?,timeout_ms:integer?)
-Connection:close()
-Connection:to_transfer_payload():string
-Connection.from_transfer_payload(payload:string):Connection
-Connection.discard_transfer_payload(payload:string):integer
-Connection:subprotocol():string?
-Connection:close_status():(integer?,string?)
+## Native vs. browser behavior & error table
+
+| Failure / behavior | Native targets | `--target browser` |
+| --- | --- | --- |
+| Malformed URL | `url.Error` | `url.Error` |
+| Non-`ws`/`wss`, bad opts, no Runtime, browser `headers`/`ca_file` | `string` | `string` (`lua.new()` → `"async Runtime is not active"`) |
+| Opening timeout (default 10 s) | `Error("timeout", "websocket.open", ...)` | Same |
+| HTTP reject, bad response, unoffered subprotocol | `HandshakeError(msg, status?, headers?)` | `HandshakeError(msg, nil, nil)` |
+| Subprotocols offered, none selected | Succeeds (`subprotocol() == nil`) | Fails: `HandshakeError(msg, nil, nil)` |
+| Pre-open DNS / TCP / TLS failure | `async.OperationError` or `ssl.Error` | `HandshakeError(msg, nil, nil)` |
+| Outgoing invalid UTF-8 (`write`/`shutdown`) | `Error("utf8", op, ..., nil)` | Same |
+| Closed/dup op/bad code/reason > 123 B | `Error("state", ...)` (`1000..1003`, `1007..1014`, `3000..4999`; no server `1010`) | Same, but `shutdown` allows **only** `1000`, `3000..4999` |
+| Incoming message > `read_limit` (1 MiB) | `Error("limit", "websocket.read", ..., 1009)` | Same (decompressed length, pre-copy) |
+| Post-open loss or peer violation | `Error("abnormal" \| "protocol" \| "utf8", ...)` | `Error("abnormal", op, "transport ended before WebSocket Close", nil)` |
+| `ping`/`shutdown` timeout (5 s) / cancel | `Error("timeout", ...)` / `CancellationReason` | `shutdown` timeout / `CancellationReason` |
+
+## Opening policy, framing & loopback example
+
+- **Options (copied snapshots):** `DialOptions { headers, ca_file, subprotocols, read_limit, handshake_timeout }` and native `AcceptOptions { subprotocols, allowed_origins, read_limit, handshake_timeout }` (defaults: 1 MiB, 10 s open, 5 s controls).
+- **Origin, subprotocols & rejections:** Absent `Origin` passes for native clients; browser `Origin` must match normalized scheme/host/port or an exact `allowed_origins` entry (no wildcards; rejects `"null"`/multiple/malformed). Subprotocols match **case-sensitively** (server order first). Reserved headers (`Host`, `Connection`, `Upgrade`, `Content-Length`, `Transfer-Encoding`, `Expect`, `Sec-WebSocket-*`) cannot be overridden. Inside `accept`: malformed `400`, origin `403`, version `426` → `HandshakeError`; pre-handler HTTP errors (`Expect`, bad `Host`/URL, non-1.1) send `400` pre-dispatch.
+- **TLS, cancellation & kinds:** `connect` verifies original URL hostname (`ca_file` replaces defaults; no insecure mode, redirects, proxies, or native extensions/compression; masks use `uv.random`). Pre-admission cancel detaches reservations; admitted ops (incl. idle `read()`) terminalize. Timeouts are catchable without cancelling caller; first terminal error latches as `async.Error`. `MessageType` exports singletons `TEXT`/`BINARY`—use `case` (never `== MessageType.text()`).
+
+```titan
+local async = import "async"
+local http = import "http"
+local websocket = import "websocket"
+
+local function handle(req: http.Request, res: http.Response)
+  if req.url.path ~= "/ws" then res:set_status(404); return end
+  local conn = websocket.accept(req, res, websocket.AcceptOptions { subprotocols = {"echo.v1"} })
+  defer conn:close()
+  while true do
+    local kind?, msg? = conn:read()
+    if kind == nil then break end
+    conn:write(kind, msg)
+  end
+end
+
+function main(args: {string}): integer
+  local server = http.listen("127.0.0.1", handle, 0)
+  defer server:close()
+  local serving = async.run(function (): nil server:serve(); return nil end)
+  defer do
+    server:close()
+    if not serving:status():has_finished() then serving:cancel() end
+    async.join(serving)
+  end
+
+  local conn = websocket.connect("ws://127.0.0.1:" .. server:local_address().port .. "/ws",
+    websocket.DialOptions { subprotocols = {"echo.v1"}, read_limit = 65536 })
+  defer conn:close()
+  if conn:subprotocol() ~= "echo.v1" then raise "subprotocol" end
+
+  local replies: {string} = {}
+  local reader = async.run(function (): nil
+    for _ = 1, 2 do
+      local kind?, data? = conn:read()
+      if kind == nil then break end
+      case kind
+      when text() then replies[#replies + 1] = data
+      when binary() then replies[#replies + 1] = "bin:" .. #data
+      end
+    end
+    return nil
+  end)
+  defer do
+    if not reader:status():has_finished() then reader:cancel() end
+    async.join(reader)
+  end
+
+  conn:ping(2000) -- reader Task services Pong
+  conn:write(websocket.TEXT, "hello")
+  conn:write(websocket.BINARY, "a\0b")
+  async.join(reader) -- drain replies before shutdown takes receive ownership
+  conn:shutdown(1000, "done", 2000)
+  local code?, _ = conn:close_status()
+  if code ~= 1000 or replies[1] ~= "hello" or replies[2] ~= "bin:3" then raise "echo" end
+  return 0
+end
 ```
 
-Constructor options are validated copied snapshots. Incoming limit defaults
-1 MiB; opening 10 s; Ping/shutdown/control progress 5 s. Limits/deadlines are finite
-positive integers. Deadlines initiate abort, with actual native retirement
-possibly later. Public error data is:
+## Browser client & cross-state transfer
 
-```text
-Error(kind:string,operation:string,message:string,close_code:integer?)
-HandshakeError(message:string,status:integer?,headers:http.Headers?)
+- **Browser specifics:** Host owns TCP/TLS, trust, cookies, `Origin`, fragmentation, Pong, and `permessage-deflate`. `write` checks UTF-8, yields once, pauses > 256 KiB until <= 64 KiB (return = host-queued; Node/WebKit loss can lag drainage). `close()` retires sync (host queues empty Close); Firefox/Node may hold cancelled/rejected opening sockets until peer/browser closes. Valid Close + reset still yields `(nil, nil)` and `close_status()` (never `1005`/`1006`/`1015`). Sessions close with Runtime.
+- **Native transfer:** Set `server:read_ahead(false)` pre-`serve()`, require idle open session (no active ops/partial message), and `async.yield()` post-I/O on Windows. `to_transfer_payload()` detaches without Close; `from_transfer_payload()` adopts once; `discard_transfer_payload()` frees unadopted bytes without Runtime (`skill://titan-thread`). Closed native endpoints reclaim over multiple GC cycles (`Coroutine` finalizers).
+
+```titan
+-- Cross-target (native & --target browser) WebSocket client helper
+local websocket = import "websocket"
+
+function send_and_receive(endpoint: string, payload: string): string?
+  local conn = websocket.connect(endpoint, websocket.DialOptions {
+    subprotocols = {"chat.v1"}, read_limit = 65536, handshake_timeout = 5000,
+  })
+  defer conn:close()
+  conn:write(websocket.TEXT, payload)
+  local kind?, reply? = conn:read()
+  if kind == nil then return nil end
+  conn:shutdown(1000, "bye")
+  case kind
+  when text() then return reply
+  when binary() then return nil
+  end
+end
 ```
 
-Preserve underlying `ssl.Error`, `async.OperationError`, URL and cancellation
-identities; do not turn transport loss into clean EOF or manufacture 1006.
+## Pre-delivery verification checklist
 
-## Application decisions
-
-- Immediately `defer connection:close()` after connect/accept. `close` is
-  idempotent, cancellation-insensitive abort/retirement. `shutdown` is bounded
-  graceful WebSocket closing and does not replace lexical cleanup.
-- Read one complete message with `local kind?, data? = connection:read()`.
-  `(nil,nil)` means valid peer Close and reciprocal handling. Empty strings are
-  data, binary permits NUL, and previous strings stay immutable after later
-  reads/GC. There is no streaming message Reader/Writer or JSON convenience.
-- One application reader and one data writer may progress simultaneously on
-  ws/wss. Duplicate same-kind operations fail. Large output is fragmented at
-  16 KiB with frame-level control priority; never interleave two data messages.
-- **Ping requires a concurrent application reader.** `read` services controls;
-  no perpetual session-reader Task or decoded-message queue exists. A write-only
-  client must deliberately keep reading. Unmatched Pong is ignored.
-- Shutdown stops data admission. Existing read may deliver one message, then
-  its nonyielding release hands receive progress to shutdown, which discards
-  further data while servicing controls. New reads cannot steal that owner.
-- Cancellation before transport/protocol admission detaches reservations.
-  Once admitted, even idle ws/wss reads terminalize on cancellation. Timeout
-  is catchable without cancelling the caller; genuine Task cancellation stays
-  sticky. The first terminal failure is an async.Error carrier: preserve its
-  exact value and captured origin traceback through cleanup and later valid
-  operations. Never join a blocked native writer before initiating transport abort.
-- After HTTP transfers the stream, its handler can return only after establishing
-  session ownership. Listener close does not close/registry-manage sessions.
-
-Default Origin accepts absent Origin or normalized same HTTP(S) scheme/host/
-effective port. Exact `allowed_origins` adds explicit public origins for proxy
-setups; no wildcards/implicit forwarded trust. Reject multiple/malformed/null
-origins. Origin is browser cross-site policy, not native-client authentication.
-
-Subprotocols match **case-sensitively**, server preference first; no intersection
-means no selected protocol. HTTP token/name case folding does not apply to
-subprotocols. Ignore empty HTTP Upgrade/Connection list elements within the
-header bound; keep subprotocol offers strict. Do not override reserved handshake/body framing fields with
-application headers. Once HTTP invokes accept: malformed opening 400,
-origin 403, unsupported version 426;
-rejection finishes one response and raises HandshakeError. Invalid options or
-already committed output fail before protocol response. HTTP pre-handler
-validation is separate: an upgrade indication plus Expect receives 400 with no
-handler call; complete upgrade attempts with missing/duplicate/invalid Host,
-invalid request URLs, or unsupported HTTP version receive 400 before the handler. Invalid HTTP syntax fails in parsing.
-These paths do not produce a server accept HandshakeError.
-
-TLS always verifies the original URL hostname and chain. `ca_file` replaces
-default trust per SSL. Dial already-resolved numeric endpoints without changing
-Host/SNI/cert identity. No insecure mode, redirects, proxies, cookies/reconnect
-policy, automatic heartbeat, extensions/compression or HTTP2/3 support exists
-natively. Valid extension offers are syntactically checked and ignored; native
-clients reject unsolicited extension negotiation and all nonzero RSV bits.
-
-## Browser client
-
-On `--target browser`, `connect`, `DialOptions`, and `Connection`'s `read`,
-`write`, `shutdown`, `close`, `subprotocol`, and `close_status` keep their
-native signatures over the host `WebSocket`. The browser owns TCP/TLS, trust,
-cookies, `Origin`, fragmentation, Pong replies, and `permessage-deflate`.
-
-- `connect` needs the owner Runtime (`"async Runtime is not active"` in a
-  `lua.new()` state), raises `url.Error` for a bad URL, and a string for a
-  non-`ws`/`wss` scheme or `DialOptions` with any headers or a `ca_file`. A
-  `Connection` closes with its Runtime.
-- Every pre-open failure, HTTP rejection, DNS, refusal, and TLS alike, is a
-  `HandshakeError` with nil status and headers (`"WebSocket opening handshake
-  failed"` for a rejected opening). A selected subprotocol that was not
-  offered fails on both targets. When subprotocols were offered and none is
-  selected, Titan fails the browser opening on every engine, where a native
-  client returns `subprotocol() == nil`.
-- `read_limit` applies to the decompressed length; earlier messages arrive
-  first, then `Error("limit", "websocket.read", ..., 1009)` without copying
-  the big message. Unread small messages are not backpressured.
-- `write` validates UTF-8, yields once, then waits while more than 256 KiB is
-  queued until 64 KiB remain. Success means the browser accepted the message,
-  not delivery. A closing, closed, or failed connection raises instead of
-  silently dropping the message.
-  Loss notification can lag queue drainage: Node may stay OPEN after a paused
-  peer's FIN until the peer resumes reading, and WebKit may drain before
-  reporting a remote Close/reset. An admitted write may succeed while the host
-  reports OPEN; a later write raises once loss is reported.
-- `shutdown` accepts only 1000 and 3000..4999; any other code, 1001..1014
-  included, raises `state`.
-  `close()` is local, synchronous, and idempotent; the browser then sends an
-  empty Close after queued data.
-- Firefox retains a cancelled or timed-out opening's TCP connection until the
-  peer answers the handshake or the browser closes. Node retains a rejected
-  opening's TCP connection (invalid response or unselected subprotocol) until
-  the peer closes. Titan has already detached listeners and closed the host
-  socket; local retirement does not promise immediate TCP closure.
-- A valid peer Close, even followed by a reset, makes `read` return
-  `(nil, nil)`; `close_status()` keeps any code except 1005/1006/1015.
-  Transport loss raises `Error("abnormal", op, "transport ended before
-  WebSocket Close", nil)`, replayed by later calls.
-
-See [WebSocket on the browser](../../../doc/language/standard-library-websocket.md#on-the-browser).
-
-## Transferring native sessions
-
-For a server session that must move after the upgrade, configure its HTTP
-listener with `read_ahead(false)` before serving. The accepted WebSocket
-inherits that TCP/TLS policy. Finish application I/O and yield with
-`async.yield()` before synchronous encoding so Windows callbacks can retire;
-all WebSocket and native pending-operation guards still apply.
-
-`to_transfer_payload` detaches the source without sending a Close frame;
-`Connection.from_transfer_payload` adopts the session exactly once in the
-destination Runtime. Raw payloads are manually owned, process-local capabilities,
-not persistent data. A queued string or native transfer packet has no WebSocket
-resource finalizer (native packet discard only releases packet-registered
-`thread` endpoints and never runs `from_transfer_payload` decoders). After
-failed delivery or when draining an abandoned queue,
-`Connection.discard_transfer_payload(payload)` consumes an unadopted session
-without a Runtime and returns native close status. A close attempt consumes
-ownership even on an error; never adopt or discard those bytes again. See the
-[session transfer contract](../../../doc/language/standard-library-websocket.md#transferring-connections)
-and the [networking handoff guidance](../titan-networking/SKILL.md#native-connection-and-http-handoff).
-
-## Implementation review
-
-Keep one folder module; UV alone owns libuv FFI, SSL owns its engine, HTTP owns
-llhttp/prefix transfer. Only the tiny EVP digest/base64 bridge and portable
-rooted byte access belong here. Nonces/masks use public synchronous uv.random;
-every client frame including empty/control gets fresh 4-byte entropy. Do not
-use math.random or add an unreviewed asynchronous entropy pool.
-
-Shared `types.titan` and `utf8.titan` hold the public data, `DialOptions`, and
-validators for both targets; native protocol code is `*.native.titan`, and the
-browser `client.browser.titan` keeps state, limits, backpressure, and error
-policy in Titan over `titan.browser`'s zero-policy `titan:websocket` source.
-
-Opening admission is keyed by semantic IP bytes/port/effective IPv6 scope in an
-ephemeron runtime bucket; mapped IPv6 converges with IPv4. Resolve once, reserve
-only the current candidate until validated Upgrade/retirement, and preserve
-original URL identity. Contenders never own/cancel the incumbent. Only TCP
-failure permits resolver-order fallback.
-
-Validate frame opcode/RSV/FIN/mask and minimal length before allocating.
-Reject 64-bit high-bit lengths and cumulative overflow/limit. Controls have 125
-bytes independently of data budget. Continuation requires active fragmentation;
-text scalar UTF8 state spans every split and validates FIN, overlong/surrogate/
->U+10FFFF rejection. Outgoing text validates before bytes. Close permits empty
-payload or code plus UTF8 reason (123 bytes); codes 1000..1003,1007..1014,3000..4999.
-Servers cannot send 1010 and answer client 1010 with 1000. Never emit reserved codes.
-
-Operation supervisors are per public I/O call, with cancellation-aware parents
-and accepted-ownership-retiring children. One shared terminal owner aborts
-before draining scopes, preserving first cause. Never join arbitrary caller
-Tasks or resurrect terminal TLS. Controls have bounded progress behind stalled
-output. No codec Task per frame, but nested TLS writes add workers per fragment:
-count actual allocation costs. Buffered parse/mask work needs explicit yields;
-checkpoint alone is not scheduling fairness.
-
-The decoded-message cap does not bound inherited net queues. Do not claim
-bounded memory for paused application readers, zero-copy messages or zero
-fragment-proportional Task allocation without measured evidence.
-
-## Tests and evidence
-
-Native behavior belongs in `spec/stdlib/titan/websocket/tests/`, using installed
-public APIs, source-only `support.runtime`, owned peer Tasks and checked-in CA
-fixtures. Retry loopback ports only on EADDRINUSE. Establish pending states
-with acknowledgments/suspension, not timing sleeps. Compile shared Windows
-fixtures before considering platform skips. Reinstall current source first:
-
-```sh
-make titan-stdlib-test-build
-make titan-stdlib-test-run TITAN_FILTER='^websocket[.]tests[.]'
-make titan-stdlib-test-run TITAN_FILTER='^ssl[.]tests[.]'
-make titan-stdlib-test-run TITAN_FILTER='^http[.]tests[.]'
-make titan-stdlib-test-run TITAN_FILTER='^net[.]tests[.]'
-make titan-stdlib-test-run TITAN_FILTER='^url[.]tests[.]'
-```
-
-Use both pinned Autobahn roles and strict exact nonempty case/agent reports;
-check behaviorClose too, and reject NON-STRICT/UNCLEAN/unknown/missing results.
-Only audited INFORMATIONAL cases qualify. Do not copy upstream UTF8/Close
-exclusions. Compression 12/13 alone are explicit outside the uncompressed
-profile. A zero process exit is not conformance. Native tests retain opening,
-TLS, limits, cancellation, shutdown takeover and role-mask oracles regardless
-of Autobahn coverage. Keep separate WebSocket benchmarks from issue196's
-frozen matrix. Record source/provider/image/platform identity with results.
-
-Authority: [human manual](../../../doc/language/standard-library-websocket.md),
-[implementation](../../../doc/implementation/websocket-library.md),
-[source](../../../titan/websocket), [native tests](../../../spec/stdlib/titan/websocket/tests),
-and [conformance harness](../../../spec/conformance/websocket/README.md).
+- [ ] `defer conn:close()` follows `connect`/`accept`; auth in `http.Handler` before `accept` (closing `Server` never closes sessions).
+- [ ] Every `conn:ping()` runs with a concurrent `conn:read()` Task; finish/coordinate reads before `shutdown()`.
+- [ ] `local kind?, data? = conn:read()` preserves options and separates `(nil, nil)` Close EOF from `Error("abnormal", ...)`.
+- [ ] Browser clients omit `accept`/`AcceptOptions`/`ping`/transfer/`headers`/`ca_file`, handle unselected-subprotocol `HandshakeError`, and use `1000`/`3000..4999` in `shutdown`.
+- [ ] Transfer sets `server:read_ahead(false)` + `async.yield()` (Windows) and recovers via `Connection.discard_transfer_payload`.

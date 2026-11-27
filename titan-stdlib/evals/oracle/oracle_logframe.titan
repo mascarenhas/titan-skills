@@ -1,0 +1,135 @@
+local logframe = import "logframe"
+local math = import "math"
+local strings = import "string"
+
+function main(args: {string}): integer
+  -- 1. Compiled regex log extraction (optional code group + math.tonumber rejecting nan/inf)
+  local raw_logs =
+    "2026-11-27T08:15:30Z [WARN] code=429 latency=12.5ms rate limit hit\n"
+    .. "not a log line\n"
+    .. "2026-11-27T08:15:31Z [INFO] latency=3ms ok\n"
+    .. "2026-11-27T08:15:32Z [ERROR] code=500 latency=nanms bad nan\n"
+    .. "2026-11-27T08:15:33Z [ERROR] code=502 latency=infms bad inf\n"
+    .. "2026-11-27T08:15:34Z [DEBUG] latency=0.5ms trace detail\n"
+    .. "2026-11-27T08:15:35Z [ERROR] code=503 latency=24ms upstream down\n"
+
+  local events = logframe.parse_log_lines(raw_logs)
+  if #events ~= 4 then raise "expected 4 valid events, got " .. #events end
+
+  if events[1].timestamp ~= "2026-11-27T08:15:30Z"
+     or events[1].severity ~= "WARN"
+     or events[1].code ~= 429
+     or math.abs(events[1].latency_ms - 12.5) > 1e-9
+     or events[1].message ~= "rate limit hit" then
+    raise "event 1 mismatch"
+  end
+
+  if events[2].severity ~= "INFO"
+     or events[2].code ~= nil
+     or math.abs(events[2].latency_ms - 3.0) > 1e-9
+     or events[2].message ~= "ok" then
+    raise "event 2 mismatch"
+  end
+
+  if events[3].severity ~= "DEBUG" or events[3].code ~= nil
+     or math.abs(events[3].latency_ms - 0.5) > 1e-9 then
+    raise "event 3 mismatch"
+  end
+
+  if events[4].severity ~= "ERROR" or events[4].code ~= 503
+     or math.abs(events[4].latency_ms - 24.0) > 1e-9
+     or events[4].message ~= "upstream down" then
+    raise "event 4 mismatch"
+  end
+
+  -- 2. Binary packing with embedded NUL bytes + const Array view + independent unpack verification
+  local bin_events: const {logframe.LogEvent} = {
+    logframe.LogEvent("2026-11-27T00:00:00Z", "INFO", nil, 1.25, "hello\0world\255"),
+    logframe.LogEvent("2026-11-27T00:00:01Z", "ERROR", 500, 99.5, "err:500")
+  }
+  local encoded = logframe.encode_frames(bin_events)
+
+  -- Independent unpack verification of exact ">BBi4ds2s4" wire format
+  local v1, s1, c1, l1, t1, m1, pos2 = strings.unpack(">BBi4ds2s4", encoded, 1)
+  if (v1 as integer) ~= 1 or (s1 as integer) ~= 2 or (c1 as integer) ~= -1
+     or math.abs((l1 as float) - 1.25) > 1e-9
+     or (t1 as string) ~= "2026-11-27T00:00:00Z"
+     or (m1 as string) ~= "hello\0world\255" then
+    raise "frame 1 wire bytes mismatch"
+  end
+  local v2, s2, c2, l2, t2, m2, pos_end = strings.unpack(">BBi4ds2s4", encoded, pos2 as integer)
+  if (v2 as integer) ~= 1 or (s2 as integer) ~= 4 or (c2 as integer) ~= 500
+     or math.abs((l2 as float) - 99.5) > 1e-9
+     or (t2 as string) ~= "2026-11-27T00:00:01Z"
+     or (m2 as string) ~= "err:500"
+     or (pos_end as integer) ~= #encoded + 1 then
+    raise "frame 2 wire bytes mismatch"
+  end
+
+  local decoded = logframe.decode_frames(encoded)
+  if #decoded ~= 2 or decoded[1].code ~= nil or decoded[1].message ~= "hello\0world\255"
+     or decoded[2].code ~= 500 or decoded[2].severity ~= "ERROR" then
+    raise "decode_frames roundtrip mismatch"
+  end
+
+  -- Reject bad version byte
+  local bad_ver = strings.pack(">BBi4ds2s4", 9, 2, -1, 1.0, "2026-11-27T00:00:00Z", "x")
+  local bad_ver_failed = false
+  do logframe.decode_frames(bad_ver) catch bad_ver_failed = true end
+  if not bad_ver_failed then raise "bad version should raise" end
+
+  -- Reject truncated frame
+  local trunc_failed = false
+  do logframe.decode_frames(strings.sub(encoded, 1, 5)) catch trunc_failed = true end
+  if not trunc_failed then raise "truncated frame should raise" end
+
+  -- 3. Multi-frame scale check (500 frames)
+  local many: {logframe.LogEvent} = {}
+  for i = 1, 500 do
+    many[#many + 1] = logframe.LogEvent("2026-11-27T01:00:00Z", "INFO", i, i * 0.5, "msg-" .. i)
+  end
+  local many_wire = logframe.encode_frames(many)
+  local many_back = logframe.decode_frames(many_wire)
+  if #many_back ~= 500 or many_back[500].code ~= 500 or many_back[500].message ~= "msg-500" then
+    raise "500-frame roundtrip mismatch"
+  end
+
+  -- 4. Math statistics (min, max, mean, population stddev)
+  local empty_list: {logframe.LogEvent} = {}
+  if logframe.summarize_latencies(empty_list) ~= nil then
+    raise "empty stats must return nil"
+  end
+  local sample_vals: {float} = { 2.0, 4.0, 4.0, 4.0, 5.0, 5.0, 7.0, 9.0 }
+  local stat_events: {logframe.LogEvent} = {}
+  for i = 1, #sample_vals do
+    stat_events[#stat_events + 1] = logframe.LogEvent("2026-11-27T00:00:00Z", "INFO", nil, sample_vals[i], "s")
+  end
+  local st? = logframe.summarize_latencies(stat_events)
+  if st == nil or st.count ~= 8 or math.abs(st.min_ms - 2.0) > 1e-9
+     or math.abs(st.max_ms - 9.0) > 1e-9 or math.abs(st.mean_ms - 5.0) > 1e-9
+     or math.abs(st.stddev_ms - 2.0) > 1e-9 then
+    raise "summarize_latencies mismatch"
+  end
+
+  -- 5. Regex gsub whole-match verbatim callback
+  local redacted, hits = logframe.redact_digits("id=1234 code=56 %1=$9")
+  if redacted ~= "id=#### code=## %#=$#" or hits ~= 4 then
+    raise "redact_digits mismatch: " .. redacted .. " hits=" .. hits
+  end
+
+  -- 6. Deterministic RNG + unsigned comparison
+  local s_a = logframe.sample_indices(1337, 20, 6)
+  local s_b = logframe.sample_indices(1337, 20, 6)
+  if #s_a ~= 6 or #s_b ~= 6 then raise "sample_indices length mismatch" end
+  for i = 1, 6 do
+    if s_a[i] ~= s_b[i] or s_a[i] < 1 or s_a[i] > 20 then
+      raise "sample_indices determinism/bounds mismatch"
+    end
+  end
+  if not logframe.unsigned_less(0, -1) or logframe.unsigned_less(-1, 0)
+     or not logframe.unsigned_less(3, 7) or logframe.unsigned_less(7, 3) then
+    raise "unsigned_less mismatch"
+  end
+
+  return 0
+end

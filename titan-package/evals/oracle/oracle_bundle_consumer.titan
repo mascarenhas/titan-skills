@@ -1,0 +1,9 @@
+local hash = import "bundle.hash"
+local io = import "io"
+local report = import "bundle.report"
+
+function main(_args: {string}): integer
+  local d = hash.compute(1, 2)
+  io.print(report.describe(d))
+  return 0
+end

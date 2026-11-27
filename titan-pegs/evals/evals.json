@@ -1,0 +1,127 @@
+{
+  "skill_name": "titan-pegs",
+  "evals": [
+    {
+      "id": "pegs-01-relabel-dsl-ast-and-labeled-errors",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-pegs"],
+      "candidate_expected_skills": ["titan-programmer", "titan-pegs"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-json", "titan-protobuf"],
+      "prompt": "Implement a byte-oriented filter/query DSL parser in `query_peg.titan` (logical module `query_peg`) using Titan's standard PEG module (`peg`) with Relabel source notation compiled once at module initialization, typed AST captures, fold-capture associativity, and labeled error recovery.\n\nExport the following public types and functions:\n- `record ParseError` with `const label: string`, `const line: integer`, `const column: integer`, and `const position: integer`.\n- `union Lit` with variants `str(string)` and `num(integer)`.\n- `union Expr` with variants:\n  - `cmp(field: string, op: string, rhs: Lit)`\n  - `neg(inner: Expr)`\n  - `bin(op: string, left: Expr, right: Expr)`\n- `record BatchResult` with `const items: {Expr}` and `const skipped: integer`.\n- `function format_expr(e: Expr): string` formatting canonical S-expressions:\n  - `cmp(f, op, str(s))` -> `\"(\" .. op .. \" \" .. f .. \" \\\"\" .. s .. \"\\\")\"`\n  - `cmp(f, op, num(n))` -> `\"(\" .. op .. \" \" .. f .. \" \" .. n .. \")\"`\n  - `neg(inner)` -> `\"(not \" .. format_expr(inner) .. \")\"`\n  - `bin(op, l, r)` -> `\"(\" .. op .. \" \" .. format_expr(l) .. \" \" .. format_expr(r) .. \")\"`\n- `function parse_query(input: string): (Expr?, ParseError?)`:\n  - Parses a whole query expression (anchored with `Pattern:match` + end-of-input check, returning results inside a non-`nil` capture envelope) using a Relabel grammar compiled once in the module's final `do ... end` initializer with module-local callbacks passed via `peg.define_value`:\n    - Identifiers: `[A-Za-z_][A-Za-z0-9_]*` (note `and`/`or` keywords must NOT match identifier prefixes like `android` or `order`).\n    - Comparison operators: `==`, `!=`, `>=`, `<=`, `>`, `<`.\n    - Literals: double-quoted strings `\"...\"` (no backslash escapes; any non-`\"` byte allowed) producing `Lit.str`, or optional-minus decimal integers `'-'? %d+` producing `Lit.num`.\n    - Precedence (lowest to highest): left-associative `or` (`bin(\"or\", l, r)` via fold capture `~>`), left-associative `and` (`bin(\"and\", l, r)` via fold capture `~>`), prefix unary `!` (`neg(inner)`), parenthesized `( expr )`, and comparisons `ident op lit`.\n    - Whitespace (`%s*`, including CR/LF/CRLF) is permitted around tokens.\n  - Emit exact labeled failures (with `peg.line_column(input, pos as integer)` converting the absolute 1-based byte throw position into `(line, column)`):\n    - `expected_expr`: missing expression (e.g. empty/whitespace input, after `!`, or after `(`).\n    - `expected_op`: missing comparison operator after an identifier.\n    - `expected_value`: missing literal after an operator.\n    - `unterminated_string`: missing closing `\"` on a string literal.\n    - `expected_rparen`: missing closing `)` after a parenthesized expression.\n    - `expected_rhs`: missing right-hand operand after `and` or `or`.\n    - `trailing_input`: unexpected leftover bytes after a complete expression.\n- `function parse_batch(input: string): BatchResult`:\n  - Parses a semicolon-separated list of query expressions (allowing optional surrounding whitespace and optional trailing `;`; empty/whitespace-only input returns `items = {}`, `skipped = 0`).\n  - Uses a Relabel grammar with a labeled recovery rule (e.g. throwing `%{bad_entry}` and recovering with a `bad_entry <- [^;]*` rule) so malformed entries are skipped to the next `;` (incrementing `skipped`) while valid entries are still captured in order into `items`. Ensure repeated calls to `parse_batch` never share mutable state across matches.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_query_peg.titan"
+      ],
+      "expected_outputs": [
+        "query_peg.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_query_peg.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_query_peg oracle_query_peg",
+          "./oracle_query_peg"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "pegs01-a1-relabel-compile-once-and-precedence",
+          "concept_ids": [
+            "titan-pegs:inv-1-relabel-first-compile-once",
+            "titan-pegs:inv-2-suffix-precedence-and-caret-spacing",
+            "titan-pegs:relabel-syntax-captures-and-callbacks"
+          ],
+          "critical": "standard",
+          "check": "Compiles static Relabel grammars once in a trailing `do ... end` initializer passing module-local callbacks via dense `{peg.Definition}` (`peg.define_value`), parenthesizes multi-part `->`/`~>`/`^label` targets properly, and builds left-associative `and`/`or` trees via fold capture `~>`."
+        },
+        {
+          "id": "pegs01-a2-anchored-envelope-and-labeled-diagnostics",
+          "concept_ids": [
+            "titan-pegs:inv-4-anchored-pattern-match-vs-searching-peg-match",
+            "titan-pegs:inv-5-labels-commit-fail-reserved-predicates-suppress",
+            "titan-pegs:inv-6-non-nil-capture-envelope"
+          ],
+          "critical": "standard",
+          "check": "Anchors `parse_query` with `Pattern:match` + explicit `(!. / %{trailing_input})`, wraps results in a non-`nil` capture envelope (`{| ... |}` cast to `{value: value}` Map, never Array), places `%{label}` at exact expectation sites, and reports `(label, line, col, pos)` via `peg.line_column`."
+        },
+        {
+          "id": "pegs01-a3-labeled-recovery-and-fresh-batch-state",
+          "concept_ids": [
+            "titan-pegs:inv-3-byte-oriented-possessive-no-nullable-loops",
+            "titan-pegs:inv-7-callback-timing-and-strict-containers",
+            "titan-pegs:dynamic-combinators-recovery-and-diagnostics"
+          ],
+          "critical": "standard",
+          "check": "Implements `parse_batch` using a grammar recovery rule matching the thrown label (consuming `[^;]*` without nullable loops or backslash escapes) and keeps per-match capture/fold state isolated across calls."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-pegs` (`inv-1..inv-7`, `relabel-syntax-captures-and-callbacks`, `dynamic-combinators-recovery-and-diagnostics`). Score `idiom_score = 3` only if `./oracle_query_peg` exits `0` and `pegs01-a1..a3` hold; cap at `<= 1` if grammars recompile on every call, if `->`/`~>` suffix precedence is broken, if table captures are cast to Arrays instead of Maps, if `parse_batch` leaks mutable state across calls, or if labeled recovery is bypassed with ad-hoc string splitting."
+    },
+    {
+      "id": "pegs-02-dynamic-combinators-anchored-vs-search",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-pegs"],
+      "candidate_expected_skills": ["titan-programmer", "titan-pegs"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-json", "titan-networking"],
+      "prompt": "Implement a composable binary/text packet scanner module in `scanner_peg.titan` (logical module `scanner_peg`) using Titan's standard PEG module (`peg`) named combinators, anchored vs. searching matching, backreferences, look-behind, UTF-8 codepoint ranges, match arguments, and global substitution.\n\nExport the following public types and functions:\n- `record SpanMatch` with `const first: integer`, `const last: integer`, `const tag: string`, and `const body: string`.\n- `record TokenHit` with `const first: integer`, `const last: integer`, and `const value: string`.\n- `function build_nested_block(open_delim: string, close_delim: string): peg.Pattern`:\n  - Validates `#open_delim > 0` and `#close_delim > 0` (raising if either is empty so no nullable repetition body can be constructed).\n  - Builds a recursive `peg.grammar(\"Start\", rules)` using dense `{peg.Rule}` and programmatic combinators (`peg.sequence`, `peg.choice`, `peg.zero_or_more`, `peg.one_or_more`, `peg.negative`, `peg.literal`, `peg.any`, `peg.variable`, `peg.capture`) that matches one balanced nested block delimited by exact raw byte strings `open_delim` and `close_delim` (matching arbitrary bytes including LF and NUL) and captures the whole matched block.\n- `function match_block_anchored(pat: peg.Pattern, subject: string, init: integer?): string?`:\n  - Attempts a single anchored match at `init` via `pat:match(subject, init)` (NO forward scan; note `init == 0` starts after the last byte `#subject + 1` and returns `nil` for non-empty patterns), returning the matched string or `nil`.\n- `function search_block(pat: peg.Pattern, subject: string, init: integer?): TokenHit?`:\n  - Performs a leftmost unanchored search via `peg.match(subject, pat, init)`, returning `TokenHit(m.first, m.last, val as string)` using `m:values()`, or `nil` if not found.\n- `function search_tagged_frame(subject: string, init: integer?): SpanMatch?`:\n  - Performs a leftmost search (`peg.match`) for a tagged frame `[<tag>]<body>[/<tag>]` where `<tag>` matches `[A-Za-z_][A-Za-z0-9_]*`, the closing tag matches the exact captured opening tag via matching backreference (`=tag`), and `<body>` may contain arbitrary bytes including LF and unrelated `[/other]` sequences (possessive scan stopping only before the matching closing tag). Returns `SpanMatch(m.first, m.last, tag, body)` or `nil`.\n- `function find_after_prefix(subject: string, prefix: string, init: integer?): TokenHit?`:\n  - Validates `1 <= #prefix <= 255` (raising otherwise, respecting look-behind's 255-byte fixed-width limit).\n  - Uses `peg.behind(peg.literal(prefix))` followed by capturing one or more `[A-Za-z0-9_]` bytes and searches with `peg.match(subject, pat, init)` so `TokenHit.first` points to the first byte of the identifier (NOT `prefix`), returning `TokenHit?`.\n- `function count_utf8_codepoints_in_range(subject: string, first_cp: integer, last_cp: integer): integer`:\n  - Uses `peg.utf_range(first_cp, last_cp)` to count how many UTF-8 code points in `subject` fall within `[first_cp, last_cp]` (scanning across arbitrary bytes safely without nullable loops).\n- `function tag_tokens_with_arg(subject: string, label: string): {string}`:\n  - Uses `peg.argument(1)` inside a pattern invoked as `pat:match(subject, 1, label)` to collect every ASCII word `[A-Za-z]+` formatted as `\"<label>:<word>\"` into a Titan `{string}` Array.\n- `function redact_digits_peg(subject: string): string`:\n  - Uses `peg.gsub` to replace every contiguous ASCII digit run (`%d+`) with `\"#\" .. #matched` and returns the resulting string.\n- `function engine_info(): string`:\n  - Calls `peg.set_max_stack(800)` and returns `peg.version()`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_scanner_peg.titan"
+      ],
+      "expected_outputs": [
+        "scanner_peg.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_scanner_peg.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_scanner_peg oracle_scanner_peg",
+          "./oracle_scanner_peg"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "pegs02-a1-programmatic-grammar-and-empty-loop-safety",
+          "concept_ids": [
+            "titan-pegs:inv-1-relabel-first-compile-once",
+            "titan-pegs:inv-3-byte-oriented-possessive-no-nullable-loops",
+            "titan-pegs:inv-7-callback-timing-and-strict-containers",
+            "titan-pegs:dynamic-combinators-recovery-and-diagnostics"
+          ],
+          "critical": "standard",
+          "check": "Constructs `build_nested_block` using dense `{peg.Rule}` and named combinators (`grammar`, `rule`, `variable`, `sequence`, `choice`, `negative`, `any`, `capture`), rejects empty delimiters before building loops, and handles raw LF and embedded NUL bytes."
+        },
+        {
+          "id": "pegs02-a2-anchored-vs-search-and-init-normalization",
+          "concept_ids": [
+            "titan-pegs:inv-4-anchored-pattern-match-vs-searching-peg-match",
+            "titan-pegs:choosing-surface-and-init-normalization"
+          ],
+          "critical": "standard",
+          "check": "Distinguishes anchored `Pattern:match` (`match_block_anchored`) from leftmost searching `peg.match` (`search_block`, returning `Match?` + `Match:values()`), preserves `init == 0 -> #subject + 1` normalization, and uses `peg.gsub` cleanly."
+        },
+        {
+          "id": "pegs02-a3-backref-behind-utfrange-argument-and-limits",
+          "concept_ids": [
+            "titan-pegs:inv-8-private-engine-and-limits",
+            "titan-pegs:relabel-syntax-captures-and-callbacks",
+            "titan-pegs:dynamic-combinators-recovery-and-diagnostics"
+          ],
+          "critical": "standard",
+          "check": "Uses `=tag` matching backreference with possessive negative lookahead for `search_tagged_frame`, `peg.behind` with `1..255` length validation for `find_after_prefix`, `peg.utf_range` for multi-byte UTF-8 codepoints, `peg.argument(1)` for extra match args, and `peg.set_max_stack`/`peg.version`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-pegs` (`inv-1`, `inv-3`, `inv-4`, `inv-7`, `inv-8`, `choosing-surface-and-init-normalization`, `relabel-syntax-captures-and-callbacks`, `dynamic-combinators-recovery-and-diagnostics`). Score `idiom_score = 3` only if `./oracle_scanner_peg` exits `0` and `pegs02-a1..a3` hold; cap at `<= 1` if `match_block_anchored` scans forward instead of using anchored `Pattern:match`, if `init == 0` is clamped to `1`, if `peg.behind` is bypassed by consuming `prefix`, or if `search_tagged_frame` fails on mismatched inner closing tags."
+    }
+  ]
+}

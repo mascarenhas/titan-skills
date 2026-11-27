@@ -1,0 +1,139 @@
+local fs = import "fs"
+local ledger_db = import "ledger_db"
+local reflect = import "reflect"
+local sqlite3 = import "sqlite3"
+
+function main(args: {string}): integer
+  local db_path = "./test_ledger.db"
+  do fs.unlink(db_path) catch end
+  defer do fs.unlink(db_path) catch end
+
+  do
+    local ledger = ledger_db.open(db_path)
+    defer ledger:close()
+
+    -- Verify Ledger encapsulates sqlite3.Connection in local field(s)
+    case reflect.inspect(ledger)
+    when is_record(rv) then
+      if rv.type.all_public then
+        raise "Ledger must keep Connection in a local field"
+      end
+    else
+      raise "Ledger must be a record"
+    end
+
+    -- 1. Create accounts with non-nil and nil optional note
+    ledger:create_account("alice", 100, true, "primary")
+    ledger:create_account("bob", 25, false, nil)
+
+    local a1? = ledger:get_account("alice")
+    if a1 == nil or a1.name ~= "alice" or a1.balance ~= 100
+       or not a1.active or a1.note ~= "primary" then
+      raise "alice AccountSummary mismatch"
+    end
+
+    local b1? = ledger:get_account("bob")
+    if b1 == nil or b1.name ~= "bob" or b1.balance ~= 25
+       or b1.active or b1.note ~= nil then
+      raise "bob AccountSummary mismatch"
+    end
+
+    if ledger:get_account("nonexistent") ~= nil then
+      raise "missing account must return nil"
+    end
+
+    -- 2. Record entries with RETURNING id, Blob with NUL/high bytes, empty Blob("") vs nil, trailing NULL
+    local id1 = ledger:record_entry("alice", 50, true, "\0\1\2\255", "deposit")
+    local id2 = ledger:record_entry("alice", 10, false, "", nil)
+    local id3 = ledger:record_entry("alice", 5, true, nil, nil)
+    if id1 <= 0 or id2 <= id1 or id3 <= id2 then
+      raise "RETURNING ids not monotonically increasing"
+    end
+
+    local entries = ledger:list_entries("alice")
+    if #entries ~= 3 then raise "expected 3 entries, got " .. #entries end
+
+    if entries[1].id ~= id1 or entries[1].amount ~= 50 or not entries[1].settled
+       or entries[1].receipt == nil or entries[1].receipt.bytes ~= "\0\1\2\255"
+       or entries[1].memo ~= "deposit" then
+      raise "entry 1 binary Blob/fields mismatch"
+    end
+
+    -- Empty Blob("") must remain non-nil Blob("") distinct from SQL NULL
+    if entries[2].id ~= id2 or entries[2].settled
+       or entries[2].receipt == nil or entries[2].receipt.bytes ~= ""
+       or entries[2].memo ~= nil then
+      raise "entry 2 empty Blob vs NULL mismatch"
+    end
+
+    if entries[3].id ~= id3 or not entries[3].settled
+       or entries[3].receipt ~= nil or entries[3].memo ~= nil then
+      raise "entry 3 NULL fields mismatch"
+    end
+
+    -- 3. Savepoint rollback on CHECK(balance >= 0) constraint failure:
+    -- balances must stay (100, 25), while outer "attempt:overdraft" audit entry persists!
+    local ok_over = ledger:transfer_with_savepoint("alice", "bob", 150, "overdraft")
+    if ok_over then raise "overdraft transfer must return false" end
+
+    local a_over? = ledger:get_account("alice")
+    local b_over? = ledger:get_account("bob")
+    if a_over == nil or a_over.balance ~= 100 or b_over == nil or b_over.balance ~= 25 then
+      raise "balances mutated despite savepoint rollback on CHECK constraint"
+    end
+
+    -- 4. Savepoint rollback on missing destination account (0 rows updated):
+    local ok_missing = ledger:transfer_with_savepoint("alice", "charlie", 10, "ghost")
+    if ok_missing then raise "missing destination transfer must return false" end
+    local a_miss? = ledger:get_account("alice")
+    if a_miss == nil or a_miss.balance ~= 100 then
+      raise "alice balance mutated despite missing destination savepoint rollback"
+    end
+
+    -- 5. Successful savepoint transfer
+    local ok_good = ledger:transfer_with_savepoint("alice", "bob", 40, "rent")
+    if not ok_good then raise "valid transfer must return true" end
+    local a_good? = ledger:get_account("alice")
+    local b_good? = ledger:get_account("bob")
+    if a_good == nil or a_good.balance ~= 60 or b_good == nil or b_good.balance ~= 65 then
+      raise "balances mismatch after committed transfer"
+    end
+
+    -- Verify audit attempts + settled transfer entries were recorded
+    local all_alice = ledger:list_entries("alice")
+    local saw_overdraft_attempt = false
+    local saw_ghost_attempt = false
+    local saw_settled_rent = false
+    for i = 1, #all_alice do
+      local e = all_alice[i]
+      if e.memo == "attempt:overdraft" and not e.settled and e.amount == 0 then
+        saw_overdraft_attempt = true
+      elseif e.memo == "attempt:ghost" and not e.settled and e.amount == 0 then
+        saw_ghost_attempt = true
+      elseif e.memo == "rent" and e.settled and e.amount == -40 then
+        saw_settled_rent = true
+      end
+    end
+    if not (saw_overdraft_attempt and saw_ghost_attempt and saw_settled_rent) then
+      raise "expected savepoint audit attempts and settled transfer entry"
+    end
+
+    -- Idempotent double-close check
+    ledger:close()
+    ledger:close()
+  end
+
+  -- 6. Re-open disposable DB independently to confirm clean durability & no leaked locks
+  local verify_db = sqlite3.connect(db_path)
+  defer verify_db:close()
+  local q = verify_db:prepare("SELECT balance FROM accounts WHERE name = ?")
+  defer q:close()
+  local cur = q:query("bob")
+  defer cur:close()
+  local row? = cur:fetch()
+  if row == nil or (row:get(1) as integer) ~= 65 then
+    raise "persisted bob balance mismatch after reopen"
+  end
+
+  return 0
+end

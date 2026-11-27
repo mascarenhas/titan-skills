@@ -1,143 +1,37 @@
 ---
 name: titan-language-server
-description: Configure, run, and query the standalone Titan language server through omp's lsp tool or over stdio, including multi-root workspaces, per-slice SDK selection with compiler_root and titan-config.local.lua, trustedRoots policy, titan/workspaceStatus, and interpreting diagnostics, hover, definition, references, and raw completion results. Use when querying Titan code intelligence from an agent session, alongside titan-programmer whenever the queried .titan code is read, written, or reviewed; use titan-completion instead when changing compiler completion contexts or language-server completion internals.
+description: Use to configure, run, or query Titan LSP (diagnostics, completion, hover, definition, refs, rename). Covers titan-language-server via omp lsp/stdio, textDocument/completion, multi-root workspaces, compiler_root/titan-config.local.lua, trustedRoots, target="browser", workspaceStatus; never load titan-completion when querying LSP (only for editing compiler completion.lua).
 ---
 
-# Titan language server in omp
+# Titan Language Server (`omp lsp` & Workspaces)
 
-Use this skill when configuring or querying `titan-language-server` through omp's
-`lsp` tool, including across multiple Titan worktrees and per-slice SDK
-installations. Load [`titan-programmer`](../titan-programmer/SKILL.md) before
-reading, writing, or reviewing `.titan` source, and
-[`titan-tester`](../titan-tester/SKILL.md) for native Titan tests. Load
-[`titan-completion`](../titan-completion/SKILL.md) instead when changing
-compiler completion contexts, detached descriptors, or language-server
-completion internals (and `vscode-titan`'s `.agents/skills/vscode-titan-development/SKILL.md`
-when working in `vscode-titan`).
+Configure, run, and query `titan-language-server` (`Content-Length`-framed JSON-RPC over stdio; logs on stderr; **`shutdown` takes no `params` field**—`-32602` if `params` is sent) via omp's `lsp` tool or stdio. **All LSP queries including `textDocument/completion` stay in this skill** (do NOT load `skill://titan-completion` unless editing compiler Lua `completion.lua`; inside `vscode-titan`, see `docs/{server-data-flow,sqlite-backend-storage,completion,native-build}.md`). Pair with `skill://titan-programmer` for `.titan` edits and `skill://titan-tester` for native tests.
 
-In `vscode-titan`, user settings and multi-root behavior live in `README.md`,
-router/worker data flow and SDK compatibility in `docs/server-data-flow.md`,
-SQLite cache rules in `docs/sqlite-backend-storage.md`, completion in
-`docs/completion.md`, and build rules in `docs/native-build.md`.
+## Non-negotiable invariants
 
-## What the server does and does not do
+1. **Saved-file baseline & unsupported methods:** `diagnostics`, `definition`, `references`, `rename`, and `textDocument/foldingRange` read **saved disk files** under `include` (`titan-config.lua`, default `{"./src"}`) via `source_module_roots` (default `{"./src"}`)—save before querying. `symbols`, `type_definition`, `implementation`, and `code_actions` are **unimplemented** (`MethodNotFound` `-32601`; never read as empty).
+2. **Exploratory aid & read-only `apply=false`:** LSP never replaces `titanc`, `titan.test`, or Busted. `rename`/`rename_file` default to `apply=true` in omp—**always pass `apply=false`** unless authorized to edit. Timeouts, early empty reads, or `isIncomplete: true` are inconclusive, never `OK`.
+3. **Failed modules & out-of-scope targets:** Modules failing checking (or missing `extra_ffi_include_dirs`/`extra_ffi_cppflags`) emit `diagnostics` but **no** `hover`/`definition`/`references` for that generation (valid siblings still answer). C FFI (`foreign import`/`ffi.*`/`foreign` types) has hover + in-module refs only (no def/rename); `source_module_roots` outside `include` and binary/stdlib providers give hover/completion without source defs.
+4. **Per-slice SDK (`compiler_root`), trust & no fallback:** Never edit tracked `titan-config.lua` for local pins; put **only** `compiler_root = "/path/to/prefix"` in untracked `titan-config.local.lua` (any other key, empty/non-string, or syntax error fails the root). Root must match `initOptions.trustedRoots` or `TITAN_LS_TRUSTED_ROOTS`, else fails (`-32803`) with **zero fallback** to the default SDK.
+5. **Browser projects (`target = "browser"`):** Type-check against `<PREFIX>/lib/titan-browser/0.6/{titan.a,analysis-target,absent-modules}` (`driver.browser_analysis_target`) with no `wasi-sdk`/Binaryen unless a source uses `foreign import` C probes (native embedded inventories never participate).
+6. **Worktree `.titan-ls/` & `lsp.json` hygiene:** Workers write `<root>/.titan-ls/{index.sqlite3,var/cache/titan-probes/2}`. Never touch another agent's `.titan-ls/` or edit user/project `lsp.json` without authorization; remove your own `.titan-ls/` and `titan-config.local.lua` before committing if unignored.
 
-`titan-language-server` is a native Titan executable speaking `Content-Length`-framed
-JSON-RPC over stdio (stdout is reserved for LSP frames; logs go to stderr).
+## LSP capability matrix
 
-- **Implemented operations:**
-  - **Saved-file features (`definition`, `references`, `rename`,
-    `textDocument/foldingRange`, `diagnostics`):** operate on saved disk files
-    under the root's `include` directories (`titan-config.lua`, default
-    `{ "./src" }`) resolved through `source_module_roots` (default
-    `{ "./src" }`). Save files to disk before querying them.
-  - **Work-done progress and pull diagnostics (`$/progress`,
-    `textDocument/diagnostic`):** when the client advertises
-    `window.workDoneProgress` (as omp does), each worker wraps initial indexing
-    and every saved refresh in `window/workDoneProgress/create`
-    (`titan-progress/<pid>/<n>`) and `$/progress` `begin` / `report` / `end`,
-    sending `end` only after the completed generation and its diagnostics are
-    published so omp waits for indexing automatically. `textDocument/diagnostic`
-    (`diagnosticProvider`) answers from the same published rows as push, carries
-    a `resultId` (`unchanged` when `previousResultId` matches), and acts as a
-    freshness barrier: every pull requests a coalesced saved-change refresh pass
-    (scan-only when nothing on disk is dirty) and answers from the generation
-    that pass completed, revalidating the file, its folder contributors, and its
-    dependencies (a `.titan` file the project does not contain answers an empty
-    report).
-  - **Buffer-based completion and private hover (`textDocument/completion`,
-    `hover`):** completion (triggered by `.` and `:` or raw request) analyzes
-    captured open/changed editor buffers against the committed saved-file
-    dependency baseline. `hover` reads the saved generation until completion
-    activates private per-document analysis on that module; afterward, hover
-    follows edits to that module across untouched tokens with a 200 ms debounced
-    refresh.
-  - **Router inspection (`titan/workspaceStatus`):** returns the live root
-    registry and each worker's observed SDK and probe prefix.
-- **Unimplemented LSP methods:** the server does **not** implement
-  `textDocument/documentSymbol`, `workspace/symbol`, `textDocument/typeDefinition`,
-  `textDocument/implementation`, `textDocument/codeAction`, or
-  `workspace/willRenameFiles`. In omp, `lsp` actions `symbols`,
-  `type_definition`, `implementation`, and `code_actions` fail with
-  `MethodNotFound` (`-32601`); never interpret that failure as "no symbols" or
-  missing types.
-- **Out-of-scope navigation:**
-  - **C FFI declarations (`foreign import`, `ffi.*`, `foreign` types):** support
-    hover and within-module references, but have **no** definition or rename
-    target.
-  - **External source and binary modules:** paths in `source_module_roots`
-    outside `include` are resolved for typechecking, not watched, indexed, or
-    definition targets. Standard-library modules backed by embedded or static
-    archive metadata provide hover and completion without source definition
-    locations unless their `.titan` sources are in the root's `include` set.
-- **Exploratory aid only:** LSP answers never replace running `titanc`, native
-  `titan.test` executables, or Busted suites required by your assignment.
+| Feature | omp `lsp` action / method | Baseline & rules |
+| --- | --- | --- |
+| Diagnostics (pull + push) | `diagnostics` (`textDocument/diagnostic`, `$/progress`) | Saved files; always pass concrete `.titan` file/glob (`file="*"` runs non-Titan checkers). Pull refreshes saved state (`resultId`); unowned `.titan` returns empty. |
+| Nav & Rename | `definition`, `references`, `rename` | Saved files under `include`; 1-based `line` + required `symbol` (`name#N`). Pass `apply=false` to preview. |
+| Folding | `request` `textDocument/foldingRange` | Saved files under `include`. |
+| Completion & hover | `request` `textDocument/completion`, `hover` | Handled here (never load `titan-completion` to query LSP). Completion (`.`/`:` or raw 0-based `line` + UTF-16 `character`) checks unsaved buffer vs saved deps; once active, `hover` tracks edits (200 ms debounce). |
+| Router status | `request` `titan/workspaceStatus` | Live roots: `root`, `origin`, `trusted`, `compilerRoot`, `state`, `failure`, `workerPid`, `generation`, `titanRoot`, `probePrefix`. |
+| **Unimplemented** | `symbols`, `type_definition`, `implementation`, `code_actions`, `willRenameFiles` | Fail with `MethodNotFound` (`-32601`). |
 
-## Multi-root router and per-root workers
+## Multi-root router, server binary, and `lsp.json`
 
-The server runs as a session router that starts one isolated worker process per
-Titan root:
-
-- **Workspace folders, released roots, and lazy discovery:** initial folders
-  come from `initialize.workspaceFolders` (else `rootUri`, `rootPath`, or launch
-  `cwd`), canonicalized with `realpath`. When you query a `.titan` file in a
-  sibling git checkout or worktree outside omp's launch `cwd`, omp finds its
-  nearest `.git` ancestor and sends `workspace/didChangeWorkspaceFolders` before
-  `didOpen` to add that checkout, and omp's shared mux removes the sibling
-  folder again when the call releases the server. Removing a folder releases the
-  root (`origin: "released"`) without stopping its warm worker, so the next call
-  reuses the worker without restarting or re-indexing until idle eviction or the
-  worker cap stops it. Each document routes by canonical path to the **most
-  specific** of the claimed roots containing it and its nearest ancestor
-  `titan-config.lua` (and `publishDiagnostics` is forwarded only from that
-  owning root), so a configured project nested inside a folder (even one omp
-  added because of an incidental `.git`) becomes its own `discovered` root. If a
-  file has no claiming root and no `titan-config.lua` ancestor, it is unowned
-  and requests fail with `RequestFailed` (`-32803`) naming the file and
-  `titan-config.lua`.
-- **Worker cap, idle eviction, and crash limit:** at `initialized`, initial
-  roots activate up to `maxWorkers` (default `4`; set via
-  `initializationOptions.maxWorkers` or `TITAN_LS_MAX_WORKERS`); remaining and
-  later roots activate on their first routed message. A worker is idle when its
-  root has no open documents, no request in flight, and no active indexing pass;
-  idle workers stop after `idleTimeoutSeconds` (default `600`, fractional values
-  accepted) or are evicted least-recently-used first when a new root needs a
-  slot. If all `maxWorkers` slots are busy, activating another root fails with
-  `RequestFailed` naming the cap. Open document buffers are replayed when a
-  worker respawns after eviction, reload, or crash. Three crashes within 60
-  seconds mark the root `failed` until its settings change or `lsp(action="reload")`.
-
-## Obtaining a server binary and serving multiple SDKs
-
-Build the server from a `vscode-titan` checkout (or disposable copy) against an
-installed, read-only Titan SDK (requires GNU Make 4.2+, a C toolchain, the SDK,
-and OpenSSL 3 + `pkg-config` for system-OpenSSL SDKs; does not need `npm ci`):
-
-```sh
-make -C /path/to/vscode-titan -j2 server TITAN_PREFIX=/path/to/titan-sdk
-```
-
-This produces `bin/titan-language-server` (or use `make install-server INSTALL_PREFIX=...`).
-Never modify or rebuild a shared or maintainer SDK prefix.
-
-**One executable serves every SDK:** you do not need to build a separate
-`titan-language-server` per slice. A root without `compiler_root` uses the
-router's `TITAN_ROOT` and `TITAN_LS_LUA_*`. A root that sets `compiler_root`
-loads that prefix's compiler Lua modules, native Lua modules, SDK headers, and
-static standard-library archive in its own worker process. The only component
-fixed by the server binary is the linked `titan` C support table: if a slice SDK's
-compiler calls a new C support function that the running server binary lacks,
-that root fails with a clear error, fixed by building `titan-language-server`
-against a matching SDK (see `vscode-titan` `README.md` and
-`docs/server-data-flow.md#compiler-compatibility`).
-
-## Configuring omp (`lsp.json`)
-
-Omp loads LSP config per launch `cwd` (merging `~/.omp/agent/lsp.json` with
-`<cwd>/.omp/lsp.json` and `<cwd>/lsp.json`). Do not edit user or project
-`lsp.json` without authorization. Because omp's `ServerConfig` has **no `env`
-field**, pass environment variables via `/usr/bin/env` and clear contaminating
-ambient variables:
+- **Routing & worker pool:** Initial roots come from `initialize.workspaceFolders` (`realpath`). Documents route to the **most specific** claimed root or nearest ancestor `titan-config.lua` (`discovered`); unowned files fail `RequestFailed` (`-32803`). When omp's mux drops a sibling folder, the root becomes `origin: "released"` with its warm worker retained (`file=` re-adds as `"folder"`). Caps: `maxWorkers` (default `4`, `TITAN_LS_MAX_WORKERS`), idle LRU eviction (`idleTimeoutSeconds`, default `600`), open buffers replayed on respawn, 3 crashes in 60 s -> `failed` until settings change/`reload`.
+- **One binary serves every SDK:** Build from `vscode-titan` against a read-only SDK: `make -C /path/to/vscode-titan -j2 server TITAN_PREFIX=/path/to/sdk` -> `bin/titan-language-server` (never rebuild a maintainer SDK). Default roots use `TITAN_ROOT` + `TITAN_LS_LUA_*`; roots with `compiler_root` load that prefix's compiler Lua, native modules, headers, and static stdlib archive per worker. Rebuild only if a slice compiler needs a newer linked `titan` C support symbol.
+- **`lsp.json`:** Merged from `~/.omp/agent/lsp.json`, `<cwd>/.omp/lsp.json`, and `<cwd>/lsp.json`. Omp's `ServerConfig` has **no `env` field**—invoke via `/usr/bin/env` unsetting `TITAN_PREFIX` (only relocates probe cache to `<TITAN_PREFIX>/roots/<digest>`), `TITAN_PATH*`, `TITAN_SOURCE_PATH`, and `LUA_*`. Set `TITAN_ROOT` + verbatim `TITAN_LS_LUA_PATH`/`TITAN_LS_LUA_CPATH` (no `;;`). Avoid user-scope `rootMarkers: ["."]`; project overrides replace `initOptions` whole; leave `pullDiagnostics` unset in omp. Run `lsp(action="reload", file="*")` after edits.
 
 ```json
 {
@@ -145,146 +39,66 @@ ambient variables:
     "titan": {
       "command": "/usr/bin/env",
       "args": [
-        "-u", "TITAN_PREFIX",
-        "-u", "TITAN_PATH_0_6",
-        "-u", "TITAN_PATH",
-        "-u", "TITAN_SOURCE_PATH",
-        "-u", "LUA_PATH",
-        "-u", "LUA_CPATH",
-        "-u", "LUA_PATH_5_5",
-        "-u", "LUA_CPATH_5_5",
-        "TITAN_ROOT=/path/to/default-sdk",
-        "TITAN_LS_LUA_PATH=/path/to/default-sdk/share/lua/5.5/?.lua;/path/to/default-sdk/share/lua/5.5/?/init.lua",
-        "TITAN_LS_LUA_CPATH=/path/to/default-sdk/lib/lua/5.5/?.so",
+        "-u", "TITAN_PREFIX", "-u", "TITAN_PATH_0_6", "-u", "TITAN_PATH", "-u", "TITAN_SOURCE_PATH",
+        "-u", "LUA_PATH", "-u", "LUA_CPATH", "-u", "LUA_PATH_5_5", "-u", "LUA_CPATH_5_5",
+        "TITAN_ROOT=/path/to/sdk",
+        "TITAN_LS_LUA_PATH=/path/to/sdk/share/lua/5.5/?.lua;/path/to/sdk/share/lua/5.5/?/init.lua",
+        "TITAN_LS_LUA_CPATH=/path/to/sdk/lib/lua/5.5/?.so",
         "/path/to/bin/titan-language-server"
       ],
-      "fileTypes": [".titan"],
-      "languageId": "titan",
+      "fileTypes": [".titan"], "languageId": "titan",
       "rootMarkers": ["titan-config.lua", "titan-config.local.lua", ".git"],
-      "initOptions": {
-        "trustedRoots": ["/tmp/titan-session", "/home/user/Code"],
-        "insertCallSnippets": false
-      },
+      "initOptions": { "trustedRoots": ["/tmp/titan-session", "/home/user/Code"], "insertCallSnippets": false },
       "warmupTimeoutMs": 30000
     }
   }
 }
 ```
 
-- **`TITAN_ROOT` vs `TITAN_PREFIX`:** `TITAN_ROOT` selects the default SDK.
-  `TITAN_PREFIX` in the server environment only moves the C probe cache
-  (default `<root>/.titan-ls`, or `<TITAN_PREFIX>/roots/<digest>` when inherited);
-  unset `TITAN_PREFIX` so each root uses `<root>/.titan-ls`.
-- **Lua paths:** `TITAN_LS_LUA_PATH` and `TITAN_LS_LUA_CPATH` are used verbatim
-  by default roots; never use `;;` or ambient `LUA_PATH`/`LUA_CPATH`.
-- **`rootMarkers`:** checked in omp's launch `cwd` only. Adding `"."` makes the
-  entry eligible in every `cwd` where the config loads, so a user-level entry
-  would start the server in any project with `.titan` files; prefer project
-  scope or omit `"."` when that is unwanted.
-- **`initOptions`:** `trustedRoots` (array of absolute paths; also configurable
-  via `TITAN_LS_TRUSTED_ROOTS` using the OS path-list separator), `insertCallSnippets`, `maxWorkers`, and
-  `idleTimeoutSeconds`. Leave `pullDiagnostics` unset/enabled in omp
-  (`pullDiagnostics: false` omits `diagnosticProvider` and is used by the VS
-  Code extension to avoid duplicate push/pull collections). Project overrides
-  replace `initOptions` as a whole, so repeat the full object in any override.
-  Run `lsp(action="reload", file="*")` after editing `lsp.json`.
+## Per-slice SDKs, omp queries, LDoc hover, and compiler LS API
 
-## Per-slice SDK selection, trust, and reload
-
-For a slice worktree `/tmp/titan-NNN/<slice>/source` with installed prefix
-`/tmp/titan-NNN/<slice>/prefix`:
-
-1. **Keep tracked `titan-config.lua` untouched.** Write an untracked
-   `titan-config.local.lua` in the slice root assigning **only** `compiler_root`:
-   ```lua
-   compiler_root = "/tmp/titan-NNN/slice-a/prefix"
-   ```
-   Relative paths resolve from the root. `titan-config.local.lua` may assign
-   only `compiler_root` (any other key, non-string/empty value, or syntax error
-   fails the root). Remove `titan-config.local.lua` before committing if
-   `.gitignore` does not ignore it.
-2. **Trust and no-fallback rule:** a root is trusted only when its canonical
-   path is equal to or inside `initOptions.trustedRoots` or
-   `TITAN_LS_TRUSTED_ROOTS`. An untrusted root that sets `compiler_root` publishes
-   a `configuration` diagnostic on the config file, starts no worker, and fails
-   requests with `RequestFailed` (`-32803`) naming `trustedRoots` /
-   `TITAN_LS_TRUSTED_ROOTS`. Likewise, a missing prefix, incomplete SDK layout,
-   unreadable override, or ABI/API mismatch fails that root and **never** falls
-   back to the default SDK.
-3. **Reinstalling a slice prefix:** workers load compiler Lua and stdlib
-   interfaces from the installed prefix, not from uncommitted source edits. After
-   reinstalling into `<slice>/prefix` or editing `titan-config.local.lua`, the
-   router detects the changed settings or SDK identity (within ~1 s or on the
-   next routed request) and restarts only that root's worker. Run
-   `lsp(action="reload", file="*")` to force immediate revalidation across all
-   roots.
-
-## Inspecting state and querying from omp
-
-- **Position rules:** standard omp actions (`diagnostics`, `hover`,
-  `definition`, `references`, `rename`) take 1-based `line` and `symbol`
-  (`symbol="name#2"` selects the 2nd occurrence on `line`). On project-aware
-  servers, `definition`, `references`, and `rename` **require** `symbol` when
-  `line` is given. Raw `lsp(action="request", ...)` payloads take **zero-based
-  `line` and UTF-16 `character`** computed from the current saved text (never
-  reused from an earlier file revision).
-- **`titan/workspaceStatus`:** returns `{ "roots": [ ... ] }` where each root
-  reports `root`, `origin` (`"folder"` | `"discovered"` | `"released"`),
-  `trusted`, `compilerRoot` (string | `null`), `state` (`"inactive"` |
-  `"starting"` | `"ready"` | `"failed"` | `"evicted"`), optional `failure`,
-  `workerPid` (integer | `null`), `generation`, and the worker's self-reported
-  `titanRoot` and `probePrefix` (string | `null`). Because omp's mux removes a
-  sibling checkout folder after each call, a file-less `titan/workspaceStatus`
-  call may show a previously queried sibling root with `origin: "released"`
-  (still `state: "ready"` with its warm worker), whereas passing `file=` for a
-  `.titan` file in that checkout causes omp to re-add (or initially register) the
-  folder first (`origin: "folder"`).
+- **Slice pin & refresh:** Put `compiler_root = "/tmp/titan-NNN/slice/prefix"` in `<slice>/source/titan-config.local.lua` (relative paths resolve from root). Workers read installed prefixes, not uncommitted edits; after reinstalling or editing, the router auto-restarts that worker (~1 s or next request), or force via `lsp(action="reload", file="*")`.
 
 ```text
-# Inspect live roots, trust, compilerRoot, titanRoot, probePrefix, workerPid, and failure messages
-lsp(action="request", query="titan/workspaceStatus",
-    file="/tmp/titan-NNN/slice-a/source/titan/string.titan")
-# Saved-file diagnostics (always pass a concrete .titan file or .titan glob;
-# file="*" runs omp's Rust/TS/Go/Python CLI checkers, not Titan)
-lsp(action="diagnostics", file="/tmp/titan-NNN/slice-a/source/titan/string.titan", timeout=60)
-
-# Hover, definition, references, and folding ranges
-lsp(action="hover", file="/tmp/titan-NNN/slice-a/source/titan/string.titan", line=42, symbol="split")
-lsp(action="definition", file="/tmp/titan-NNN/slice-a/source/titan/string.titan", line=42, symbol="split")
-lsp(action="references", file="/tmp/titan-NNN/slice-a/source/titan/string.titan", line=42, symbol="split#1")
-lsp(action="request", file="/tmp/titan-NNN/slice-a/source/titan/string.titan", query="textDocument/foldingRange")
-
-# Raw completion (zero-based line and UTF-16 character in payload)
-lsp(action="request", file="/tmp/titan-NNN/slice-a/source/titan/string.titan",
-    query="textDocument/completion",
-    payload='{"textDocument":{"uri":"file:///tmp/titan-NNN/slice-a/source/titan/string.titan"},"position":{"line":41,"character":14}}')
-
-# Rename preview (ALWAYS pass apply=false unless authorized to mutate files)
-lsp(action="rename", file="/tmp/titan-NNN/slice-a/source/titan/string.titan",
-    line=42, symbol="split", new_name="split_bytes", apply=false)
+lsp(action="request", query="titan/workspaceStatus", file="/tmp/slice/source/titan/string.titan")
+lsp(action="diagnostics", file="/tmp/slice/source/titan/string.titan", timeout=60)
+lsp(action="hover", file="/tmp/slice/source/titan/string.titan", line=42, symbol="split")
+lsp(action="definition", file="/tmp/slice/source/titan/string.titan", line=42, symbol="split")
+lsp(action="references", file="/tmp/slice/source/titan/string.titan", line=42, symbol="split#1")
+lsp(action="rename", file="/tmp/slice/source/titan/string.titan", line=42, symbol="split", new_name="split_bytes", apply=false)
+lsp(action="request", file="/tmp/slice/source/titan/string.titan", query="textDocument/completion",
+    payload='{"textDocument":{"uri":"file:///tmp/slice/source/titan/string.titan"},"position":{"line":41,"character":14}}')
 ```
 
-## Interpreting results and `.titan-ls` hygiene
+- **LDoc comments (`doc/language/modules.md`, `doc/implementation/documentation-comments.md`):** `---` + `--` continuations (or `--[[-- ... ]]`). Blank lines terminate a block; empty `--` separates paragraphs. `@module` before first token documents the module (main file in folder modules); owner `@field` provides field doc fallback; stdlib uses `@usage <file.md>[#<anchor>]`. Serialized via `types.Documented` / `Type.Module._type_documentation` (invalidating `.titan` source-import facts on edit) and stripped by `types.serialize_semantic` (no runtime ABI/reflection effect).
+- **Compiler LS API (`doc/implementation/driver.md#language-server-compiler-api`):** `driver.LANGUAGE_SERVER_API_VERSION = 1` prerelease (clients reject mismatches). Core APIs: `driver.compiler_root()`/`titanc --print-root`, `driver.new_resolver_context{ analysis_only = true, target = ..., browser_analysis_target = ..., io = ..., cache_adapter = ... }`, `compact`/`encode`/`decode_project_entry`, `project_entries_registry`, `restat_c_header_dependencies`, `classify_source_filename`/`target_selection_labels`, `resolve_external_modules`.
 
-- **Modules that fail checking publish no semantic facts (`hover`, `definition`,
-  `references`):** when a module fails checking (for example because of a syntax
-  or type error inside that file, or missing `extra_ffi_include_dirs` /
-  `extra_ffi_cppflags` in `titan-config.lua`), `diagnostics` reports the
-  compiler error, while `hover`, `definition`, and `references` for symbols in
-  that failed module (and its dependents) return nothing (`No hover information`
-  / `No definition found`) for that generation; independently valid modules in
-  the same project still answer both.
-- **Empty, incomplete, or timed-out results are inconclusive:** omp waits for
-  `$/progress` and pulls `textDocument/diagnostic` for current saved bytes, but
-  a `diagnostics` timeout (when indexing exceeds omp's call `timeout`) is **not**
-  a clean `OK` result. Read-only requests (`hover`, `foldingRange`, `completion`)
-  issued before initial indexing finishes can still return empty results or
-  `isIncomplete: true`, and read the preceding completed generation while a
-  background refresh runs.
-- **Per-root `.titan-ls` caches:** each worker writes `<root>/.titan-ls/index.sqlite3`
-  and (by default) `<root>/.titan-ls/var/cache/titan-probes/2`. Remove your own
-  worktree's `.titan-ls/` and `titan-config.local.lua` before committing if a
-  clean worktree is required. **Never delete another agent's `.titan-ls/`
-  cache** or touch a sibling's worktree.
-- **Never mutate files without authority:** `rename` and `rename_file` default
-  to `apply=true` in omp; always pass `apply=false` for read-only work.
+```titan
+--- Counter helpers for hover docs.
+--
+-- Supports bounded increments.
+-- @module counts
+
+--- Counter with an immutable label.
+-- @field label Counter name.
+record Counter
+  const label: string
+  value: integer
+end
+
+--- Increment counter by one.
+-- @param counter Target counter.
+-- @return Updated count.
+function step(counter: Counter): integer
+  counter.value = counter.value + 1
+  return counter.value
+end
+```
+
+## Pre-delivery verification checklist
+
+- [ ] Saved `.titan` files to disk before querying `diagnostics`, `definition`, `references`, or `rename`.
+- [ ] Passed concrete `.titan` path/glob to `diagnostics` (never `file="*"`) and `apply=false` on read-only `rename`.
+- [ ] Checked root trust, `compilerRoot`, `titanRoot`, `probePrefix`, and `state == "ready"` via `titan/workspaceStatus` when debugging SDK/FFI errors.
+- [ ] Treated `MethodNotFound`, timeouts, and failed-module empty hover as inconclusive; verified with `titanc` / tests.
+- [ ] Removed only your own worktree's `.titan-ls/` and `titan-config.local.lua` before committing.

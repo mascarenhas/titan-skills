@@ -1,0 +1,254 @@
+{
+  "skill_name": "titan-stdlib",
+  "evals": [
+    {
+      "id": "stdlib-01-async-fs-journal-defer-no-finalizer",
+      "baseline_anchor": true,
+      "baseline_specialist_available": false,
+      "baseline_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-stdlib", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": [],
+      "forbidden_skills": ["titan-sqlite3", "titan-pegs"],
+      "prompt": "Implement an asynchronous append/compaction file journal and lexical path helper module in `journal.titan` (logical module `journal`) using Titan's standard filesystem, path, string, and async modules.\n\nExport the following public types and functions:\n- `record Entry` with fields `const seq: integer` and `const payload: string`.\n- `record PathInfo` with fields `const normalized: string`, `const dir: string`, `const base: string`, `const ext: string`, `const slash_path: string`, `const is_abs: boolean`, and `const sep: string`.\n- `function inspect_path(raw: string): PathInfo`: performs pure lexical path inspection (without touching disk): first compute `norm = path.normalize(raw)`, then derive `dir = path.dirname(norm)`, `base = path.basename(norm)`, `ext = path.extension(norm)`, `slash_path = path.to_slash(norm)`, `is_abs = path.is_absolute(norm)`, and `sep = path.separator` (unwrapped as `string`), returning `PathInfo(norm, dir, base, ext, slash_path, is_abs, sep)`.\n- `function journal_path(dir: string, sub: string, filename: string): string`: joins all three path fragments lexically, preserving earlier prefixes even if `sub` begins with a separator.\n- `function append_record(file_path: string, seq: integer, payload: string)`: validates `seq > 0` (raising otherwise), opens `file_path` in append mode (`\"a\"`), pairs the file handle immediately with deterministic lexical `defer` cleanup, writes `<seq>|<payload>\\n`, and flushes before returning.\n- `function read_entries(file_path: string): {Entry}`: returns an empty Array `{}` if `file_path` does not exist; otherwise opens `file_path` in read mode, reads every non-empty `<seq>|<payload>` line into `Entry(seq, payload)` (using deterministic cleanup without double-closing the handle), and returns the entries in order.\n- `function compact_journal(file_path: string, min_seq: integer): integer`: returns `0` if `file_path` does not exist; otherwise reads all entries, retains only entries with `seq >= min_seq` in order, writes them to a sibling staging file (`<dir>/<base>.compact.tmp`) using explicit file open + `defer` close + `flush()`, closes the staging file before atomically renaming it onto `file_path`, and returns the retained count.\n- `function stat_kind(target: string): string?`: returns the filesystem entry kind (`\"file\"`, `\"directory\"`, `\"symlink\"`, `\"other\"`) following symlinks, or `nil` when missing or a dangling symlink.\n- `function lstat_kind(target: string): string?`: returns the filesystem entry kind without following symlinks (returning `\"symlink\"` for a dangling symlink, and `nil` when missing).\n- `function watch_once(dir: string, trigger: function()): {string}`: creates a filesystem directory watcher, pairs it immediately with `defer` cleanup (`clear()`), registers `dir`, invokes `trigger()` while polling for events, formats each returned watcher event as `\"created:<path>\"`, `\"deleted:<path>\"`, `\"modified:<path>\"`, or `\"error:<message>\"`, and returns the formatted event list.\n\nEnsure every asynchronous file handle and directory watcher is cleaned up deterministically via lexical `defer` inside the active async scope, and never attach a garbage-collection finalizer to asynchronous file or watcher handles.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_journal.titan",
+        "evals/oracle/check_journal_safety.py"
+      ],
+      "expected_outputs": [
+        "journal.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_journal.titan /verify/oracle/check_journal_safety.py .",
+          "titanc -q --tree . -o build_oracle --exe oracle_journal oracle_journal",
+          "./oracle_journal 2> oracle_journal.stderr || { cat oracle_journal.stderr >&2; exit 1; }",
+          "python3 check_journal_safety.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "std01-a1-async-fs-defer-no-finalizer",
+          "concept_ids": [
+            "titan-stdlib:inv-5-async-tasks-defer-close",
+            "titan-stdlib:inv-6-sync-only-gc-finalizable",
+            "titan-stdlib:gc-finalizable",
+            "titan-stdlib:gc-weak-finalizers-control",
+            "titan-programmer:inv-3-sync-finalizable-defer-close"
+          ],
+          "critical": "issue61_idiom",
+          "check": "Every `fs.File` and `fs.Watcher` uses immediate lexical `defer :close()` / `defer w:clear()` (never double-closing if `io.lines` owns the reader) and NEVER registers `gc.finalizable` to invoke yielding `fs.File:close()` or `fs.Watcher:clear()`, producing zero GC warnings."
+        },
+        {
+          "id": "std01-a2-short-imports-and-fs-api",
+          "concept_ids": [
+            "titan-stdlib:inv-1-short-imports",
+            "titan-stdlib:fs-os",
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "standard",
+          "check": "Uses canonical short imports (`\"fs\"`, `\"path\"`, `\"string\"`, `\"async\"`), `const` fields on `Entry`/`PathInfo`, `fs.stat` vs `fs.lstat` (`nil` on missing/dangling symlink vs `\"symlink\"`), atomic staging write + `flush` + `rename`, and `fs.watcher()` with `case` over `WatcherEvent`."
+        },
+        {
+          "id": "std01-a3-pure-lexical-path-helpers",
+          "concept_ids": [
+            "titan-stdlib:inv-8-pure-lexical-path",
+            "titan-stdlib:string-io-path"
+          ],
+          "critical": "standard",
+          "check": "Implements `inspect_path` and `journal_path` purely via lexical `path` functions (`normalize`, `dirname`, `basename`, `extension`, `to_slash`, `is_absolute`, `join`, and auto-unwrapped `path.separator`) without touching disk."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-stdlib` (`inv-1`, `inv-5`, `inv-6`, `inv-8`, `string-io-path`, `fs-os`, `gc-finalizable`), `titan-programmer` (`inv-2`, `inv-3`). Score `idiom_score = 3` only if `./oracle_journal` and `check_journal_safety.py` exit `0` and `std01-a1..a3` all pass; cap at `0` (`safety_violation`) if `gc.finalizable` is registered for `fs.File:close()` or any yielding async close; cap at `<= 1` if `defer` cleanup is missing, `io.lines(f)` is double-closed with `defer f:close()`, or `stat`/`lstat` dangling-symlink semantics fail."
+    },
+    {
+      "id": "stdlib-02-string-writer-binary-pack-regex",
+      "baseline_anchor": true,
+      "baseline_specialist_available": false,
+      "baseline_expected_skills": ["titan-programmer"],
+      "candidate_expected_skills": ["titan-programmer", "titan-stdlib"],
+      "candidate_expected_references": [],
+      "optional_skills": [],
+      "forbidden_skills": ["titan-pegs", "titan-json"],
+      "prompt": "Implement a structured log-framing and telemetry-statistics library in `logframe.titan` (logical module `logframe`) using Titan's standard string (including compiled regular expressions, binary packing, and `StringWriter`) and math modules.\n\nExport the following public types and functions:\n- `record LogEvent` with fields `const timestamp: string`, `const severity: string`, `const code: integer?`, `const latency_ms: float`, and `const message: string`.\n- `record LatencyStats` with fields `const count: integer`, `const min_ms: float`, `const max_ms: float`, `const mean_ms: float`, and `const stddev_ms: float`.\n- `function parse_log_lines(text: string): {LogEvent}`: scans `text` line by line using a compiled module-level regular expression matching lines of the form:\n  `YYYY-MM-DDTHH:MM:SSZ [LEVEL] (code=N )?latency=<num>ms <message>`\n  where `LEVEL` is one of `DEBUG`, `INFO`, `WARN`, `ERROR`, `code=<digits>` is optional (producing `integer?` via `math.tointeger`), `<num>` is parsed via `math.tonumber` (skipping non-matching lines or non-numeric/`nan`/`inf` latency strings), and `<message>` is the remaining text on the line.\n- `function encode_frames(events: const? {LogEvent}): string`: encodes every `LogEvent` into a binary stream using a linear-time `StringWriter` (paired with `defer` close and drained once; never quadratic string concatenation `s = s .. chunk` in a loop). Each frame is packed with exact big-endian format `\">BBi4ds2s4\"` containing:\n  1. version byte `1` (`B`),\n  2. severity code (`B`: `DEBUG=1`, `INFO=2`, `WARN=3`, `ERROR=4`; raise on unknown severity),\n  3. `code` (`i4`: `-1` when `code == nil`),\n  4. `latency_ms` (`d`),\n  5. `timestamp` (`s2`),\n  6. `message` (`s4`, binary/NUL safe).\n- `function decode_frames(data: string): {LogEvent}`: sequentially unpacks all `\">BBi4ds2s4\"` frames from `data` starting at byte `1` until `pos == #data + 1`, explicitly converting unpacked `value` results via `as integer`/`as float`/`as string`, mapping `code == -1` back to `nil`, and raising on truncated input, unknown version (`~= 1`), or invalid severity code.\n- `function summarize_latencies(events: const? {LogEvent}): LatencyStats?`: returns `nil` when empty; otherwise computes `count`, `min_ms`, `max_ms`, `mean_ms`, and population `stddev_ms` (`sqrt(variance / count)`) using standard `math` operations.\n- `function redact_digits(text: string): (string, integer)`: replaces every contiguous ASCII digit run (`\\d+`) with an equal-length run of `#` characters using regex global substitution (`gsub`), returning `(redacted_text, replacement_count)`.\n- `function sample_indices(seed: integer, upper: integer, count: integer): {integer}`: seeds the PRNG via `math.randomseed(seed)` and draws `count` deterministic 1-based integers in `[1, upper]` (`math.random(upper) as integer`).\n- `function unsigned_less(a: integer, b: integer): boolean`: performs 64-bit unsigned integer less-than comparison (`math.ult(a, b)`).",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_logframe.titan"
+      ],
+      "expected_outputs": [
+        "logframe.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_logframe.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_logframe oracle_logframe",
+          "./oracle_logframe"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "std02-a1-string-writer-and-binary-pack",
+          "concept_ids": [
+            "titan-stdlib:inv-1-short-imports",
+            "titan-stdlib:inv-2-linear-strings",
+            "titan-stdlib:string-io-path",
+            "titan-stdlib:lua-to-titan-stdlib-delta"
+          ],
+          "critical": "standard",
+          "check": "Uses short import `local strings = import \"string\"`, `strings.writer()` + `defer :close()` + `:write()` + `:drain()` (no quadratic `..` loop), exact `strings.pack`/`unpack` `\">BBi4ds2s4\"` with explicit `as integer`/`as float`/`as string` casts and next-position threading."
+        },
+        {
+          "id": "std02-a2-compiled-regex-and-gsub",
+          "concept_ids": [
+            "titan-stdlib:string-io-path",
+            "titan-stdlib:lua-to-titan-stdlib-delta"
+          ],
+          "critical": "standard",
+          "check": "Compiles the log regular expression via `strings.compile_regex` (using outer anchors only and handling optional `code` capture cleanly via `RegexMatch:group`), and implements `redact_digits` with `strings.gsub` whole-match callback returning verbatim `#` runs (without importing PEG libraries)."
+        },
+        {
+          "id": "std02-a3-math-stats-rng-numerals-const-arrays",
+          "concept_ids": [
+            "titan-stdlib:math-iteration",
+            "titan-stdlib:inv-3-hole-safe-iteration",
+            "titan-programmer:inv-2-const-fields-default"
+          ],
+          "critical": "standard",
+          "check": "Uses `math.tonumber`/`math.tointeger` (rejecting `nan`/`inf`), float-returning `math.min`/`math.max`/`math.sqrt`, `math.randomseed` + `math.random(upper) as integer`, `math.ult`, numeric `for` over `const? {LogEvent}` inputs, and `const` record fields."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-stdlib` (`inv-1..inv-3`, `lua-to-titan-stdlib-delta`, `string-io-path`, `math-iteration`), `titan-programmer` (`inv-2`). Score `idiom_score = 3` only if `./oracle_logframe` exits `0` and all three `std02-a1..a3` checks hold; cap at `<= 1` if `encode_frames` concatenates strings with `..` in a loop instead of `strings.writer()`, omits `as integer`/`as float`/`as string` on `unpack`/`random`, accepts `nan`/`inf` latency strings, or uses PEG instead of compiled regex."
+    },
+    {
+      "id": "stdlib-03-sparse-iteration-io-streams",
+      "baseline_anchor": false,
+      "baseline_specialist_available": false,
+      "baseline_expected_skills": ["titan-programmer"],
+      "candidate_expected_skills": ["titan-programmer", "titan-stdlib"],
+      "candidate_expected_references": [],
+      "optional_skills": [],
+      "forbidden_skills": ["titan-async", "titan-thread"],
+      "prompt": "Implement a synchronous streaming line-processing, sparse-container iteration, and weak-cache library in `streamproc.titan` (logical module `streamproc`) using Titan's standard `io`, `string`, `iteration`, and `gc` modules (strictly synchronous—no async tasks or OS threads).\n\nExport the following public types and functions:\n1. Structural `io.ReaderCloser` over in-memory byte chunks:\n   - `record ChunkStream` keeping internal chunk storage, read offset, closed flag, and close-call counter in `local` fields.\n   - `function open_chunks(chunks: const? {string}): ChunkStream`: constructs a `ChunkStream` positioned before the first chunk.\n   - `function ChunkStream:read(): string?`: returns the next unread chunk (or any buffered excess bytes left over from `read_until`), or `nil` at EOF or once closed.\n   - `function ChunkStream:read_until(delimiter: string, chop: boolean?): string?`: raises if `delimiter == \"\"` while unread bytes remain; searches across chunk boundaries for the first literal `delimiter`, retaining trailing bytes for subsequent reads, omitting `delimiter` when `chop == true`, returning an unterminated EOF tail once before `nil`, and returning `nil` once closed or exhausted.\n   - `function ChunkStream:close()`: idempotent close that increments the close-call counter on each call, marks the stream closed, and discards unread bytes.\n   - `function ChunkStream:is_closed(): boolean` and `function ChunkStream:close_calls(): integer`.\n2. Generic `io` stream helpers:\n   - `function copy_stream(src: io.Reader, dst: io.Writer): integer`: reads chunks via `for chunk in src:read do`, writes each chunk to `dst:write(chunk)`, and returns total bytes copied.\n   - `function filter_lines(src: io.ReaderCloser, dst: io.Writer, prefix: string): integer`: iterates lines with `for line in io.lines(src) do` (letting `io.lines` own closing `src`—never read or close `src` separately!), writes each line starting with `prefix` followed by `\"\\n\"` to `dst`, handles empty lines without terminating early, and returns the count of matched lines.\n3. Hole-safe sparse Array and boolean-key Map iteration:\n   - `record SlotSummary` with `const high_water: integer`, `const present: integer`, `const holes: integer`, and `const joined: string`.\n   - `function summarize_sparse(slots: {string}): SlotSummary`: traverses `slots` across interior `nil` holes using `iteration.ipairs(slots)` (binding `v?`), sets `high_water = #slots`, counts `present` vs `holes`, and joins present values with `\",\"` using `strings.writer()`.\n   - `function count_const_present(slots: const? {string}): integer`: counts non-`nil` entries across `1..#slots` using a numeric `for` loop (since `iteration.ipairs` only accepts mutable `{T}`).\n   - `function sum_flag_map(flags: {boolean: integer}): (boolean, integer, integer)`: uses `iteration.next(flags, nil)` to check emptiness in O(1), and `iteration.pairs(flags)` to count keys and sum values across both `false` and `true` keys, returning `(is_empty, key_count, total)`.\n4. Weak-value memo and ephemeron key caches (without attaching `gc.finalizable` to GC-only records):\n   - `record MemoValue` with `const key: string` and `const payload: string`.\n   - `record WeakMemo` storing a weak-value `{string: MemoValue}` Map configured with `gc.weak` in a `local const` field, with `function new_memo(): WeakMemo`, `function WeakMemo:get_or_compute(key: string, compute: function(string): string): MemoValue`, and `function WeakMemo:peek(key: string): MemoValue?`.\n   - `record KeyTag` with `const id: integer`.\n   - `record EphemeronCache` storing a weak-key `{KeyTag: string}` Map configured with `gc.ephemeron` in a `local const` field, with `function new_ephemeron(): EphemeronCache`, `function EphemeronCache:put(k: KeyTag, v: string)`, `function EphemeronCache:get(k: KeyTag): string?`, and `function EphemeronCache:count(): integer`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_streamproc.titan"
+      ],
+      "expected_outputs": [
+        "streamproc.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_streamproc.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_streamproc oracle_streamproc",
+          "./oracle_streamproc"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "std03-a1-structural-io-and-owned-lines",
+          "concept_ids": [
+            "titan-stdlib:inv-4-structural-io-owned-lines",
+            "titan-stdlib:string-io-path",
+            "titan-programmer:inv-1-exported-record-local-fields"
+          ],
+          "critical": "standard",
+          "check": "`ChunkStream` keeps private fields `local` and structurally satisfies `io.ReaderCloser` (cross-chunk `read_until`, idempotent `close`, `nil` once closed); `copy_stream` uses `for chunk in src:read do`; `filter_lines` delegates closing strictly to `io.lines(src)` without double-closing."
+        },
+        {
+          "id": "std03-a2-hole-safe-iteration-and-boolean-pairs",
+          "concept_ids": [
+            "titan-stdlib:inv-3-hole-safe-iteration",
+            "titan-stdlib:math-iteration",
+            "titan-stdlib:inv-2-linear-strings",
+            "titan-stdlib:lua-to-titan-stdlib-delta"
+          ],
+          "critical": "standard",
+          "check": "`summarize_sparse` uses `iteration.ipairs` with `v?` across interior `nil` holes and `strings.writer()` for `joined`; `count_const_present` uses numeric `for` over `const? {string}`; `sum_flag_map` uses `iteration.next(flags, nil)` and `iteration.pairs` visiting `false` keys."
+        },
+        {
+          "id": "std03-a3-weak-ephemeron-no-unnecessary-finalizer",
+          "concept_ids": [
+            "titan-stdlib:gc-weak-finalizers-control",
+            "titan-stdlib:inv-6-sync-only-gc-finalizable",
+            "titan-stdlib:inv-1-short-imports"
+          ],
+          "critical": "standard",
+          "check": "Uses `gc.weak` for `WeakMemo` and `gc.ephemeron` for `EphemeronCache` inside `local const` fields, allowing GC collection of unreferenced entries while keeping pinned entries alive, without attaching `gc.finalizable` to GC-only data records."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-stdlib` (`inv-1..inv-4`, `inv-6`, `lua-to-titan-stdlib-delta`, `string-io-path`, `math-iteration`, `gc-weak-finalizers-control`), `titan-programmer` (`inv-1`). Score `idiom_score = 3` only if `./oracle_streamproc` exits `0` and all three `std03-a1..a3` checks hold; cap at `<= 1` if `filter_lines` double-closes `src` alongside `io.lines`, `ipairs` drops `v?` or stops on holes, `gc.weak`/`gc.ephemeron` is omitted, or `gc.finalizable` is attached to GC-only records."
+    },
+    {
+      "id": "stdlib-04-os-subprocess-signals-env",
+      "baseline_anchor": false,
+      "baseline_specialist_available": false,
+      "baseline_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-stdlib", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": [],
+      "forbidden_skills": ["titan-thread", "titan-pegs"],
+      "prompt": "Implement an asynchronous task-supervision, clock/calendar, environment, and signal-handling library in `supervisor.titan` (logical module `supervisor`) using Titan's standard `os`, `async`, `timer`, and `string` modules (do NOT use low-level raw libuv process bindings).\n\nExport the following public types and functions:\n- `record RunResult` with fields `const exit_code: integer`, `const signal: string?`, `const stdout: string`, `const stderr: string`, `const cpu_seconds: float`, `const wall_seconds: float`, `const utc_year: integer`, `const utc_month: integer`, and `const utc_day: integer`.\n- `function run_direct(program: string, args: {string}, input: string?, env_key: string?, env_val: string?): RunResult`:\n  - Captures process CPU time before/after via `os.clock()` (`cpu_seconds`) and wall timestamps via `os.time()` + `os.difftime(t1, t0)` (`wall_seconds`), plus UTC date fields from `os.date(\"!*t\", t1)`.\n  - Spawns `program` directly with `args` via `os.spawn` (no shell). When `input == nil`, inherit parent stdin (`os.with_parent_stdin`); when `input ~= nil`, keep captured `proc.stdin`, write `input`, and close `proc.stdin` to deliver EOF. When `env_key ~= nil`, override only the child environment via `os.with_env(env_key, env_val or \"\")` without mutating the parent process environment.\n  - Pairs captured child pipes with immediate `defer :close()` and drains `proc.stdout` and `proc.stderr` (and writes `proc.stdin` if present) **concurrently** in sibling async Tasks so >64 KiB outputs never deadlock OS pipe buffers.\n  - Waits for child exit via `proc:wait()` and returns `RunResult` (killing with `\"term\"` and waiting in cleanup if an unexpected error occurs while the child is still running).\n- `function run_shell(command: string): (integer, string)`: runs `command` via `os.popen(command)` paired immediately with `defer stream:close()`, drains merged stdout+stderr with `strings.writer()`, calls `stream:wait()`, and returns `(status.code, output)`.\n- `function run_with_timeout(program: string, args: {string}, timeout_ms: integer): (boolean, integer, string?)`: spawns `program` directly with `os.with_parent_stdin`, drains captured output pipes cleanly with `defer :close()`, and races `proc:wait()` against `timer.sleep(timeout_ms)`. On timely completion, cancels and joins the timer task and returns `(false, status.code, status.signal)`. On timeout, cancels and joins the wait task, sends `proc:kill(\"term\")` if `proc:is_running()`, reaps the child with `proc:wait()`, and returns `(true, status.code, status.signal)`.\n- `function read_env_or(name: string, fallback: string): string`: returns `os.getenv(name)` when non-`nil` (preserving empty string `\"\"`), returning `fallback` only when `nil`.\n- `function utc_calendar(timestamp: integer): (os.Date, string)`: returns the UTC `os.Date` record from `os.date(\"!*t\", timestamp)` and the formatted UTC ISO string from `os.date(\"!%Y-%m-%dT%H:%M:%SZ\", timestamp)`.\n- `function timestamp_diff_seconds(year1: integer, month1: integer, day1: integer, hour1: integer, year2: integer, month2: integer, day2: integer, hour2: integer): float`: constructs both timestamps via `os.time` and returns `os.difftime(t2, t1)`.\n- `function await_signal_and_cleanup(sig_name: string, on_ready: function()): string`: arms a one-shot signal watcher via `os.wait_signal(sig_name)` (letting invalid names such as `\"kill\"` raise cleanly), invokes `on_ready()` while waiting, cancels/joins on failure, and returns the canonical lowercase signal name.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_supervisor.titan",
+        "evals/oracle/check_supervisor_hygiene.py"
+      ],
+      "expected_outputs": [
+        "supervisor.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_supervisor.titan /verify/oracle/check_supervisor_hygiene.py .",
+          "titanc -q --tree . -o build_oracle --exe oracle_supervisor oracle_supervisor",
+          "./oracle_supervisor",
+          "python3 check_supervisor_hygiene.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "std04-a1-os-spawn-popen-concurrent-pipes",
+          "concept_ids": [
+            "titan-stdlib:inv-7-os-spawn-vs-popen-browser",
+            "titan-stdlib:inv-5-async-tasks-defer-close",
+            "titan-stdlib:fs-os",
+            "titan-stdlib:inv-1-short-imports"
+          ],
+          "critical": "standard",
+          "check": "Uses `os.spawn` (direct argv, `with_env`, `with_parent_stdin`, never raw `uv`) with concurrent Task draining of `stdout`/`stderr`/`stdin` and `defer :close()`, and `os.popen` with `defer stream:close()` for merged shell output."
+        },
+        {
+          "id": "std04-a2-timeout-loser-cancel-kill-reap",
+          "concept_ids": [
+            "titan-stdlib:fs-os",
+            "titan-async:inv-2-explicit-loser-cancel-teardown"
+          ],
+          "critical": "standard",
+          "check": "`run_with_timeout` cancels and joins the losing task after `race`/`any`, checks `proc:is_running()`, sends `proc:kill(\"term\")`, and reaps the child via `proc:wait()`."
+        },
+        {
+          "id": "std04-a3-clocks-calendars-env-signals",
+          "concept_ids": [
+            "titan-stdlib:fs-os",
+            "titan-stdlib:lua-to-titan-stdlib-delta"
+          ],
+          "critical": "standard",
+          "check": "Measures CPU time via `os.clock()`, wall deltas via `os.time()`/`os.difftime()`, UTC `os.Date` via `os.date(\"!*t\")`, preserves `\"\"` vs `nil` in `os.getenv`, and uses `os.wait_signal` cleanly."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-stdlib` (`inv-1`, `inv-5`, `inv-7`, `lua-to-titan-stdlib-delta`, `fs-os`), `titan-async` (`inv-2`). Score `idiom_score = 3` only if `./oracle_supervisor` and `check_supervisor_hygiene.py` exit `0` and `std04-a1..a3` all hold; cap at `<= 1` if raw `uv` is used instead of `os.spawn`/`os.popen`, pipes are drained sequentially (causing deadlock), `os.clock()` is omitted or confused with wall time, losing tasks/child processes are not cancelled/killed/reaped, or empty env strings are treated as missing."
+    }
+  ]
+}

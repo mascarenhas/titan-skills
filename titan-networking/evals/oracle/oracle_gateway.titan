@@ -1,0 +1,172 @@
+local async = import "async"
+local gw = import "gateway"
+local http = import "http"
+local ssl = import "ssl"
+local timer = import "timer"
+
+local function fail(msg: string)
+  raise "oracle_gateway: " .. msg
+end
+
+function main(args: {string}): integer
+  if #args < 2 then fail("usage: oracle_gateway <cert> <key>") end
+  local cert_file = args[1]
+  local key_file = args[2]
+
+  local pair = gw.start_gateway(cert_file, key_file)
+  defer pair:close()
+  local pa = pair:port_a()
+  local pb = pair:port_b()
+  if pa <= 0 or pb <= 0 or pa == pb then fail("invalid gateway ports") end
+  local base_a = "https://127.0.0.1:" .. pa
+
+  local client = http.Client()
+  defer client:close()
+
+  -- 1. 302 POST -> bodyless GET stripping Content-Type under RedirectMode.follow()
+  local r302 = gw.send_with_redirect(
+    client, "POST", base_a .. "/redir-302", cert_file,
+    http.RedirectMode.follow(), "secret-body", nil, "text/plain")
+  if r302.status ~= 200 or not r302.redirected or r302.body ~= "GET||<none>" then
+    fail("302 POST->GET mismatch: status=" .. r302.status .. " body=" .. r302.body)
+  end
+
+  -- 2. 307 POST preserves method, body, and Content-Type under RedirectMode.follow()
+  local r307 = gw.send_with_redirect(
+    client, "POST", base_a .. "/redir-307", cert_file,
+    http.RedirectMode.follow(), "keep-body", nil, "text/plain")
+  if r307.status ~= 200 or not r307.redirected or r307.body ~= "POST|keep-body|text/plain" then
+    fail("307 POST preserve mismatch: status=" .. r307.status .. " body=" .. r307.body)
+  end
+
+  -- 3. Cross-origin 302 strips Authorization header across port_a -> port_b
+  local rxo = gw.send_with_redirect(
+    client, "GET", base_a .. "/redir-xorigin", cert_file,
+    http.RedirectMode.follow(), nil, "Bearer top-secret", nil)
+  if rxo.status ~= 200 or not rxo.redirected or rxo.body ~= "auth=<stripped>" then
+    fail("cross-origin Authorization strip mismatch: body=" .. rxo.body)
+  end
+
+  -- 4. RedirectMode.manual() returns 302 directly; RedirectMode.error() raises OperationError EIO
+  local rman = gw.send_with_redirect(
+    client, "POST", base_a .. "/redir-302", cert_file,
+    http.RedirectMode.manual(), "x", nil, "text/plain")
+  if rman.status ~= 302 or rman.redirected then
+    fail("manual redirect mismatch: status=" .. rman.status)
+  end
+
+  local saw_redir_err = false
+  do
+    gw.send_with_redirect(
+      client, "POST", base_a .. "/redir-302", cert_file,
+      http.RedirectMode.error(), "x", nil, "text/plain")
+  catch
+    if error is async.OperationError then
+      local op_err: async.OperationError = error
+      if op_err.name == "EIO" and op_err.operation == "http.request" then
+        saw_redir_err = true
+      end
+    end
+  end
+  if not saw_redir_err then fail("RedirectMode.error() did not raise EIO OperationError") end
+
+  -- 5. Expect: 100-continue (100 then 200) vs unsupported Expect (417)
+  local saw100, st100, body100 = gw.raw_https_expect_probe(pa, cert_file, "100-continue", "hello-100")
+  if not saw100 or st100 ~= 200 or body100 ~= "uploaded:hello-100" then
+    fail("Expect 100-continue mismatch: saw100=" .. (saw100 and "true" or "false") .. " st=" .. st100 .. " body=" .. body100)
+  end
+
+  local saw417_100, st417, _ = gw.raw_https_expect_probe(pa, cert_file, "999-unsupported", "ignored")
+  if saw417_100 or st417 ~= 417 then
+    fail("bad Expect expected 417, got: " .. st417)
+  end
+
+  -- 6. Raw HTTPS protocol upgrade accept (101) and reject (403)
+  local up_st, up_reply = gw.run_https_upgrade(pa, cert_file, "/proto", "rpc-ping", nil)
+  if up_st ~= 101 or up_reply ~= "upgraded:rpc-ping" then
+    fail("HTTPS upgrade accept mismatch: st=" .. up_st .. " reply=" .. up_reply)
+  end
+
+  local rej_h = http.headers()
+  rej_h:set("X-Reject-Upgrade", "yes")
+  local rej_st, _ = gw.run_https_upgrade(pa, cert_file, "/proto", "ignored", rej_h)
+  if rej_st ~= 403 then
+    fail("HTTPS upgrade reject expected 403, got: " .. rej_st)
+  end
+
+  -- 7. Blocked TLS read deadline using ssl.Connection:abort() BEFORE async.join
+  local silent_srv = ssl.listen("127.0.0.1", 0, cert_file, key_file)
+  defer silent_srv:close()
+  local silent_port = silent_srv:local_address().port
+  local silent_task = async.run(function (): nil
+    local peer = silent_srv:accept()
+    defer peer:close()
+    peer:handshake()
+    -- Hold connection silent until client aborts or timeout
+    do
+      peer:read()
+    catch
+    end
+    return nil
+  end)
+  defer do
+    silent_srv:close()
+    if not silent_task:status():has_finished() then silent_task:cancel() end
+    async.join(silent_task)
+  end
+
+  local dl_conn = ssl.connect("127.0.0.1", silent_port, cert_file)
+  defer dl_conn:close()
+  local timed_out, line? = gw.tls_read_with_abort_deadline(dl_conn, 40)
+  if not timed_out or line ~= nil then
+    fail("tls_read_with_abort_deadline did not time out cleanly")
+  end
+
+  -- 8. Idle TLS connection manual-handoff detach + discard_transfer_payload
+  local handoff_srv = ssl.listen("127.0.0.1", 0, cert_file, key_file)
+  defer handoff_srv:close()
+  local hport = handoff_srv:local_address().port
+  local htask = async.run(function (): nil
+    local peer = handoff_srv:accept()
+    defer peer:close()
+    peer:handshake()
+    do peer:read() catch end
+    return nil
+  end)
+  defer do
+    handoff_srv:close()
+    if not htask:status():has_finished() then htask:cancel() end
+    async.join(htask)
+  end
+  local disc_rc, detached_rej = gw.verify_tls_handoff_discard(hport, cert_file)
+  if disc_rc ~= 0 or not detached_rej then
+    fail("verify_tls_handoff_discard mismatch: rc=" .. disc_rc)
+  end
+
+  -- 9. Policy validation (ALPN, mTLS, browser ca_file, Fetch forbidden headers)
+  if gw.validate_gateway_policy(gw.PolicyCheck(nil, nil, "Accept", nil)) ~= nil then
+    fail("clean policy check rejected")
+  end
+  if gw.validate_gateway_policy(gw.PolicyCheck("h2", nil, nil, nil)) == nil then
+    fail("ALPN not rejected")
+  end
+  if gw.validate_gateway_policy(gw.PolicyCheck(nil, "client_ca.pem", nil, nil)) == nil then
+    fail("mTLS not rejected")
+  end
+  if gw.validate_gateway_policy(gw.PolicyCheck(nil, nil, nil, "ca.pem")) == nil then
+    fail("browser ca_file not rejected")
+  end
+  if gw.validate_gateway_policy(gw.PolicyCheck(nil, nil, "Cookie", nil)) == nil then
+    fail("browser Cookie header not rejected")
+  end
+  if gw.validate_gateway_policy(gw.PolicyCheck(nil, nil, "Sec-Fetch-Mode", nil)) == nil then
+    fail("browser Sec-* header not rejected")
+  end
+  if gw.validate_gateway_policy(gw.PolicyCheck(nil, nil, "Proxy-Authorization", nil)) == nil then
+    fail("browser Proxy-* header not rejected")
+  end
+
+  pair:close()
+  pair:close()
+  return 0
+end

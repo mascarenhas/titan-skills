@@ -1,0 +1,239 @@
+{
+  "skill_name": "titan-async",
+  "evals": [
+    {
+      "id": "async-01-structured-tasks-cancellation-hedging",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-thread", "titan-sqlite3"],
+      "prompt": "Implement a cooperative single-loop hedged dual-replica coordinator and structured task helper module in `hedge.titan` (logical module `hedge`) using Titan's cooperative async Tasks and timers.\n\nKeep `hedge.titan` strictly portable to both native and browser targets (do not import native-only `uv` or use native-only async APIs such as `current_loop`, `await_*_with`, `Receiver`, `run_foreign`, or `ExternalWait`), and do not use OS threads or blocking sleep calls.\n\nExport the following public types and functions:\n- `record HedgeOutcome` with fields `const winner: string` (`\"primary\"`, `\"backup\"`, or `\"none\"`), `const value: string?`, `const primary_status: string`, `const backup_status: string`, and `const timed_out: boolean`.\n- `function hedge_call(primary: function (): (string), backup: function (): (string), stagger_ms: integer, timeout_ms: integer): HedgeOutcome`:\n  - Validates `stagger_ms >= 0` and `timeout_ms > 0` (raising on invalid bounds).\n  - Spawns `primary` immediately as a cooperative Task and runs an overall `timeout_ms` deadline Task.\n  - If `stagger_ms > 0`, waits up to `stagger_ms` before launching `backup`: if `primary` succeeds before `stagger_ms`, does not start `backup` (`backup_status = \"skipped\"`); if `primary` fails or is cancelled before `stagger_ms`, launches `backup` immediately without waiting for the remaining stagger delay; if `stagger_ms` elapses first, launches `backup` and races both replicas against the overall deadline.\n  - Whenever a winner succeeds, the overall deadline expires, or all replicas fail, explicitly cancels every losing or unfinished Task (including replica, stagger, and deadline Tasks) with a simple cancellation reason and waits for each to reach terminal status via `join` before returning—so every `defer` cleanup block inside a cancelled replica has already executed before `hedge_call` returns.\n  - Inspects `TaskStatus`, `Race*Result`, and `Any*Result` unions using `case` (or `TaskStatus:has_*`), never union `==`.\n  - Sets `primary_status` and `backup_status` via `TaskStatus:as_string()` (or `\"skipped\"` when `backup` was never started), and `timed_out = true` only when the overall deadline ended the call.\n- `function fetch_pair_ordered(first: function (): (string), second: function (): (string)): (string, string)`:\n  - Runs both functions concurrently as Tasks and awaits both with `all_two`.\n  - If either fails or is cancelled, explicitly cancels the unfinished sibling, joins both Tasks so sibling `defer` cleanup completes before propagating, and re-raises the failing child's error (preserving its error/traceback via `Error:raise()`, or raising `\"cancelled\"` if cancelled).\n- `function run_cancellable_cleanup(work: function (): (string), cancel_after_ms: integer?, on_cleanup: function (string?): ()): (string, string?)`:\n  - Spawns `work` using `run_with_cleanup` (passing `nil` for the final-wait parameter so it remains browser-portable), installing a cleanup handler that passes `nil` to `on_cleanup` when uncancelled or the simple cancellation reason string when cancelled (extracted with `case`).\n  - If `cancel_after_ms ~= nil`, sleeps `cancel_after_ms` and cancels the Task with simple reason `\"aborted\"`.\n  - Joins the Task and returns `(status:as_string(), value_if_succeeded)`.\n- `function cooperative_sum(n: integer, yield_every: integer): (integer, integer)`:\n  - Validates `n >= 0` and `yield_every > 0` (raising otherwise).\n  - Computes the sum `1 + 2 + ... + n` in a loop, yielding cooperatively (`async.yield()`) every `yield_every` iterations so sibling Tasks make progress, checking cancellation (`async.checkpoint()`), and returning `(sum, yield_count)`.\n- `function check_negative_sleep_error(): string`:\n  - Calls `timer.sleep(-1)` inside a `catch` block, verifies the caught error is an `async.OperationError`, and returns `err.name .. \":\" .. err.operation`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_hedge.titan"
+      ],
+      "expected_outputs": [
+        "hedge.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_hedge.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_hedge oracle_hedge",
+          "./oracle_hedge",
+          "TITAN_BUILD_PROFILE=validation titanc -q --target browser --tree . -o build_browser -c hedge"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "async01-a1-cooperative-scheduling-and-yield",
+          "concept_ids": [
+            "titan-async:inv-1-single-loop-cooperative-scheduling",
+            "titan-async:concurrency-primitive-idiom-delta"
+          ],
+          "critical": "standard",
+          "check": "Uses cooperative `async.run`/`async.yield`/`async.checkpoint` without recursive `async.loop()`, polling loops, blocking `uv.sleep`, OS locks, or OS threads; `cooperative_sum` yields periodically so sibling Tasks interleave."
+        },
+        {
+          "id": "async01-a2-explicit-loser-cancel-join-and-run-with-cleanup",
+          "concept_ids": [
+            "titan-async:inv-2-explicit-loser-cancel-teardown",
+            "titan-async:tasks-combinators-cancellation-resumetoken"
+          ],
+          "critical": "standard",
+          "check": "Explicitly cancels every losing/unfinished Task after `race*`/`any*`/`all_two` and awaits `async.join` before returning so cancelled `defer` blocks finish deterministically; uses `async.run_with_cleanup` with `CancellationReason` extraction."
+        },
+        {
+          "id": "async01-a3-short-imports-union-case-and-browser-portability",
+          "concept_ids": [
+            "titan-async:inv-5-browser-async-rules",
+            "titan-async:inv-6-short-imports-union-case",
+            "titan-async:browser-async-runtime-and-native-handoff"
+          ],
+          "critical": "standard",
+          "check": "Uses canonical short imports (`\"async\"`, `\"timer\"`), inspects `TaskStatus`/`Any*Result`/`Race*Result`/`CancellationReason` via `case` or `:has_*` (never union `==`), checks `OperationError` on `timer.sleep(-1)`, and compiles cleanly under `--target browser -c`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-async` (`inv-1`, `inv-2`, `inv-5`, `inv-6`, `concurrency-primitive-idiom-delta`, `tasks-combinators-cancellation-resumetoken`, `browser-async-runtime-and-native-handoff`), `titan-programmer` (`inv-2`, `inv-5`, `inv-8`). Score `idiom_score = 3` only if `./oracle_hedge` and `--target browser -c hedge` both exit `0` and all three `async01-a1..a3` checks hold; cap at `<= 1` if losing Tasks are left uncancelled/unjoined after `race*`/`any*`/`all_two`, union values are compared with `==`, `cooperative_sum` omits `async.yield()`, or native-only `uv`/async APIs break browser compilation."
+    },
+    {
+      "id": "async-02-channels-resume-token-and-receiver",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-thread", "titan-networking"],
+      "prompt": "Implement a same-state cooperative channel, `ResumeToken` latch, ticker, byte-stream channel, and coalescing cross-state `Receiver` module in `pipeline.titan` (logical module `pipeline`) using Titan's `async` and `timer` modules (do not use OS threads or networking).\n\nExport the following public types and functions:\n- `record Latch` storing its opened state, optional payload, waiting Task, and `ResumeToken` in `local` fields:\n  - `function Latch.new(): Latch`: creates an unopened `Latch`.\n  - `function Latch:wait(): string`: returns the payload immediately if already opened; raises `\"Latch busy\"` if another Task is already waiting; otherwise allocates a fresh `async.ResumeToken(\"Latch.wait\")` per wait, publishes the waiter and token before re-checking `opened`, installs lexical `defer` cleanup to detach the waiter, and suspends with `async.suspend(token, cancel_action)` (passing the same synchronous detach action so cancellation cleanly clears the waiter, and looping on the condition to safely absorb running-Task wake latching).\n  - `function Latch:release(payload: string)`: idempotently marks the latch opened, records `payload`, clears stored waiter/token fields before calling `waiter:resume(token)`, and wakes any waiting Task.\n  - `function Latch:has_waiter(): boolean`: returns `true` iff a waiter is currently registered.\n- `function double_through_channel(values: {integer}, capacity: integer): {integer}`:\n  - Validates `capacity > 0` (raising otherwise), creates a same-state bounded `async.channel<|integer?|>(capacity)` with immediate `defer close()`, spawns a producer Task sending every element in `values` followed by a `nil` sentinel (never relying on `close()` to drain buffered items), receives until `nil` (doubling each integer), joins the producer Task, and returns the doubled Array.\n- `function verify_channel_close_drops(capacity: integer): string`:\n  - Creates a bounded `async.channel<|integer|>(capacity)` with `defer close()`, buffers `42`, calls `close()`, attempts `receive()` inside `catch`, and returns the caught error message.\n- `function read_rw_frames(chunks: {string}, delimiter: string): ({string}, boolean)`:\n  - Creates `(reader, writer)` via `async.reader_writer_channel(2)` with immediate `defer reader:close()` and `defer writer:close()`.\n  - Spawns a writer Task that writes every string in `chunks` via `writer:write(chunk)`, waits on a `Latch` released by the reader after the first frame is received (ensuring chunks have been pulled into the reader's buffer before `writer:close()`, since closing the underlying channel drops unread channel items while preserving the reader's buffered suffix), and then closes `writer`.\n  - Reads all frames using `reader:read_until(delimiter, true)` until the channel close error surfaces (`\"channel is closed\"`), joins the writer Task, and returns `(frames, saw_closed_error)`.\n- `function collect_ticker_ticks(interval_ms: integer, target_ticks: integer): (integer, boolean)`:\n  - Creates `timer.ticker(interval_ms)` with immediate `defer ticker:close()`, collects `target_ticks` ticks via `ticker:tick()`, explicitly closes the ticker, calls `ticker:tick()` one additional time, and returns `(collected_count, post_close_tick)`.\n- `record CoalesceReport` with `const latest: string` and `const closed_error: string`.\n- `function coalesce_receiver_messages(messages: {string}): CoalesceReport`:\n  - Validates `#messages >= 1`, creates an `async.Receiver` via `async.receiver()` with immediate `defer rx:close()`, sends every element of `messages` via `async.send(rx:handle(), msg)` before waiting so intermediate values coalesce, reads the latest message via `rx:wait()`, stops all sends before calling `rx:close()`, verifies a subsequent `rx:wait()` raises `\"receiver is closed\"`, and returns `CoalesceReport(latest, err_msg)`.\n- `function join_in_cancelled_cleanup(child_delay_ms: integer): (boolean, string)`:\n  - Spawns an outer Task that spawns a child Task sleeping `child_delay_ms` (recording `child_cleaned = true` in the child's `defer`), and installs a lexical `defer` in the outer Task that cancels the child and waits for the child to reach terminal status using a removable `child:add_terminal_listener(...)` plus `async.await_cleanup` (never relying on cancellation-sensitive `async.join` inside a cancelled `defer`).\n  - After `5` ms, cancels the outer Task, joins the outer Task, and returns `(child_cleaned, child:status():as_string())`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_pipeline.titan"
+      ],
+      "expected_outputs": [
+        "pipeline.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_pipeline.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_pipeline oracle_pipeline",
+          "./oracle_pipeline"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "async02-a1-resumetoken-event-driven-latch",
+          "concept_ids": [
+            "titan-async:inv-4-event-driven-resumetoken-waiting",
+            "titan-async:tasks-combinators-cancellation-resumetoken"
+          ],
+          "critical": "standard",
+          "check": "`Latch` allocates a fresh `ResumeToken` per wait, publishes waiter state before final condition check, clears registration before `resume(token)`, detaches in both `defer` and `cancel_action`, and uses zero polling."
+        },
+        {
+          "id": "async02-a2-channel-sentinel-rwstream-ticker-and-receiver",
+          "concept_ids": [
+            "titan-async:inv-3-channel-vs-receiver-vs-thread-channel",
+            "titan-async:timer-channel-streams-receiver"
+          ],
+          "critical": "standard",
+          "check": "Uses `async.channel<|integer?|>` with `nil` sentinel (recognizing `close()` drops buffered items), `reader_writer_channel` with `defer :close()`, `timer.ticker` with `defer :close()`, and coalescing `async.Receiver` stopping senders before `rx:close()`."
+        },
+        {
+          "id": "async02-a3-terminal-listener-await-cleanup-in-cancelled-defer",
+          "concept_ids": [
+            "titan-async:inv-2-explicit-loser-cancel-teardown",
+            "titan-async:tasks-combinators-cancellation-resumetoken"
+          ],
+          "critical": "standard",
+          "check": "Waits for cancelled child retirement inside a cancelled outer Task's `defer` using a removable `add_terminal_listener` paired with `async.await_cleanup` instead of cancellation-sensitive `async.join`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-async` (`inv-2`, `inv-3`, `inv-4`, `tasks-combinators-cancellation-resumetoken`, `timer-channel-streams-receiver`), `titan-programmer` (`inv-1`, `inv-3`, `inv-5`). Score `idiom_score = 3` only if `./oracle_pipeline` exits `0` and all three `async02-a1..a3` checks hold; cap at `<= 1` if `Latch` polls with `timer.sleep`/`async.yield` instead of `ResumeToken`/`async.suspend`, reuses a single token across waits, fails to detach on cancel, relies on `async.channel` `close()` to drain items, omits `defer :close()` on ticker/channel/Receiver, or uses `async.join` inside the cancelled `defer`."
+    },
+    {
+      "id": "async-03-stackful-coroutines-and-unwind",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-thread", "titan-reflect"],
+      "prompt": "Implement a nested pull-based backtracking cursor and coroutine lifecycle helper module in `cursor.titan` (logical module `cursor`) using Titan's stackful `coroutine` module (and `gc` for abandonment testing). Keep `cursor.titan` strictly portable to both native and browser targets (no native-only APIs, no OS threads).\n\nExport the following public types and functions:\n- `record NestedTrace` with fields `const first_yield: string`, `const outer_mid_status: string`, `const inner_mid_status: string`, `const saw_running_self: boolean`, `const yieldable_outer: boolean`, `const yieldable_other: boolean`, `const all_outputs: {string}`, `const final_result: string`, `const outer_end_status: string`, and `const inner_end_status: string`.\n- `function run_nested_cursor(items: {string}): NestedTrace`:\n  - Requires `#items >= 1`.\n  - Creates an `inner` coroutine with default tag `\"inner\"` and an `outer` coroutine with default tag `\"outer\"` that resumes `inner`.\n  - Inside `inner`: verifies `coroutine.running() == inner`, checks `coroutine.is_yieldable(\"outer\")` (`true`) and `coroutine.is_yieldable(\"other\")` (`false`), then loops through `items`, yielding each item directly to tag `\"outer\"` via `coroutine.yield(item, \"outer\")`, collecting `item .. \"=\" .. (reply as string)` joined by `\",\"`, and returning `\"inner:\" .. joined`.\n  - `outer` returns `\"outer(\" .. (inner_res as string) .. \")\"`.\n  - The driver resumes `outer` once to observe `first_yield`, `outer:status()` (`\"suspended\"`), and `inner:status()` (`\"stacked\"`), then continues resuming `outer` with `\"ok\"` until `outer:status() == \"dead\"`, collecting every yielded item into `all_outputs`, capturing `final_result` and final statuses (`\"dead\"`), and returning `NestedTrace`.\n- `record ErrorInjectionReport` with `const first_yield: string`, `const returned: string`, `const defer_ran: boolean`, and `const final_status: string`.\n- `function run_error_injection(reason: string): ErrorInjectionReport`:\n  - Creates a coroutine with default tag `\"step\"` whose body installs a lexical `defer` setting `defer_ran = true`, yields `\"armed\"` to `\"step\"`, and catches an injected error in a `catch` block returning `\"caught:\" .. (error as string)`.\n  - Resumes the coroutine once to obtain `\"armed\"`, injects `reason` via `co:error(reason, \"step\")`, and returns `ErrorInjectionReport`.\n- `record TransferOutcome` with `const failed: boolean`, `const payload_kind: string` (`\"false\"`, `\"nil\"`, `\"string\"`, or `\"other\"`), `const payload_text: string`, `const has_trace: boolean`, and `const status_after: string`.\n- `function run_transfer_sequence(): {TransferOutcome}`:\n  - Drives a first coroutine (tag `\"tx\"`) that yields `false`, then yields `nil`, then raises `\"boom\"`, using 3 calls to `co:transfer(nil, nil, false)`.\n  - Drives a second coroutine (tag `\"tx2\"`) that yields `\"mid\"` and then returns `\"done\"`, using 2 calls to `co:transfer(nil, nil, false)`.\n  - Branches strictly on the first boolean result of `transfer` (never testing truthiness of the payload, since `false` and `nil` are valid payloads), inspects `status()` to distinguish yield (`\"suspended\"`) from return (`\"dead\"`), formats `payload_kind`/`payload_text` (`\"false\"`/`\"false\"`, `\"nil\"`/`\"nil\"`, `\"string\"`/string value), sets `has_trace = (trace ~= nil)`, and returns all 5 `TransferOutcome` records in order.\n- `function verify_abandoned_unwind(): (boolean, boolean)`:\n  - Creates and resumes a suspended coroutine inside a separate helper function (so no caller stack slot retains the handle) whose body has a `catch` block (setting `catch_ran = true`) enclosing a `defer` (setting `defer_ran = true`) and a yield to `\"abandon\"`.\n  - After the helper returns, triggers garbage collection (`gc.collect()` twice) and returns `(defer_ran, catch_ran)` demonstrating that abandoned unwind executes `defer` without being intercepted by `catch`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_cursor.titan"
+      ],
+      "expected_outputs": [
+        "cursor.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_cursor.titan .",
+          "titanc -q --tree . -o build_oracle --exe oracle_cursor oracle_cursor",
+          "./oracle_cursor",
+          "TITAN_BUILD_PROFILE=validation titanc -q --target browser --tree . -o build_browser -c cursor"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "async03-a1-tagged-nested-yield-and-statuses",
+          "concept_ids": [
+            "titan-async:low-level-stackful-coroutine",
+            "titan-async:inv-6-short-imports-union-case"
+          ],
+          "critical": "standard",
+          "check": "Uses Titan's `coroutine` module (`create(fn, default_tag)`, explicit non-nil yield tags, `running()`, `is_yieldable(tag)`) and transitions through `\"suspended\"`, `\"stacked\"`, and `\"dead\"` cleanly without invoking any nonexistent `close()` method."
+        },
+        {
+          "id": "async03-a2-error-injection-and-nonraising-transfer",
+          "concept_ids": [
+            "titan-async:low-level-stackful-coroutine"
+          ],
+          "critical": "standard",
+          "check": "Uses `Coroutine:error(err, tag)` to trigger `defer`/`catch` recovery and `Coroutine:transfer(payload, tag, inject_error)` checking the boolean error flag (not payload truthiness) across `false`, `nil`, normal yield, normal return, and uncaught error with traceback."
+        },
+        {
+          "id": "async03-a3-abandoned-unwind-and-browser-portability",
+          "concept_ids": [
+            "titan-async:low-level-stackful-coroutine",
+            "titan-async:inv-5-browser-async-rules"
+          ],
+          "critical": "standard",
+          "check": "Verifies unreachable suspended coroutine unwinding runs `defer` without entering `catch`, and compiles cleanly under `--target browser -c`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-async` (`inv-5`, `inv-6`, `low-level-stackful-coroutine`), `titan-programmer` (`inv-5`, `inv-8`). Score `idiom_score = 3` only if `./oracle_cursor` and `--target browser -c cursor` both exit `0` and all three `async03-a1..a3` checks hold; cap at `<= 1` if it calls a nonexistent `Coroutine:close()`, omits explicit yield tags, branches on payload truthiness instead of `transfer`'s error flag, or fails abandoned unwind semantics."
+    },
+    {
+      "id": "async-04-ref-uv-pipe-idle-adapter",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_skills": ["titan-programmer", "titan-async"],
+      "candidate_expected_references": ["titan-async/references/uv-and-native-adapters.md"],
+      "optional_skills": ["titan-stdlib", "titan-ffi"],
+      "forbidden_skills": ["titan-websocket", "titan-sqlite3"],
+      "prompt": "Implement a custom native IPC framing and libuv loop-adapter module in `ipc_pipe.titan` (logical module `ipc_pipe`) directly over Titan's public `uv` and `async` adapter primitives (`await_with`, `await_cleanup_with`, `await_cancellable_with`, `Completion`, `BufferedSubscription`, `prepare_external_wait`, `uv.pipe_t`, `uv.prepare_t`, `uv.check_t`, `uv.fs_t`, and `uv.close`).\n\nNote that the test harness compiles with `--no-uv-bootstrap`, invokes `probe_loop_phases` directly on the main Lua thread outside any `async.Task` (so it can drive its own standalone `uv.loop_t` via `uv.run`), and then drives all remaining async adapter functions inside `async.run` + `async.loop()`.\n\nExport the following public types and functions:\n- `record PipeEndpoint` storing its `uv.pipe_t`, stream subscription/read buffer, and closed state in `local` fields:\n  - `function open_pipe_pair(socket_path: string): (PipeEndpoint, PipeEndpoint)`:\n    - On the active async Runtime loop (`async.current_loop()`), binds and listens on a Unix domain pipe at `socket_path` (`uv.pipe_init`, `uv.pipe_bind`, `uv.listen`), connects a client `uv.pipe_t` via `uv.pipe_connect2` (checking negative submission status) wrapped in `async.await_with`, accepts the server peer via `uv.accept`, and cleanly closes the listening pipe handle via `uv.close` + `async.await_cleanup_with` before returning `(client_ep, server_ep)`.\n    - Maps any negative libuv status to `async.OperationError(code, uv.err_name(code), uv.strerror(code), \"ipc_pipe.open\")` and closes any already-initialized handles on error.\n  - `function PipeEndpoint:send_frame(payload: string)`:\n    - Encodes a 4-byte big-endian unsigned length prefix (`>I4`) followed by `payload` and writes it via `uv.write_string` wrapped in `async.await_with` (`Completion<|C, T, E|>`, capturing `number` and context before settling, reporting unexpected callback exceptions with `done:fatal(number, error, traceback)` + `raise`, and raising `async.OperationError(..., \"ipc_pipe.write\")` on negative status).\n  - `function PipeEndpoint:recv_frame(): string?`:\n    - Reads length-prefixed binary frames (handling partial chunks, coalesced frames, empty `\"\"` payloads, and embedded NUL bytes) driven by `uv.read_start` (allocating writable `uv.buf_t.allocate(...)` and copying bytes via `buf:to_string(nread)` before callback return) bridged via `async.BufferedSubscription`, returning `nil` on clean `uv.EOF` or once closed, and raising `async.OperationError(..., \"ipc_pipe.read\")` on negative libuv error.\n  - `function PipeEndpoint:handle_kind(): string`:\n    - Queries `uv.handle_get_type(pipe:as_handle_t())` and inspects the `uv.handle_type` union with `case` (never `==`), returning `\"named_pipe\"` for `named_pipe()`.\n  - `function PipeEndpoint:close()`:\n    - Idempotent, cancellation-safe teardown that stops reads/closes the subscription and awaits `uv.close(pipe:as_handle_t(), cb)` completion via `async.await_cleanup_with` (never calling `uv.close` on fresh/retired/closing handles and never querying `uv.is_active`/`uv.is_closing` inside the close callback).\n- `record LoopPhaseReport` with fields `const prepare_count: integer`, `const check_count: integer`, `const timer_fired: boolean`, `const loop_closed_ok: boolean`, `const has_loop_new: boolean`, and `const has_pipe_init: boolean`.\n- `function probe_loop_phases(min_cycles: integer): LoopPhaseReport`:\n  - Called on the main Lua thread outside any `async.Task`. Constructs a dedicated standalone `uv.loop_t()` + `uv.loop_init(loop)` (never calling `async.loop()`), checks `uv.has_api(\"loop_new\")` and `uv.has_api(\"pipe_init\")`, initializes `uv.prepare_t()`, `uv.check_t()`, and `uv.timer_t()` on `loop`, runs until `prepare_count >= min_cycles`, `check_count >= min_cycles`, and `timer_fired == true`, stops and closes every initialized handle (`uv.close(h:as_handle_t(), nil)`), drains the loop with `uv.run(loop, nil)` before calling `uv.loop_close(loop)` (recording `loop_closed_ok = (uv.loop_close(loop) == 0)`), and returns `LoopPhaseReport`.\n- `function stat_file_size(path: string): integer`:\n  - Wraps `uv.fs_stat` in `async.await_cancellable_with` returning `req:as_req_t()` on acceptance, reads `st_size` before calling `uv.fs_req_cleanup(completed)`, cleans up `fs_t` on both rejection and unexpected error (`done:fatal` + `raise`), and maps negative status to `async.OperationError(code, uv.err_name(code), uv.strerror(code), \"ipc_pipe.stat\")`.\n- `function wait_external_wake(delay_ms: integer, cancel_after_ms: integer?): (boolean, boolean)`:\n  - Uses `async.prepare_external_wait(register_fn, unregister_fn)` with `defer wait:close()` and `uv.native_external_wake_retain` / `uv.native_external_wake_notify` / `uv.native_external_wake_release`.\n  - Schedules a wake after `delay_ms` (which notifies and releases the retained target if still registered). If `cancel_after_ms ~= nil`, cancels the waiting Task after `cancel_after_ms` so `unregister_fn` runs synchronously and releases the retained target.\n  - Joins helper Tasks cleanly and returns `(woken, unregistered)` (`(true, false)` on normal wake, `(false, true)` on cancellation).\n- `function connect_missing_pipe(missing_path: string): async.OperationError`:\n  - Attempts `uv.pipe_init` + `uv.pipe_connect2` to `missing_path` via `async.await_with`, closes the initialized `uv.pipe_t` via `async.await_cleanup_with` even on failure, and returns the mapped `async.OperationError` with `operation == \"ipc_pipe.connect\"`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_ipc_pipe.titan"
+      ],
+      "expected_outputs": [
+        "ipc_pipe.titan"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 60,
+        "commands": [
+          "cp /verify/oracle/oracle_ipc_pipe.titan .",
+          "titanc -q --no-uv-bootstrap --tree . -o build_oracle --exe oracle_ipc_pipe oracle_ipc_pipe",
+          "./oracle_ipc_pipe"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "async04-a1-completion-await-with-fatal-and-fs-cleanup",
+          "concept_ids": [
+            "titan-async:inv-7-raw-uv-native-adapter-reference-gate",
+            "titan-async:ref-one-shot-await-completion-fatal"
+          ],
+          "critical": "standard",
+          "check": "Uses named `_with` registrars (`await_with`, `await_cleanup_with`, `await_cancellable_with`) with `Completion` `number` snapshots, `done:fatal` + `raise` on unexpected callback errors, `uv.fs_req_cleanup` after copying `st_size`, and returns `req:as_req_t()` for cancellable `uv.fs_stat`."
+        },
+        {
+          "id": "async04-a2-buffered-subscription-and-external-wait",
+          "concept_ids": [
+            "titan-async:ref-subscriptions-run-foreign-external-wait"
+          ],
+          "critical": "standard",
+          "check": "Bridges `uv.read_start` stream chunks through `async.BufferedSubscription` (with writable `buf_t.allocate` and copied bytes) and uses `async.prepare_external_wait` + `uv.native_external_wake_{retain,notify,release}` with synchronous `unregister_fn` cleanup on cancellation."
+        },
+        {
+          "id": "async04-a3-uv-handle-close-loop-drain-views-and-errors",
+          "concept_ids": [
+            "titan-async:ref-uv-lookup-and-omissions",
+            "titan-async:ref-public-uv-lifecycle-views-hazards",
+            "titan-async:inv-6-short-imports-union-case"
+          ],
+          "critical": "standard",
+          "check": "Uses explicit `uv.loop_t()`/`loop_init`, checks `uv.has_api`, uses `:as_handle_t()`/`:as_stream_t()`/`:as_req_t()` views, inspects `uv.handle_type` via `case`, uses `pipe_connect2`, closes every initialized handle (including after failed connect) and drains `uv.run` before `uv.loop_close`, and maps libuv errors with `err_name`/`strerror`."
+        }
+      ],
+      "judge_rubric": "Canonical provenance: `titan-async` (`inv-6`, `inv-7`, `ref-uv-lookup-and-omissions`, `ref-one-shot-await-completion-fatal`, `ref-subscriptions-run-foreign-external-wait`, `ref-public-uv-lifecycle-views-hazards`), `titan-programmer` (`inv-1`, `inv-3`). Score `idiom_score = 3` only if `./oracle_ipc_pipe` exits `0` and all three `async04-a1..a3` checks hold; cap at `<= 1` if `uv.close` is omitted on failed/stopped handles, `uv.loop_close` returns `EBUSY`, `fs_req_cleanup` runs before reading `st_size` or is skipped on rejection, `Completion` lacks `fatal`, `handle_type` is compared with `==`, or `ExternalWait` leaks retained targets on cancellation."
+    }
+  ]
+}

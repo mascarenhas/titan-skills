@@ -1,0 +1,69 @@
+local layout = import "layout"
+
+local function approx(a: float, b: float): boolean
+  local d = a - b
+  if d < 0.0 then d = -d end
+  return d < 1e-6
+end
+
+function main(_args: {string}): integer
+  local spans: {layout.Span} = {
+    layout.Span("lex", 0, 200, "#3366cc"),
+    layout.Span("parse", 200, 600, "#33aa66"),
+    layout.Span("emit", 600, 1000, "#aa44aa"),
+  }
+
+  -- Unselected layout: viewport_w=520, inner_w=500, pad_x=10, pad_y=10, row_h=24, gap=6
+  local rects = layout.compute_layout(spans, 520.0, 120.0, 1000, nil)
+  if #rects ~= 3 then
+    raise ("expected 3 rects, got " .. #rects)
+  end
+
+  -- Row 1: lex -> x=10, y=10, w=100, h=24, fill="#3366cc", label="lex"
+  if rects[1].id ~= "lex" or not approx(rects[1].x, 10.0) or not approx(rects[1].y, 10.0) or
+     not approx(rects[1].width, 100.0) or not approx(rects[1].height, 24.0) or
+     rects[1].fill ~= "#3366cc" or rects[1].label ~= "lex" then
+    raise "unexpected rects[1] geometry or style"
+  end
+
+  -- Row 2: parse -> x=110, y=40, w=200, h=24, fill="#33aa66", label="parse"
+  if rects[2].id ~= "parse" or not approx(rects[2].x, 110.0) or not approx(rects[2].y, 40.0) or
+     not approx(rects[2].width, 200.0) or not approx(rects[2].height, 24.0) or
+     rects[2].fill ~= "#33aa66" or rects[2].label ~= "parse" then
+    raise "unexpected rects[2] geometry or style"
+  end
+
+  -- Row 3: emit -> x=310, y=70, w=200, h=24, fill="#aa44aa", label="emit"
+  if rects[3].id ~= "emit" or not approx(rects[3].x, 310.0) or not approx(rects[3].y, 70.0) or
+     not approx(rects[3].width, 200.0) or not approx(rects[3].height, 24.0) or
+     rects[3].fill ~= "#aa44aa" or rects[3].label ~= "emit" then
+    raise "unexpected rects[3] geometry or style"
+  end
+
+  -- Selected layout highlights "parse" with "#ff9900" and "parse *".
+  local sel_rects = layout.compute_layout(spans, 520.0, 120.0, 1000, "parse")
+  if sel_rects[1].fill ~= "#3366cc" or sel_rects[1].label ~= "lex" then
+    raise "non-selected span should keep original style"
+  end
+  if sel_rects[2].fill ~= "#ff9900" or sel_rects[2].label ~= "parse *" then
+    raise "selected span should use #ff9900 and ' *' suffix"
+  end
+
+  -- Hit-testing: interior, boundary edges, and misses.
+  local h1? = layout.hit_test(rects, 150.0, 50.0)
+  if h1 ~= "parse" then raise "expected hit on parse" end
+
+  local h2? = layout.hit_test(rects, 10.0, 10.0)
+  if h2 ~= "lex" then raise "expected boundary hit on lex" end
+
+  local h3? = layout.hit_test(rects, 510.0, 94.0)
+  if h3 ~= "emit" then raise "expected far-corner boundary hit on emit" end
+
+  local miss? = layout.hit_test(rects, 5.0, 5.0)
+  if miss ~= nil then raise "expected nil for miss outside rects" end
+
+  local gap_miss? = layout.hit_test(rects, 150.0, 37.0)
+  if gap_miss ~= nil then raise "expected nil in vertical gap between rows" end
+
+  return 0
+end

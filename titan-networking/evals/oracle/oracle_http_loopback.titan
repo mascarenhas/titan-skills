@@ -1,0 +1,124 @@
+local http = import "http"
+local lb = import "http_loopback"
+local url = import "url"
+
+local function fail(msg: string)
+  raise "oracle_http_loopback: " .. msg
+end
+
+function main(args: {string}): integer
+  -- 1. Nonthrowing url.parse normalization & rejections
+  local u1 = lb.inspect_url("HTTP://[::1]:8080/a%5fb?k=1")
+  if not u1.ok or u1.scheme ~= "http" or u1.host ~= "::1" or u1.port ~= 8080
+     or u1.target ~= "/a_b?k=1" or u1.host_header ~= "[::1]:8080" or u1.error_kind ~= nil then
+    fail("IPv6 url summary mismatch")
+  end
+
+  local u2 = lb.inspect_url("https://Example.COM")
+  if not u2.ok or u2.scheme ~= "https" or u2.host ~= "example.com" or u2.port ~= 443
+     or u2.target ~= "/" or u2.host_header ~= "example.com" then
+    fail("default https url mismatch")
+  end
+
+  local u_bad1 = lb.inspect_url("http://user@127.0.0.1/path")
+  if u_bad1.ok or u_bad1.error_kind == nil then fail("userinfo URL should fail") end
+
+  local u_bad2 = lb.inspect_url("http://127.0.0.1/path#frag")
+  if u_bad2.ok or u_bad2.error_kind == nil then fail("fragment URL should fail") end
+
+  -- 2. Mode union case inspection
+  local m1 = lb.describe_modes(
+    http.CacheMode.no_store(),
+    http.CredentialsMode.same_origin(),
+    http.RequestMode.cors(),
+    http.RedirectMode.manual())
+  if m1 ~= "no-store|same-origin|cors|manual" then fail("describe_modes m1=" .. m1) end
+
+  local m2 = lb.describe_modes(
+    http.CacheMode.only_if_cached(),
+    http.CredentialsMode.include(),
+    http.RequestMode.no_cors(),
+    http.RedirectMode.follow())
+  if m2 ~= "only-if-cached|include|no-cors|follow" then fail("describe_modes m2=" .. m2) end
+
+  -- 3. Start ephemeral loopback HTTP server
+  local srv = lb.start_server(nil)
+  defer srv:close()
+  local port = srv:port()
+  if port <= 0 or port > 65535 then fail("invalid ephemeral port: " .. port) end
+  local base = "http://127.0.0.1:" .. port
+
+  local client = http.Client()
+  defer client:close()
+
+  -- 4. GET /echo with query and without query
+  local r1 = lb.fetch_with_deadline(client, "GET", base .. "/echo?v=42", nil, 2000)
+  local want1 = "method=GET;path=/echo;query=v=42;host=127.0.0.1:" .. port
+  if r1.timed_out or r1.status ~= 200 or r1.body ~= want1 then
+    fail("GET /echo?v=42 mismatch: status=" .. r1.status .. " body=" .. r1.body)
+  end
+
+  local r2 = lb.fetch_with_deadline(client, "GET", base .. "/echo", nil, 2000)
+  local want2 = "method=GET;path=/echo;query=<none>;host=127.0.0.1:" .. port
+  if r2.timed_out or r2.status ~= 200 or r2.body ~= want2 then
+    fail("GET /echo no-query mismatch: " .. r2.body)
+  end
+
+  -- 5. POST /echo with binary body + repeated X-Multi headers
+  local r3 = lb.fetch_with_deadline(client, "POST", base .. "/echo", "hello\0world", 2000)
+  if r3.timed_out or r3.status ~= 200 or r3.body ~= "posted:hello\0world"
+     or #r3.multi_values ~= 2 or r3.multi_values[1] ~= "a" or r3.multi_values[2] ~= "b" then
+    fail("POST /echo mismatch")
+  end
+
+  -- 6. Chunked streaming GET /stream
+  local r4 = lb.fetch_with_deadline(client, "GET", base .. "/stream", nil, 2000)
+  if r4.timed_out or r4.status ~= 200 or r4.body ~= "chunk-1\nchunk-2\nchunk-3\n" then
+    fail("GET /stream mismatch: " .. r4.body)
+  end
+
+  -- 7. Exchange handoff GET /handoff
+  local r5 = lb.fetch_with_deadline(client, "GET", base .. "/handoff", nil, 2000)
+  if r5.timed_out or r5.status ~= 200 or r5.body ~= "via-exchange" then
+    fail("GET /handoff mismatch: status=" .. r5.status .. " body=" .. r5.body)
+  end
+
+  -- Verify X-Handoff header directly with raw client:get
+  do
+    local raw_res = client:get(base .. "/handoff")
+    defer raw_res:close()
+    if raw_res.headers:get("x-handoff") ~= "yes" then
+      fail("missing X-Handoff header on /handoff")
+    end
+  end
+
+  -- 8. 404 route
+  local r6 = lb.fetch_with_deadline(client, "GET", base .. "/missing", nil, 2000)
+  if r6.timed_out or r6.status ~= 404 or r6.body ~= "not-found" then
+    fail("GET /missing mismatch")
+  end
+
+  -- 9. Client deadline timeout against /slow + server still healthy afterward
+  local r_slow = lb.fetch_with_deadline(client, "GET", base .. "/slow", nil, 40)
+  if not r_slow.timed_out or r_slow.status ~= 0 then
+    fail("expected timeout on /slow")
+  end
+  local r_after = lb.fetch_with_deadline(client, "GET", base .. "/echo?after=1", nil, 2000)
+  if r_after.timed_out or r_after.status ~= 200 then
+    fail("server unhealthy after client timeout")
+  end
+
+  -- 10. Malformed URL raises url.Error pre-dial
+  local saw_url_err = false
+  do
+    lb.fetch_with_deadline(client, "GET", "http://bad#frag", nil, 1000)
+  catch
+    if error is url.Error then saw_url_err = true end
+  end
+  if not saw_url_err then fail("expected url.Error on malformed URL") end
+
+  -- 11. Idempotent close
+  srv:close()
+  srv:close()
+  return 0
+end

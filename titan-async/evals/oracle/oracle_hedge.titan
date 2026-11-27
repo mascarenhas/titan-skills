@@ -1,0 +1,184 @@
+local async = import "async"
+local hedge = import "hedge"
+local timer = import "timer"
+
+local function fail(msg: string)
+  raise "oracle_hedge: " .. msg
+end
+
+local function expect_raises(label: string, fn: function (): ())
+  local raised = false
+  do
+    fn()
+  catch
+    raised = true
+  end
+  if not raised then fail("expected error for " .. label) end
+end
+
+function main(args: {string}): integer
+  -- 1. Invalid bounds rejected
+  expect_raises("negative stagger", function ()
+    hedge.hedge_call(function (): string return "a" end, function (): string return "b" end, -1, 50)
+  end)
+  expect_raises("zero timeout", function ()
+    hedge.hedge_call(function (): string return "a" end, function (): string return "b" end, 0, 0)
+  end)
+
+  -- 2. Fast primary beats stagger; backup never runs
+  local backup_calls = 0
+  local r1 = hedge.hedge_call(
+    function (): string
+      timer.sleep(5)
+      return "fast-primary"
+    end,
+    function (): string
+      backup_calls = backup_calls + 1
+      return "unused-backup"
+    end,
+    120, 400)
+  if r1.winner ~= "primary" or r1.value ~= "fast-primary" or r1.timed_out
+     or r1.primary_status ~= "succeeded" or r1.backup_status ~= "skipped"
+     or backup_calls ~= 0 then
+    fail("fast primary mismatch: winner=" .. r1.winner .. " backup=" .. r1.backup_status)
+  end
+
+  -- 3. Slow primary loses to backup; primary defer MUST already have run on return
+  local primary_cleaned = false
+  local r2 = hedge.hedge_call(
+    function (): string
+      defer primary_cleaned = true
+      timer.sleep(400)
+      return "slow-primary"
+    end,
+    function (): string
+      timer.sleep(10)
+      return "fast-backup"
+    end,
+    15, 500)
+  if r2.winner ~= "backup" or r2.value ~= "fast-backup" or r2.timed_out
+     or r2.primary_status ~= "cancelled" or r2.backup_status ~= "succeeded" then
+    fail("backup win mismatch: winner=" .. r2.winner .. " p=" .. r2.primary_status)
+  end
+  if not primary_cleaned then
+    fail("primary defer cleanup did not finish before hedge_call returned")
+  end
+
+  -- 4. Early primary failure immediately launches backup (does not wait full stagger)
+  local backup_ran = false
+  local r3 = hedge.hedge_call(
+    function (): string
+      timer.sleep(5)
+      raise "primary boom"
+    end,
+    function (): string
+      backup_ran = true
+      timer.sleep(10)
+      return "rescued"
+    end,
+    500, 300)
+  if r3.winner ~= "backup" or r3.value ~= "rescued" or r3.timed_out
+     or r3.primary_status ~= "failed" or r3.backup_status ~= "succeeded"
+     or not backup_ran then
+    fail("early primary fail rescue mismatch")
+  end
+
+  -- 5. Overall timeout cancels and joins BOTH replicas before returning
+  local p_clean, b_clean = false, false
+  local r4 = hedge.hedge_call(
+    function (): string
+      defer p_clean = true
+      timer.sleep(500)
+      return "p"
+    end,
+    function (): string
+      defer b_clean = true
+      timer.sleep(500)
+      return "b"
+    end,
+    10, 45)
+  if r4.winner ~= "none" or r4.value ~= nil or not r4.timed_out
+     or r4.primary_status ~= "cancelled" or r4.backup_status ~= "cancelled" then
+    fail("timeout mismatch: winner=" .. r4.winner .. " p=" .. r4.primary_status .. " b=" .. r4.backup_status)
+  end
+  if not p_clean or not b_clean then
+    fail("timeout did not join both cancelled replicas before returning")
+  end
+
+  -- 6. Both fail -> winner="none", timed_out=false
+  local r5 = hedge.hedge_call(
+    function (): string raise "p-err" end,
+    function (): string raise "b-err" end,
+    0, 300)
+  if r5.winner ~= "none" or r5.value ~= nil or r5.timed_out
+     or r5.primary_status ~= "failed" or r5.backup_status ~= "failed" then
+    fail("both-failed mismatch")
+  end
+
+  -- 7. fetch_pair_ordered success & sibling cancel+join on error
+  local a, b = hedge.fetch_pair_ordered(
+    function (): string timer.sleep(10); return "one" end,
+    function (): string timer.sleep(5); return "two" end)
+  if a ~= "one" or b ~= "two" then fail("fetch_pair_ordered values") end
+
+  local sib_cleaned = false
+  local pair_err = ""
+  do
+    hedge.fetch_pair_ordered(
+      function (): string timer.sleep(5); raise "first-failed" end,
+      function (): string
+        defer sib_cleaned = true
+        timer.sleep(400)
+        return "late"
+      end)
+  catch
+    pair_err = error as string
+  end
+  if pair_err ~= "first-failed" or not sib_cleaned then
+    fail("fetch_pair_ordered error/sibling cleanup: err=" .. pair_err)
+  end
+
+  -- 8. run_cancellable_cleanup: uncancelled vs cancelled
+  local seen_clean: string? = "unset"
+  local st_ok, val_ok? = hedge.run_cancellable_cleanup(
+    function (): string timer.sleep(5); return "done" end,
+    nil,
+    function (reason: string?) seen_clean = reason end)
+  if st_ok ~= "succeeded" or val_ok ~= "done" or seen_clean ~= nil then
+    fail("run_cancellable_cleanup ok path mismatch")
+  end
+
+  local seen_cancel: string? = nil
+  local st_can, val_can? = hedge.run_cancellable_cleanup(
+    function (): string timer.sleep(400); return "never" end,
+    15,
+    function (reason: string?) seen_cancel = reason end)
+  if st_can ~= "cancelled" or val_can ~= nil or seen_cancel ~= "aborted" then
+    fail("run_cancellable_cleanup cancel path mismatch: st=" .. st_can .. " reason=" .. (seen_cancel or "nil"))
+  end
+
+  -- 9. cooperative_sum yields so sibling Task interleaves before sum ends
+  local sibling_steps = 0
+  local sum_done = false
+  local sib = async.run(function (): nil
+    while not sum_done do
+      sibling_steps = sibling_steps + 1
+      async.yield()
+    end
+    return nil
+  end)
+  local total, yields = hedge.cooperative_sum(100, 10)
+  sum_done = true
+  async.join(sib)
+  if total ~= 5050 or yields ~= 10 or sibling_steps < 5 then
+    fail("cooperative_sum mismatch: total=" .. total .. " yields=" .. yields .. " sib=" .. sibling_steps)
+  end
+
+  -- 10. Negative timer.sleep OperationError check
+  local neg = hedge.check_negative_sleep_error()
+  if neg ~= "EINVAL:timer.sleep" then
+    fail("check_negative_sleep_error returned " .. neg)
+  end
+
+  return 0
+end

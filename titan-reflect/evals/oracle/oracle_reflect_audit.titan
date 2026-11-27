@@ -1,0 +1,202 @@
+local audit = import "audit_reflect"
+local reflect = import "reflect"
+
+interface Labeled
+  label: string
+  function tag(): string
+end
+
+record TagItem
+  const label: string
+end
+
+function TagItem:tag(): string
+  return "tag:" .. self.label
+end
+
+record GenericBox<|T|>
+  const item: T
+  const opt_item: T?
+  const list: {T}
+end
+
+record ConstrainedBox<|L: Labeled|>
+  const item: L
+end
+
+record UserProfile
+  local internal_id: integer
+  const handle: string
+  local salt: string
+  email: string
+  bio: string?
+  age: integer
+end
+
+function UserProfile.new(handle: string, email: string, bio: string?, age: integer): UserProfile
+  return {
+    internal_id = 777,
+    handle = handle,
+    salt = "pepper",
+    email = email,
+    bio = bio,
+    age = age,
+  }
+end
+
+record PlainConfig
+  const host: string
+  const port: integer
+  const note: string?
+end
+
+local record HiddenPlain
+  const code: integer
+end
+
+union Status
+  local internal_boot(integer)
+  ok(string)
+  local internal_retry(attempt: integer, note: string?)
+  failed(code: integer, detail: string?)
+end
+
+local function make_local_status(): Status
+  return Status.internal_retry(3, nil)
+end
+
+local function helper_fn(x: integer): integer
+  return x + 1
+end
+
+function main(args: {string}): integer
+  -- 1. Exact runtime tags (3 -> integer vs 3.0 -> float)
+  if audit.exact_tag(nil) ~= "nil"
+     or audit.exact_tag(3) ~= "integer"
+     or audit.exact_tag(3.0) ~= "float"
+     or audit.exact_tag(true) ~= "boolean"
+     or audit.exact_tag("hi") ~= "string" then
+    raise "exact_tag scalar mismatch"
+  end
+
+  local arr: {integer} = { 1, 2 }
+  local carr: const {integer} = arr as const {integer}
+  local mp: {string: integer} = { ["a"] = 1 }
+  local cfg = PlainConfig("localhost", 8080, nil)
+  local iface_view: Labeled = TagItem("alpha")
+  if audit.exact_tag(arr) ~= "array"
+     or audit.exact_tag(carr) ~= "const_array"
+     or audit.exact_tag(mp) ~= "map"
+     or audit.exact_tag(cfg) ~= "record"
+     or audit.exact_tag(Status.ok("yes")) ~= "union"
+     or audit.exact_tag(iface_view) ~= "interface"
+     or audit.exact_tag(helper_fn) ~= "titan_function" then
+    raise "exact_tag composite mismatch"
+  end
+
+  -- 2. Nominal lookup (initialized vs missing)
+  if audit.resolve_nominal_kind("oracle_reflect_audit.PlainConfig") ~= "record"
+     or audit.resolve_nominal_kind("oracle_reflect_audit.Status") ~= "union"
+     or audit.resolve_nominal_kind("oracle_reflect_audit.Labeled") ~= "interface"
+     or audit.resolve_nominal_kind("no_such_module.NoSuchType") ~= "missing" then
+    raise "resolve_nominal_kind mismatch"
+  end
+
+  -- 3. Generic erasure vs Interface constraint preservation
+  local box_int = GenericBox<|integer|>(10, nil, { 1, 2 })
+  local box_str = GenericBox<|string|>("x", "y", { "a" })
+  local n1, t1, r1? = audit.inspect_erased_field(box_int, "item")
+  local n2, t2, r2? = audit.inspect_erased_field(box_str, "item")
+  local _, t_opt, _? = audit.inspect_erased_field(box_int, "opt_item")
+  local _, t_list, _? = audit.inspect_erased_field(box_int, "list")
+  if n1 ~= "oracle_reflect_audit.GenericBox" or n1 ~= n2
+     or t1 ~= "value" or t2 ~= "value" or r1 ~= nil or r2 ~= nil
+     or t_opt ~= "value" or t_list ~= "{value}" then
+    raise "generic erasure mismatch: " .. n1 .. " " .. t1 .. " " .. t_opt .. " " .. t_list
+  end
+
+  local cbox = ConstrainedBox<|TagItem|>(TagItem("beta"))
+  local cn, ct, cr? = audit.inspect_erased_field(cbox, "item")
+  if cn ~= "oracle_reflect_audit.ConstrainedBox"
+     or ct ~= "named:oracle_reflect_audit.Labeled"
+     or cr ~= "interface" then
+    raise "constrained generic descriptor mismatch: " .. ct .. " " .. (cr or "nil")
+  end
+
+  -- 4. 1-based public ordinal redaction with interleaved local fields + const skipping
+  local profile = UserProfile("ada", "ada@example.com", "engineer", 36)
+  -- handle is const (must NOT be mutated), salt is local (must NOT be exposed),
+  -- email and bio are mutable string/string? at 1-based ordinals 2 and 3 (FieldType.index 3 and 4)
+  local keys: const {string} = { "handle", "salt", "email", "bio", "age" }
+  local count = audit.redact_string_fields(profile, keys, "[REDACTED]")
+  if count ~= 2 or profile.handle ~= "ada" or profile.email ~= "[REDACTED]"
+     or profile.bio ~= "[REDACTED]" or profile.age ~= 36 then
+    raise "redact_string_fields mismatch, count=" .. count
+  end
+
+  -- 5. is_public + all_public check (local record with all_public==true must return false!)
+  local hidden = HiddenPlain(5)
+  if audit.can_direct_construct(hidden) then
+    raise "local record with all_public==true must not report can_direct_construct==true"
+  end
+  if not audit.can_direct_construct(cfg) then
+    raise "public all-public PlainConfig must report can_direct_construct==true"
+  end
+  if audit.can_direct_construct(profile) then
+    raise "record with local fields must report can_direct_construct==false"
+  end
+
+  -- 6. Smart construction: direct construct (const fields, omitted trailing nil) vs public_constructor()
+  local built_cfg_raw = audit.construct_record_smart(
+    "oracle_reflect_audit.PlainConfig", { "db.internal", 5432 })
+  local built_cfg: PlainConfig = built_cfg_raw
+  if built_cfg.host ~= "db.internal" or built_cfg.port ~= 5432 or built_cfg.note ~= nil then
+    raise "direct construct PlainConfig mismatch"
+  end
+
+  local built_prof_raw = audit.construct_record_smart(
+    "oracle_reflect_audit.UserProfile", { "grace", "g@example.com", nil, 40 })
+  local built_prof: UserProfile = built_prof_raw
+  if built_prof.handle ~= "grace" or built_prof.email ~= "g@example.com"
+     or built_prof.bio ~= nil or built_prof.age ~= 40 then
+    raise "public_constructor UserProfile mismatch"
+  end
+
+  -- 7. Union inspection: dense public-first tags + active local arm + construct_public_variant
+  -- Even though local variants are interleaved before public variants in source,
+  -- public variants occupy dense 0..1: ok=0, failed=1; local arms occupy >= 2!
+  local un1, tag1, vname1?, parts1 = audit.describe_union_value(Status.ok("done"))
+  local un2, tag2, vname2?, parts2 = audit.describe_union_value(Status.failed(404, nil))
+  local un3, tag3, vname3?, parts3 = audit.describe_union_value(make_local_status())
+  if un1 ~= "oracle_reflect_audit.Status" or tag1 ~= 0 or vname1 ~= "ok" or parts1 ~= 1 then
+    raise "Status.ok union inspection mismatch"
+  end
+  if un2 ~= "oracle_reflect_audit.Status" or tag2 ~= 1 or vname2 ~= "failed" or parts2 ~= 2 then
+    raise "Status.failed union inspection mismatch"
+  end
+  if un3 ~= "oracle_reflect_audit.Status" or tag3 < 2 or vname3 ~= nil or parts3 ~= 2 then
+    raise "active local union arm inspection mismatch"
+  end
+
+  local built_st_raw = audit.construct_public_variant(
+    "oracle_reflect_audit.Status", "failed", { 500, "boom" })
+  local built_st: Status = built_st_raw
+  case built_st
+  when failed(c, d) then
+    if c ~= 500 or d ~= "boom" then raise "construct_public_variant payload mismatch" end
+  else
+    raise "construct_public_variant wrong arm"
+  end
+
+  -- 8. describe_type on option, const array, map, function
+  local fdesc = reflect.Type.is_array(reflect.ArrayTypeConstness.is_const(), reflect.Type.is_integer())
+  if audit.describe_type(fdesc) ~= "const {integer}" then
+    raise "describe_type const array mismatch"
+  end
+  local mdesc = reflect.Type.is_map(reflect.Type.is_string(), reflect.Type.is_option(reflect.Type.is_float()))
+  if audit.describe_type(mdesc) ~= "{string: float?}" then
+    raise "describe_type map/option mismatch"
+  end
+
+  return 0
+end

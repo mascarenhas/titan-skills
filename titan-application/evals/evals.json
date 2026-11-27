@@ -1,0 +1,133 @@
+{
+  "skill_name": "titan-application",
+  "evals": [
+    {
+      "id": "application-01-multi-target-app-layout-and-profiles",
+      "baseline_anchor": true,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-application"],
+      "candidate_expected_skills": ["titan-programmer", "titan-application"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib", "titan-ffi"],
+      "forbidden_skills": ["titan-package", "titan-completion"],
+      "prompt": "Scaffold a standalone dual-target (native + browser WebAssembly) Titan application using target-specific variant modules, isolated output directories, a narrow `.gitignore`, and a browser ES-module loader client.\n\nCreate these files:\n1. Source modules under `src/`:\n   - `src/platform.native.titan` (logical module `platform`): exports `function runtime_kind(): string` returning `\"native\"`.\n   - `src/platform.browser.titan` (logical module `platform`): exports `function runtime_kind(): string` returning `\"browser\"`.\n   - `src/app/greeter.titan` (logical module `app.greeter`): imports `platform`, exports `function format_report(args: {string}): string` returning `\"target=\" .. platform.runtime_kind() .. \";count=\" .. #args .. \";joined=\" .. joined`, where `joined` joins `args[1..#args]` with `\",\"`, or `\"none\"` if `#args == 0`.\n   - `src/main.titan` (logical module `main`): exports the exact standalone entry point `function main(args: {string}): integer`. If `args[1] == \"--fail\"`, raise `\"intentional failure\"`; otherwise print `greeter.format_report(args)` to stdout and return `0`.\n2. `build_targets.sh` (POSIX `/bin/sh`):\n   - Build the native executable incrementally into `build-native/` (`--tree src -o build-native --exe build-native/bin/app main`, keeping the executable path clear of `build-native/app/` used by `app.greeter`).\n   - Build the browser WebAssembly image incrementally into a **separate** output directory `build-browser/` (`--target browser --incremental --tree src -o build-browser --exe build-browser/app.mjs main`, honoring `TITAN_BUILD_PROFILE`, defaulting to `validation` when unset).\n   - Stage a clean deployment bundle in `site/` containing the matched trio from that single build (`app.mjs`, `app.wasm`, `app.wasm.trace`) and no compiler-internal marker files.\n3. `web/loader_client.mjs` (ES module):\n   - Export `export async function runApp(moduleUrl, args)` which dynamically imports the default `create` function from `moduleUrl` (defaulting to `'../site/app.mjs'`), creates an instance synchronously with `{ requireTrace: true, stdout: ... }` (decoding copied `Uint8Array` chunks as UTF-8 into a single `stdout` string), runs `await instance.initialize()` and `const result = await instance.run(args ?? [])`, **always** calls `await instance.dispose()` inside `try ... finally`, and returns `{ kind: result.kind, status: result.status, stdout, traceText }` (decoding `result.trace` with `TextDecoder`).\n4. `.gitignore`:\n   - Ignore `/build-native/`, `/build-browser/`, `/dist/`, `/site/`, `.titan-ls/`, `.env`, and `.env.*` while un-ignoring `!.env.example` and `!.env.*.example`.\n   - NEVER add blanket `*.c`, `*.h`, `*.lua`, `*.sqlite3`, `*.json`, or `*.log` rules.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_app01.py",
+        "evals/oracle/check_browser_loader.mjs"
+      ],
+      "expected_outputs": [
+        "src/platform.native.titan",
+        "src/platform.browser.titan",
+        "src/app/greeter.titan",
+        "src/main.titan",
+        "build_targets.sh",
+        "web/loader_client.mjs",
+        ".gitignore"
+      ],
+      "verify": {
+        "target": "both",
+        "network": "none",
+        "timeout_sec": 90,
+        "commands": [
+          "python3 /verify/oracle/oracle_app01.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "app01-a1-target-variants-and-isolated-outputs",
+          "concept_ids": [
+            "titan-application:inv-1-compiler-owned-incremental-and-output-isolation",
+            "titan-application:inv-2-output-locks-and-reserved-paths",
+            "titan-application:inv-3-tree-positional-roots-and-sdk-fallback",
+            "titan-application:inv-4-entrypoint-exe-static-and-windows",
+            "titan-application:target-and-build-mode-matrix"
+          ],
+          "critical": "standard",
+          "check": "Uses `.native.titan` / `.browser.titan` target variants under `src/`, exact `main(args: {string}): integer`, and separate `-o build-native` vs `-o build-browser` directories (`build-browser/.titan-target == browser`, absent from `build-native`), passing both native CLI and browser runner stdout checks."
+        },
+        {
+          "id": "app01-a2-browser-bundle-require-trace-dispose",
+          "concept_ids": [
+            "titan-application:inv-5-browser-builds-and-deployment",
+            "titan-application:browser-builds-loader-and-deployment"
+          ],
+          "critical": "standard",
+          "check": "Stages matched `app.mjs`, `app.wasm`, and `app.wasm.trace` into `site/` without compiler internals; `web/loader_client.mjs` invokes default `create({ requireTrace: true, stdout })`, returns `{ kind, status, stdout, traceText }` with real Titan trace frames on failure, rejects when `.wasm.trace` is missing, and always calls `await instance.dispose()` in `finally`."
+        },
+        {
+          "id": "app01-a3-narrow-gitignore-hygiene",
+          "concept_ids": [
+            "titan-application:repository-layout-target-variants-and-gitignore"
+          ],
+          "critical": "standard",
+          "check": "`.gitignore` ignores generated output directories and `.env*` secrets while preserving `.env.example` and authored `.c`/`.h`/`.lua`/`.sqlite3`/`.json`/`.log` files."
+        }
+      ],
+      "judge_rubric": "Score `idiom_score = 3` only if `oracle_app01.py` exits `0` (native CLI, `titan-browser-run`, Node loader happy/fail/missing-trace checks, and `git check-ignore` checks all pass) and `app01-a1..a3` hold cleanly. Cap at `<= 1` if native and browser share one `-o` directory, `web/loader_client.mjs` omits `requireTrace: true` or `dispose()` in `finally`, `site/` misses `.wasm.trace`, or `.gitignore` adds blanket `*.c`/`*.h`/`*.lua`/`*.json`/`*.sqlite3`/`*.log` ignores."
+    },
+    {
+      "id": "application-02-incremental-provider-and-windows",
+      "baseline_anchor": false,
+      "baseline_specialist_available": true,
+      "baseline_expected_skills": ["titan-programmer", "titan-application"],
+      "candidate_expected_skills": ["titan-programmer", "titan-application"],
+      "candidate_expected_references": [],
+      "optional_skills": ["titan-stdlib"],
+      "forbidden_skills": ["titan-package", "titan-language-server"],
+      "prompt": "Build a multi-tree standalone native Titan application with compiler-owned incremental builds, Unix dynamic vs `--static` delivery verification under `env -i`, stock Lua 5.5 hosting of a compiled provider, a clean GNU `Makefile`, and a Windows DLL deployment script.\n\nCreate these files:\n1. Multi-tree Titan source modules across two `--tree` roots (`lib` and `app`):\n   - `lib/calc/core.titan` (logical module `calc.core`): exports `function combine(a: integer, b: integer): integer` returning `a * 10 + b`, and `function version_tag(): string` returning `\"v1\"`.\n   - `app/main.titan` (logical module `main`): imports `calc.core` and `io`, exports `function main(args: {string}): integer`. If `args[1] == \"--self-test\"`, print `\"self-test:\" .. core.version_tag() .. \":\" .. core.combine(4, 2)` and return `0`; otherwise print `\"run:\" .. core.version_tag() .. \":\" .. core.combine(7, 3)` and return `0`.\n2. `build_app.sh` (POSIX `/bin/sh`):\n   - Use single-executable `TITANC=\"${TITANC:-titanc}\"` (never embed flags or wrapper commands in `TITANC`).\n   - Default run (`sh build_app.sh`): build dynamic (`-v --incremental --tree \"lib;app\" -o build-dyn --exe build-dyn/app main`), static (`-v --incremental --static --tree \"lib;app\" -o build-static --exe build-static/app main`), and standalone library provider (`-q --incremental --tree lib -o build-prov calc.core`) in separate `-o` directories, then stage the static executable to `dist/bin/app`.\n   - Delivery verification (`sh build_app.sh --check-delivery`): verify `dist/bin/app` is executable, verify `DELIVERY_PATH` (default `/usr/bin:/bin`) cannot find `titanc` or `lua`, copy `dist/` to a temporary directory, execute `\"$tmp/bin/app\" --self-test` under `env -i HOME=\"$tmp\" PATH=\"$DELIVERY_PATH\"`, and remove `$tmp`.\n3. `run_stock_lua.sh` (POSIX `/bin/sh`):\n   - Resolve the SDK root via `\"${TITANC:-titanc}\" --print-root`, set `LUA_CPATH_5_5=\"$ROOT/lib/lua/5.5/?.so;;\"` and `TITAN_PATH_0_6=\"build-prov;;\"` (NEVER add `build-prov` or `lib/titan/0.6` to `LUA_CPATH*` or `package.cpath`), and run `\"$ROOT/bin/lua\" -e 'require \"titan\"; local c = require(\"calc.core\"); print(c.version_tag() .. \":\" .. c.combine(5, 6))'`.\n4. `Makefile`:\n   - Delegate directly to `$(TITANC)` with `--incremental` and the `+` recipe prefix (for GNU Make jobserver sharing), with NO hand-written per-module `%.o: %.c` rules or header inventories.\n   - Define `app`, `package`, and a prerequisite-free `check-delivery` target.\n5. `deploy-windows.bat`:\n   - Windows MSYS2 CLANG64 DLL-only build and staging script (NO `--static` on Windows) invoking `titanc.exe --incremental --tree \"lib;app\" -o build-win --exe build-win\\bin\\app.exe main` and staging the complete Windows payload under `dist-win\\`: `bin\\app.exe`, `bin\\lua55.dll`, native runtime DLLs (`libuv-1.dll`, `libllhttp-9.4.dll`, `libsqlite3-0.dll`, and matched `libcrypto*.dll`/`libssl*.dll`), and `lib\\titan\\0.6\\main.dll` + `lib\\titan\\0.6\\titan.dll`, followed by a clean-shell smoke check without SDK `PATH`.",
+      "files": [],
+      "oracle_files": [
+        "evals/oracle/oracle_app02.py"
+      ],
+      "expected_outputs": [
+        "lib/calc/core.titan",
+        "app/main.titan",
+        "build_app.sh",
+        "run_stock_lua.sh",
+        "Makefile",
+        "deploy-windows.bat"
+      ],
+      "verify": {
+        "target": "native",
+        "network": "none",
+        "timeout_sec": 90,
+        "commands": [
+          "python3 /verify/oracle/oracle_app02.py"
+        ]
+      },
+      "assertions": [
+        {
+          "id": "app02-a1-incremental-reuse-and-separate-modes",
+          "concept_ids": [
+            "titan-application:inv-1-compiler-owned-incremental-and-output-isolation",
+            "titan-application:inv-2-output-locks-and-reserved-paths",
+            "titan-application:inv-3-tree-positional-roots-and-sdk-fallback",
+            "titan-application:target-and-build-mode-matrix"
+          ],
+          "critical": "standard",
+          "check": "Separates dynamic (`build-dyn`), static (`build-static`), and library provider (`build-prov`) outputs across `--tree \"lib;app\"`; generates `.titan.source` certificates and `.titan-build.lock`; reuses unchanged `.o` objects across an unchanged Pass 2 and keeps `calc/core.o` untouched when only `app/main.titan` changes in Pass 3."
+        },
+        {
+          "id": "app02-a2-delivery-check-stock-lua-and-makefile",
+          "concept_ids": [
+            "titan-application:inv-6-delivery-checks-and-titanc-hygiene",
+            "titan-application:native-flags-c-source-make-and-delivery"
+          ],
+          "critical": "standard",
+          "check": "Keeps `TITANC` a single executable name, verifies relocated `dist/bin/app` under `env -i` without `titanc`/`lua` on `PATH`, hosts `calc.core` in stock Lua via `LUA_CPATH_5_5` + `TITAN_PATH_0_6` without adding provider dirs to `package.cpath`, and uses `+` jobserver recipes with zero `%.o` rules and prerequisite-free `check-delivery` in `Makefile`."
+        },
+        {
+          "id": "app02-a3-windows-dll-payload-layout",
+          "concept_ids": [
+            "titan-application:inv-4-entrypoint-exe-static-and-windows",
+            "titan-application:windows-deployment-and-platform-deltas"
+          ],
+          "critical": "standard",
+          "check": "`deploy-windows.bat` avoids `--static`, builds with `titanc.exe`, and stages the complete Windows DLL payload (`bin\\app.exe`, `bin\\lua55.dll`, `libuv-1.dll`, `libllhttp-9.4.dll`, `libsqlite3-0.dll`, matched `libcrypto`/`libssl`, `lib\\titan\\0.6\\main.dll`, and `lib\\titan\\0.6\\titan.dll`)."
+        }
+      ],
+      "judge_rubric": "Score `idiom_score = 3` only if `oracle_app02.py` exits `0` across all 3 incremental passes, relocated `env -i` delivery, stock Lua hosting, `Makefile` audit, and `deploy-windows.bat` audit, and `app02-a1..a3` hold cleanly. Cap at `<= 1` if Pass 2/3 fails object reuse, provider dirs are added to `LUA_CPATH`/`package.cpath`, `Makefile` writes per-module `%.o` rules or drops `+`, or `deploy-windows.bat` passes `--static` or omits required DLLs."
+    }
+  ]
+}

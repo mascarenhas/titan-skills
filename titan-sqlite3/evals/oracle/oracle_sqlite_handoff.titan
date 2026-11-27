@@ -1,0 +1,51 @@
+local fs = import "fs"
+local sqlite_handoff = import "sqlite_handoff"
+
+function main(args: {string}): integer
+  local db_path = "./test_handoff.db"
+  do fs.unlink(db_path) catch end
+  defer do fs.unlink(db_path) catch end
+
+  -- 1. Busy-timeout: locked without release -> SQLITE_BUSY (code 5)
+  local busy1, code1? = sqlite_handoff.probe_busy_lock(db_path, 30, nil)
+  if not busy1 or code1 ~= 5 then
+    raise "expected SQLITE_BUSY (code 5) when lock is held past timeout"
+  end
+
+  -- 2. Busy-timeout: lock released after 35ms while contender waits up to 1000ms -> succeeds
+  local busy2, code2? = sqlite_handoff.probe_busy_lock(db_path, 1000, 35)
+  if busy2 or code2 ~= nil then
+    raise "expected contender write to succeed once holder released lock within busy_timeout"
+  end
+
+  -- 3. Pending + in-flight Task cancellation with clean defer close
+  local pending_ok, inflight_ok = sqlite_handoff.verify_cancellation_cleanup()
+  if not pending_ok then raise "pending cancellation verification failed" end
+  if not inflight_ok then raise "in-flight cancellation verification failed" end
+
+  -- 4. Explicit idle :memory: Connection handoff with open uncommitted tx -> OS thread worker
+  local seed: const {string} = { "first", "second" }
+  local summary = sqlite_handoff.handoff_in_memory_to_worker(seed, "third")
+  if not summary.source_rejected_after_detach then
+    raise "detached source Connection must behave as closed and reject prepare"
+  end
+  if not summary.worker_saw_open_tx then
+    raise "worker must observe uncommitted transaction preserved across transfer"
+  end
+  if summary.committed_count ~= 3 or #summary.rows ~= 3
+     or summary.rows[1] ~= "first" or summary.rows[2] ~= "second"
+     or summary.rows[3] ~= "third" then
+    raise "worker committed rows mismatch"
+  end
+
+  -- 5. Open-statement detach rejection + failed-send adopt-and-close recovery
+  local open_stmt_rejected, failed_send_recovered = sqlite_handoff.verify_failed_handoff_recovery()
+  if not open_stmt_rejected then
+    raise "detaching Connection with open Statement must raise sqlite3.Error"
+  end
+  if not failed_send_recovered then
+    raise "failed handoff recovery (adopt + close) did not succeed"
+  end
+
+  return 0
+end
